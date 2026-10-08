@@ -9,7 +9,7 @@
 
 <div class="ag-bar">
   {% if not configured %}<span class="ag-down">Brak polaczenia: ustaw BACKEND_URL i BACKEND_TOKEN w .env Siedziby.</span>
-  {% else %}<span>Backend: <b>{{ backend_url }}</b></span>
+  {% else %}<span>Backend: <b>{{ backend_url }}</b> · <a href="{{ backend_url }}/admin" target="_blank" rel="noopener">panel admina ↗</a></span>
     <span>ostatnia synchronizacja: <b>{{ (sync.last_ok or '-')[:16]|replace('T', ' ') }}</b> UTC</span>
     {% if sync.last_error %}<span class="ag-down">ostatni blad: {{ sync.last_error }} ({{ (sync.last_error_at or '')[:16]|replace('T', ' ') }})</span>{% endif %}
   {% endif %}
