@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% from "agents_macros.html" import task_table %}
+{% block content %}
+{% include "agents_style.html" %}
+<h1>Historia zadan agentow</h1>
+<p class="muted ag-intro"><a href="/agents">&larr; Agenci</a> &middot; <a href="/agents/runs">Historia przebiegow</a> &middot;
+  Kazde zalecenie audytu i kazde zadanie zlecone przez planiste - z zadaniem w kolejce Siedziby i jego wynikiem.</p>
+{% if msg %}<div class="ag-msg">{{ msg }}</div>{% endif %}
+{% set q = '&kind=' ~ kind ~ '&agent=' ~ agent %}
+<div class="ag-filters">
+  <a class="tag {{ 'done' if not status else '' }}" href="/agents/tasks?{{ q }}">wszystkie</a>
+  {% for st, label in status_labels.items() %}{% if counts.get(st) %}
+  <a class="tag s-{{ st }} {{ 'done' if status == st else '' }}" href="/agents/tasks?status={{ st }}{{ q }}">{{ label }} ({{ counts[st] }})</a>{% endif %}{% endfor %}
+</div>
+<form class="box" method="get" action="/agents/tasks">
+  <input type="hidden" name="status" value="{{ status }}">
+  <select name="kind"><option value="">kazdy rodzaj</option>
+    {% for k, n in kinds_count.items() %}<option value="{{ k }}" {% if k == kind %}selected{% endif %}>{{ kinds[k].label if k in kinds else k }} ({{ n }})</option>{% endfor %}</select>
+  <select name="agent"><option value="">kazdy agent</option>
+    {% for k, name in agents.items() %}<option value="{{ k }}" {% if k == agent %}selected{% endif %}>{{ name }}</option>{% endfor %}</select>
+  <button>Filtruj</button> <span class="muted">{{ total }} zadan</span>
+</form>
+{% set back = '/agents/tasks?status=' ~ status ~ q ~ '&page=' ~ page %}
+{{ task_table(rows, back, True, True) }}
+<div class="ag-pager">
+  {% if page > 1 %}<a href="/agents/tasks?status={{ status }}{{ q }}&page={{ page - 1 }}">&larr; nowsze</a>{% endif %}
+  <span class="muted">strona {{ page }} / {{ pages }}</span>
+  {% if page < pages %}<a href="/agents/tasks?status={{ status }}{{ q }}&page={{ page + 1 }}">starsze &rarr;</a>{% endif %}
+</div>
+{% endblock %}

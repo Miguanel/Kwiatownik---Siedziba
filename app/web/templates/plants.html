@@ -1,0 +1,166 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Rosliny - wiedza z sieci</h1>
+<p class="muted">Siedziba zbiera informacje o roslinach z Wikipedii ({{ wiki_langs }} wersji jezykowych z: {{ langs }})
+  i ze stron z innych krajow ({{ web_pages }} na rosline). Kazda informacja ma zrodlo (link) i cytat; najpierw sprawdza
+  ja kod (czy cytat jest w zrodle, czy liczby sie zgadzaja), potem drugi model LLM. Zweryfikowane trafiaja
+  {% if auto_apply %}<b>automatycznie</b>{% else %}po kliknieciu "Zapisz"{% endif %} do plikow roslin Kwiatownika
+  (blok "wiedza", reczne pola bez zmian, kopia zapasowa w data/backups).</p>
+{% if msg %}<p class="box" style="display:block">{{ msg }}</p>{% endif %}
+
+<div class="pl-actions">
+  <form class="box" method="post" action="/plants/sync">
+    <button>Odswiez rejestr roslin</button>
+    <span class="muted">rosliny z Kwiatownika + nowe rosliny ze skladnikow przepisow (LLM)</span>
+  </form>
+  <form class="box" method="post" action="/plants/research">
+    <label>Zbierz wiedze o <input name="limit" type="number" min="1" max="200" value="10" style="width:70px"> roslinach</label>
+    <button>Start</button>
+    <span class="muted">najpierw nigdy nieopracowane</span>
+  </form>
+  <form class="box" method="post" action="/plants/photos">
+    <button>Pobierz zdjecia z Wikipedii</button>
+    <span class="muted">galerie roslin bez zdjec; reczne galerie zostaja (dostaja autorow i licencje) - bez LLM</span>
+  </form>
+  <form class="box" method="post" action="/plants/organize">
+    <button>Uporzadkuj wiedze w plikach</button>
+    <span class="muted">agregator: sekcje, laczenie powtorzen, czesci rosliny, numerowane zrodla (bez nowego zbierania)</span>
+  </form>
+  <form class="box" method="post" action="/plants/merge">
+    <button>Scal wiedze z rozdzialami</button>
+    <span class="muted">wiedza z sieci wmontowana w istniejace rozdzialy i podrozdzialy (Medycyna, Surowce, Rzemioslo...)
+      ze zrodlami; podobne informacje laczone. Modele: {{ merge_models.replace("ollama:", "").replace(",", " -> ") }} -> pozostale modele.
+      {% if auto_merge %}Robi sie tez automatycznie po zapisie wiedzy.{% endif %}</span>
+  </form>
+</div>
+
+<details class="box cov-box" {% if missing %}open{% endif %}>
+  <summary><b>Pokrycie schematu roslin</b> <span class="muted">- ktore informacje sa zebrane, a ktorych brakuje
+    (kolejne skany szukaja brakow, takze w zrodlach chinskich i japonskich: {{ search_langs }})</span></summary>
+  <div class="cov-legend muted">
+    <span><i class="sw reczne"></i>recznie</span><span><i class="sw z_sieci"></i>z sieci (scalone)</span>
+    <span><i class="sw czeka"></i>zebrane, czeka na scalenie</span><span><i class="sw brak"></i>brak</span>
+  </div>
+  <div class="cov-grid">
+  {% for row in summary %}
+    {% set total = row.reczne + row.z_sieci + row.czeka + row.brak %}
+    <div class="cov-card {% if missing == row.slot.path %}sel{% endif %}">
+      <div class="cov-title"><span class="muted">{{ row.slot.chapter }}</span><br><b>{{ row.slot.title }}</b></div>
+      <div class="cov-bar" title="recznie {{ row.reczne }}, z sieci {{ row.z_sieci }}, czeka {{ row.czeka }}, brak {{ row.brak }}">
+        {% for k in ("reczne", "z_sieci", "czeka", "brak") %}{% if row[k] %}<div class="{{ k }}" style="width: {{ (100 * row[k] / (total or 1)) | round(1) }}%"></div>{% endif %}{% endfor %}
+      </div>
+      <div class="muted cov-nums">brak: <b>{{ row.brak }}</b>{% if row.czeka %} &middot; czeka: {{ row.czeka }}{% endif %} &middot; z sieci: {{ row.z_sieci }}</div>
+      {% if row.brak or row.czeka %}
+      <div class="cov-act">
+        <a href="/plants?missing={{ row.slot.path | urlencode }}&sort=luki">pokaz rosliny</a>
+        {% if row.brak %}
+        <form class="inline" method="post" action="/plants/research-gap">
+          <input type="hidden" name="slot" value="{{ row.slot.path }}"><input type="hidden" name="limit" value="10">
+          <button title="zbierz te informacje dla 10 roslin, ktorym jej brakuje">Szukaj w sieci</button>
+        </form>
+        {% endif %}
+      </div>
+      {% endif %}
+    </div>
+  {% endfor %}
+  </div>
+</details>
+
+<form class="box pl-filter" method="get" action="/plants">
+  <input name="q" value="{{ q }}" placeholder="szukaj nazwy (pl / lac.)">
+  <select name="origin">
+    <option value="">wszystkie ({{ origins.values() | sum }})</option>
+    {% for o, label in [("kwiatownik", "z Kwiatownika"), ("archiwum", "z archiwum"), ("nowa", "nowe (z przepisow)")] %}
+      <option value="{{ o }}" {% if origin == o %}selected{% endif %}>{{ label }} ({{ origins.get(o, 0) }})</option>
+    {% endfor %}
+  </select>
+  <select name="missing">
+    <option value="">dowolne informacje</option>
+    {% for path, title in slot_titles.items() %}<option value="{{ path }}" {% if missing == path %}selected{% endif %}>brak: {{ title }}</option>{% endfor %}
+  </select>
+  <select name="sort">
+    <option value="">nazwa</option>
+    <option value="luki" {% if sort == "luki" %}selected{% endif %}>najwiecej brakow</option>
+  </select>
+  <button>Filtruj</button>
+</form>
+
+{% if jobs %}
+<p class="muted">Ostatnie zadania:
+  {% for j in jobs %}<a href="/jobs/{{ j.id }}"><span class="tag {{ j.status.value }}">#{{ j.id }} {{ j.kind }} {{ j.status.value }}</span></a> {% endfor %}
+</p>
+{% endif %}
+
+<form method="post" action="/plants/research">
+  <div class="box bulkbar">
+    <label><input type="checkbox" onclick="document.querySelectorAll('.pick').forEach(c => c.checked = this.checked)"> zaznacz wszystkie</label>
+    <button>Zbierz wiedze o zaznaczonych</button>
+  </div>
+  <div class="pl-grid">
+  {% for p in plants %}
+    {% set c = counts.get(p.id, {}) %}
+    <div class="pl-card">
+      <div class="pl-head">
+        <label class="pl-name"><input type="checkbox" class="pick" name="ids" value="{{ p.id }}">
+          <a href="/plants/{{ p.id }}">{{ p.nazwa_pl }}</a></label>
+        <span class="tag">{{ p.origin }}</span>
+      </div>
+      <div class="muted"><i>{{ p.nazwa_lat or "brak nazwy lacinskiej" }}</i>{% if p.mentions %} &middot; w {{ p.mentions }} przepisach{% endif %}</div>
+      {% set c2 = cov.get(p.id) %}
+      {% if c2 %}
+      <div class="pl-cov" title="podrozdzialy schematu z trescia (recznie albo z sieci)">
+        <div class="bar"><div style="width: {{ c2.procent }}%"></div></div>
+        <span class="muted">schemat: <b>{{ c2.procent }}%</b>{% if c2.merged %} &middot; z sieci w {{ c2.merged }} podrozdz.{% endif %}</span>
+      </div>
+      {% if c2.braki %}
+      <div class="pl-gaps">{% for path in c2.braki[:4] %}<span class="tag gap" title="{{ slot_titles.get(path, path) }}">{{ slot_titles.get(path, path).split(" - ")[-1] }}</span>{% endfor %}{% if c2.braki | length > 4 %}<span class="muted">+{{ c2.braki | length - 4 }}</span>{% endif %}</div>
+      {% endif %}
+      {% endif %}
+      <div class="pl-stats">
+        <span class="tag applied" title="zapisane w pliku rosliny">w Kwiatowniku {{ c.get("applied", 0) }}</span>
+        <span class="tag done" title="zweryfikowane, czekaja na zapis">zweryf. {{ c.get("verified", 0) }}</span>
+        <span class="tag queued" title="czekaja na weryfikacje">nowe {{ c.get("new", 0) }}</span>
+        <span class="tag failed" title="odrzucone">odrz. {{ c.get("rejected", 0) }}</span>
+      </div>
+      <div class="muted pl-foot">
+        {% if p.id in files %}plik: {{ p.id }}.json{% else %}brak pliku w Kwiatowniku{% endif %}
+        &middot; {% if p.last_research_at %}badano {{ p.last_research_at | dt }}{% else %}jeszcze nie badano{% endif %}
+        {% if p.status == "error" %}<br><span class="tag failed" title="{{ p.note }}">kontrola kopii: blad</span>{% endif %}
+      </div>
+    </div>
+  {% else %}
+    <p class="muted">Rejestr jest pusty - kliknij "Odswiez rejestr roslin".</p>
+  {% endfor %}
+  </div>
+</form>
+
+<style>
+  .pl-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+  .pl-actions .box { flex: 1 1 320px; margin-bottom: 10px; }
+  .pl-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
+  .pl-card { background: #fff; border-radius: 8px; padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+  .pl-head { display: flex; gap: 8px; align-items: center; justify-content: space-between; }
+  .pl-name { font-weight: 600; min-width: 0; overflow-wrap: anywhere; }
+  .pl-stats { display: flex; flex-wrap: wrap; gap: 4px; }
+  .pl-foot { margin-top: auto; }
+  .tag.applied { background: #cfe8d2; }
+  .tag.gap { background: #f6e3d5; font-size: .78em; }
+  .pl-cov { display: flex; flex-direction: column; gap: 3px; }
+  .pl-gaps { display: flex; flex-wrap: wrap; gap: 3px; align-items: center; }
+  .cov-box { display: block; margin-bottom: 14px; }
+  .cov-box summary { cursor: pointer; }
+  .cov-legend { display: flex; flex-wrap: wrap; gap: 12px; margin: 10px 0; }
+  .sw { display: inline-block; width: 12px; height: 12px; border-radius: 3px; margin-right: 4px; vertical-align: -1px; }
+  .cov-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 8px; }
+  .cov-card { border: 1px solid #e3e6dc; border-radius: 8px; padding: 8px 10px; display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+  .cov-card.sel { border-color: #2f5d3a; box-shadow: 0 0 0 2px #cfe8d2; }
+  .cov-title { overflow-wrap: anywhere; line-height: 1.25; }
+  .cov-bar { display: flex; height: 10px; border-radius: 5px; overflow: hidden; background: #eee; }
+  .reczne, .sw.reczne { background: #2f5d3a; } .z_sieci, .sw.z_sieci { background: #4f86c6; }
+  .czeka, .sw.czeka { background: #e8c25a; } .brak, .sw.brak { background: #e5b3a8; }
+  .cov-act { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: .9em; }
+  .cov-act button { padding: 3px 8px; }
+  @media (max-width: 520px) { .cov-grid { grid-template-columns: 1fr 1fr; } .cov-card { padding: 6px 8px; } }
+  @media (max-width: 520px) { .pl-grid { grid-template-columns: 1fr; } }
+</style>
+{% endblock %}

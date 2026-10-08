@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% block content %}
+<p><a href="/items">&larr; Zebrane</a></p>
+<h1>{{ item.title or item.url }}</h1>
+<p><span class="tag {{ item.kind.value }}">{{ item.kind.value }}</span> status: <b>{{ item.status.value }}</b>
+  &middot; pewnosc {{ "%.2f" % item.confidence if item.confidence is not none else "-" }}
+  &middot; metoda {{ item.method or "-" }} &middot; wzorzec <code>{{ item.pattern or "-" }}</code>
+  &middot; jezyk {{ item.language or "?" }}</p>
+<p><a href="{{ item.url }}" target="_blank">{{ item.url }}</a>{% if src %} &middot; <a href="/sources/{{ src.id }}">{{ src.name }}</a>{% endif %}</p>
+{% if item.reason %}<p class="muted">Uzasadnienie: {{ item.reason }}</p>{% endif %}
+
+{% if item.match_ref %}
+  <p style="background:#fff1c2;padding:8px;border-radius:6px">
+    {% if item.status.value == "exists" %}Taki przepis juz jest w Kwiatowniku: <code>{{ item.match_ref }}</code>
+    {% else %}Ten sam przepis co <a href="/items/{{ item.duplicate_of }}">#{{ item.duplicate_of }}</a> (z innej strony){% endif %}
+    &middot; <span class="muted">{{ item.match_info }}</span>
+    <form class="inline" method="post" action="/items/{{ item.id }}/not-duplicate"><button>To inny przepis</button></form>
+  </p>
+{% endif %}
+<div style="display:flex;gap:8px;margin:12px 0">
+  <form method="post" action="/items/{{ item.id }}/translate"><button>{% if polish %}Przetlumacz ponownie{% else %}Przetlumacz i sprawdz{% endif %}</button></form>
+  {% if polish %}<form method="post" action="/items/{{ item.id }}/enrich"><button>{% if polish.opracowanie %}Opracuj ponownie{% else %}Opracuj (5 przemian, kampo...){% endif %}</button></form>{% endif %}
+  <form method="post" action="/items/{{ item.id }}/set"><input type="hidden" name="status" value="approved"><button>Zatwierdz</button></form>
+  <form method="post" action="/items/{{ item.id }}/set"><input type="hidden" name="status" value="skipped"><button>Odrzuc</button></form>
+  <form method="post" action="/items/{{ item.id }}/set"><input type="hidden" name="status" value="raw"><button>Przywroc (raw)</button></form>
+  <form method="post" action="/items/{{ item.id }}/set">
+    <select name="kind">{% for k in ["recipe", "fact", "other"] %}<option {% if item.kind.value == k %}selected{% endif %}>{{ k }}</option>{% endfor %}</select>
+    <button>Zmien typ</button>
+  </form>
+</div>
+
+<h2>Zrodla ({{ group | length }})</h2>
+{% if item.duplicate_of %}<p>To jest dodatkowe zrodlo przepisu <a href="/items/{{ primary.id }}">#{{ primary.id }} {{ primary.title }}</a>.</p>{% endif %}
+<table>
+  <tr><th>#</th><th>Strona</th><th>Tytul oryginalny</th><th>Adres</th><th></th></tr>
+  {% for g in group %}
+    <tr {% if g.id == item.id %}style="background:#f1f6ee"{% endif %}>
+      <td><a href="/items/{{ g.id }}">{{ g.id }}</a>{% if not g.duplicate_of %} <span class="tag">glowny</span>{% endif %}</td>
+      <td>{{ names.get(g.source_id, "?") }}</td><td>{{ g.title }}</td>
+      <td><a href="{{ g.url }}" target="_blank">{{ g.url[:70] }}</a></td>
+      <td>{% if g.duplicate_of %}<form method="post" action="/items/{{ g.id }}/set"><input type="hidden" name="duplicate_of" value="none"><button title="to jednak inny przepis">Odlacz</button></form>{% endif %}</td>
+    </tr>
+  {% endfor %}
+</table>
+<form method="post" action="/items/{{ item.id }}/set" class="box" style="margin-top:8px">
+  <span class="muted">Ten sam przepis co:</span> <input name="duplicate_of" placeholder="#id" size="6"> <button>Polacz jako zrodlo</button>
+</form>
+<details><summary>Tak zrodla trafia do JSON-a Kwiatownika</summary><pre class="log">{{ zrodla_json }}</pre></details>
+
+{% if polish %}
+<h2>Po polsku (tak trafi do Kwiatownika){% if item.translated_by %} <span class="muted">- {{ item.translated_by }}</span>{% endif %}</h2>
+<div style="background:#fff;padding:12px;border-radius:8px">
+  <h3 style="margin-top:0">{{ polish.tytul }}</h3>
+  <p class="muted">typ: {{ polish.typ }}{% if polish.roslina %} &middot; roslina: {{ polish.roslina }}{% endif %}{% if polish.slug %} (<code>{{ polish.slug }}</code>){% endif %}
+    {% if polish.porcje %} &middot; porcje: {{ polish.porcje }}{% endif %}{% if polish.czas_przygotowania %} &middot; czas: {{ polish.czas_przygotowania }}{% endif %}</p>
+  {% if polish.opis %}<p>{{ polish.opis }}</p>{% endif %}
+  <b>Skladniki</b><ul>{% for s in polish.skladniki %}<li>{{ s.nazwa }}{% if s.ilosc %} - {{ s.ilosc }}{% endif %}{% if s.link_id %} <code>{{ s.link_id }}</code>{% endif %}</li>{% endfor %}</ul>
+  <b>Przygotowanie</b><ol>{% for st in polish.sposob_przygotowania %}<li>{{ st }}</li>{% endfor %}</ol>
+  {% if polish.uwagi %}<p><b>Uwagi:</b> {{ polish.uwagi }}</p>{% endif %}
+</div>
+<details><summary>JSON</summary><pre class="log">{{ polish_json }}</pre></details>
+{% endif %}
+
+{% if recipe %}
+<h2>Wyciagniety przepis (oryginal)</h2>
+<div style="background:#fff;padding:12px;border-radius:8px">
+  <h3 style="margin-top:0">{{ recipe.title }}</h3>
+  {% if recipe.description %}<p>{{ recipe.description }}</p>{% endif %}
+  <p class="muted">{% if recipe.yield %}porcje: {{ recipe.yield }} {% endif %}{% if recipe.total_time %}czas: {{ recipe.total_time }}{% endif %}</p>
+  <b>Skladniki</b><ul>{% for i in recipe.ingredients %}<li>{{ i }}</li>{% endfor %}</ul>
+  <b>Kroki</b><ol>{% for st in recipe.steps %}<li>{{ st }}</li>{% endfor %}</ol>
+</div>
+{% endif %}
+{% set history_link = "/items/" ~ item.id %}{% include "snapshot_history.html" %}
+<h2>Tekst strony</h2>
+<pre style="white-space:pre-wrap;background:#fff;padding:12px;border-radius:8px">{{ item.raw_text or "(nie zapisano - strona sklasyfikowana jako 'other')" }}</pre>
+{% endblock %}

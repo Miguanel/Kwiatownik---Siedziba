@@ -1,0 +1,162 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+  .fp-top { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; margin-bottom: 16px; }
+  .fp-top .box { display: block; margin: 0; }
+  .fp-top details.box { background: #fff; padding: 14px; border-radius: 8px; }
+  .fp-top label { display: block; margin: 8px 0 3px; font-weight: 600; }
+  .fp-top input:not([type=checkbox]), .fp-top select, .fp-top textarea { width: 100%; box-sizing: border-box; }
+  .fp-top textarea { font: inherit; padding: 6px 10px; }
+  .fp-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: end; }
+  .fp-row > div { flex: 1 1 120px; }
+  .fp-filter { display: flex; gap: 6px; flex-wrap: wrap; margin: 8px 0 12px; }
+  .fp-filter a { text-decoration: none; }
+  .fp-filter a.sel .tag { background: #2f5d3a; color: #fff; }
+  .fp-posts { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 420px), 1fr)); gap: 14px; }
+  .fp-post { background: #fff; border-radius: 8px; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
+  .fp-post.rejected { opacity: .55; }
+  .fp-post textarea { width: 100%; box-sizing: border-box; min-height: 300px; font: inherit; line-height: 1.45;
+                      padding: 8px; border: 1px solid #d6dbcc; border-radius: 6px; resize: vertical; }
+  .fp-head { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+  .fp-acts { display: flex; gap: 6px; flex-wrap: wrap; }
+  .fp-acts button { flex: 1 1 auto; }
+  .tag.draft { background: #fff1c2; } .tag.approved { background: #dbe6f5; } .tag.published { background: #d7ecd9; }
+  .tag.rejected { background: #eee; color: #777; }
+  .fp-warn { background: #fff1c2; padding: 4px 8px; border-radius: 6px; font-size: .9em; }
+  .fp-run { background: #fff; border-radius: 8px; padding: 10px 14px; margin-bottom: 12px; }
+  .fp-bar { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-bottom: 6px; }
+  .fp-rev { border: 1px solid #e3e6dc; border-radius: 8px; padding: 6px 10px; }
+  .fp-rev > summary { cursor: pointer; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .fp-rev ul { margin: 4px 0 8px; padding-left: 20px; } .fp-rev p { margin: 6px 0; }
+  .fp-score { font-weight: 700; font-size: 1.15em; min-width: 2.2em; text-align: center; border-radius: 6px; padding: 1px 6px; background: #e3e6dc; }
+  .fp-score.v-publikuj, .tag.v-publikuj { background: #d7ecd9; } .fp-score.v-popraw, .tag.v-popraw { background: #fff1c2; }
+  .fp-score.v-odrzuc, .tag.v-odrzuc { background: #f6d5d5; }
+  .fp-big { display: flex; align-items: center; gap: 14px; width: 100%; text-align: left; border: 0; border-radius: 10px;
+            padding: 10px 14px; cursor: pointer; font: inherit; color: inherit; background: #e3e6dc; }
+  .fp-big.v-publikuj { background: #d7ecd9; } .fp-big.v-popraw { background: #fff1c2; } .fp-big.v-odrzuc { background: #f6d5d5; }
+  .fp-big-n { font-size: 2.6em; font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .fp-big-n small { font-size: .38em; font-weight: 600; color: #6b7568; margin-left: 2px; }
+  .fp-big-d { line-height: 1.35; }
+  .fp-crit { display: grid; gap: 4px; margin: 8px 0; }
+  .fp-cr { display: grid; grid-template-columns: minmax(110px, 38%) 1fr 2.2em; gap: 8px; align-items: center; font-size: .9em; }
+  .fp-cr b { text-align: right; }
+  .fp-track { background: #eef0e8; border-radius: 4px; height: 10px; overflow: hidden; }
+  .fp-track i { display: block; height: 100%; background: #2f5d3a; border-radius: 0 4px 4px 0; }
+  .fp-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px; }
+  .fp-res { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+  .fp-res input { width: 90px; flex: 1 1 80px; }
+  .fp-acts form.inline { flex: 1 1 auto; display: flex; } .fp-acts form.inline button { flex: 1; }
+  @media (max-width: 760px) { .fp-post textarea { min-height: 360px; } }
+</style>
+
+<h1>Fanpage - posty {{ persona.name }}</h1>
+<p><a href="/posts/ideas">Ciekawostki - pula Siedziby &rarr;</a> &middot; <a href="/posts/stats">Statystyki i oceny postow &rarr;</a></p>
+<p class="muted">Dzis: <b>{{ season.label }}</b>{% if season.folk %} &middot; {{ season.folk | join("; ") }}{% endif %}.
+  Posty pisze model LLM glosem postaci, na podstawie danych z Siedziby (rosliny, ciekawostki z zagranicznych stron, przepisy).
+  Link, zrodlo, podpis i hashtagi dokleja program. Publikacja na razie recznie: <i>Kopiuj</i> i wklej na fanpage, potem oznacz jako opublikowany.</p>
+{% if msg %}<p class="box" style="display:block">{{ msg }}</p>{% endif %}
+
+<div class="fp-top">
+  <form class="box" method="post" action="/posts/generate">
+    <b>Nowy post</b>
+    <label for="kind">Temat</label>
+    <select name="kind" id="kind">
+      <option value="auto">Automatycznie (teraz: {{ kinds[next_kind] }})</option>
+      {% for k, label in kinds.items() %}<option value="{{ k }}">{{ label }}</option>{% endfor %}
+    </select>
+    <label for="plant_id">Roslina <span class="muted">(dla "pora roku" i "ciekawostka"; puste = dobierze sam)</span></label>
+    <select name="plant_id" id="plant_id">
+      <option value="">- dobierz sam -</option>
+      {% for c in candidates %}<option value="{{ c.id }}">{{ c.nazwa_pl }}{% if c.tasks %} - {{ c.tasks[0].czynnosc }}{% endif %}</option>{% endfor %}
+    </select>
+    <label for="hint">Zyczenie <span class="muted">(opcjonalnie, np. "wspomnij o pierwszych przymrozkach")</span></label>
+    <input name="hint" id="hint" maxlength="300">
+    <div class="fp-row" style="margin-top:8px">
+      <div><label for="count">Ile postow</label><input name="count" id="count" type="number" min="1" max="5" value="1"></div>
+      <div><button style="width:100%">Napisz</button></div>
+    </div>
+    <p class="muted">Kolejnosc automatyczna: najpierw 2 posty o Siedzibie Kwiatownika (powitanie i jak dziala),
+      potem na zmiane: ciekawostka z zagranicznej strony, nietypowy przepis, ziele na te pore roku.
+      Ciekawostki i przepisy nie powtarzaja sie miedzy postami.</p>
+  </form>
+
+  <details class="box">
+    <summary><b>Postac: {{ persona.name }}</b> <span class="muted">- imie, charakter, gwara, dlugosc</span></summary>
+    <form method="post" action="/posts/persona">
+      <label for="p-name">Imie</label><input name="name" id="p-name" value="{{ persona.name }}">
+      <label for="p-sig">Podpis pod postem</label><input name="signature" id="p-sig" value="{{ persona.signature }}">
+      <label for="p-bio">Kim jest</label><textarea name="bio" id="p-bio" rows="3">{{ persona.bio }}</textarea>
+      <label for="p-style">Jak mowi (gwara)</label><textarea name="style" id="p-style" rows="6">{{ persona.style }}</textarea>
+      <div class="fp-row">
+        <div><label for="p-min">Min. slow</label><input name="min_words" id="p-min" type="number" min="20" value="{{ persona.min_words }}"></div>
+        <div><label for="p-max">Max. slow</label><input name="max_words" id="p-max" type="number" min="20" value="{{ persona.max_words }}"></div>
+        <div><label for="p-emo">Max. emoji</label><input name="max_emoji" id="p-emo" type="number" min="0" value="{{ persona.max_emoji }}"></div>
+      </div>
+      <label for="p-tags">Stale hashtagi</label><input name="hashtags" id="p-tags" value="{{ persona.hashtags }}">
+      <label for="p-link">Tekst przed linkiem</label><input name="link_text" id="p-link" value="{{ persona.link_text }}">
+      <div class="fp-row" style="margin-top:10px"><div><button style="width:100%">Zapisz postac</button></div></div>
+    </form>
+    <form method="post" action="/posts/persona/reset" style="margin-top:6px">
+      <button class="muted" onclick="return confirm('Przywrocic domyslna postac?')">Przywroc domyslna</button>
+    </form>
+  </details>
+</div>
+
+{% include "posts_status.html" %}
+<p id="fp-stale" class="fp-warn" hidden>Sa nowe posty lub oceny, ale masz niezapisana edycje - zapisz ja albo
+  <a href="/posts?status={{ status }}">odswiez liste</a>.</p>
+<div id="fp-list" hx-get="/posts/list?status={{ status }}" hx-trigger="posts-changed from:body" hx-swap="innerHTML">
+  {% include "posts_list.html" %}
+</div>
+
+<script>
+function fpCopy(btn, id) {
+  const ta = document.getElementById("fp-text-" + id);
+  const done = () => { const t = btn.textContent; btn.textContent = "Skopiowano"; setTimeout(() => btn.textContent = t, 1500); };
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(ta.value).then(done);
+  } else { ta.select(); document.execCommand("copy"); done(); }
+}
+/* Stan listy przy odswiezaniu: rozwiniete raporty, pozycja ekranu, niezapisana edycja. */
+const FP_KEY = "siedziba_posts_open_v1";
+function fpOpenSet() { try { return new Set(JSON.parse(sessionStorage.getItem(FP_KEY) || "[]")); } catch (e) { return new Set(); } }
+function fpSaveOpen() {
+  const open = [...document.querySelectorAll("#fp-list details[data-k]")].filter(d => d.open).map(d => d.dataset.k);
+  try { sessionStorage.setItem(FP_KEY, JSON.stringify(open)); } catch (e) {}
+}
+function fpRestoreOpen() {
+  const open = fpOpenSet();
+  document.querySelectorAll("#fp-list details[data-k]").forEach(d => { if (open.has(d.dataset.k)) d.open = true; });
+}
+document.addEventListener("toggle", e => { if (e.target.matches && e.target.matches("#fp-list details[data-k]")) fpSaveOpen(); }, true);
+let fpAnchor = null;
+document.body.addEventListener("htmx:beforeSwap", e => {
+  if (!e.detail.target || e.detail.target.id !== "fp-list") return;
+  const dirty = [...document.querySelectorAll("#fp-list textarea")].some(t => t.value !== t.defaultValue);
+  if (dirty) { e.detail.shouldSwap = false; document.getElementById("fp-stale").hidden = false; return; }
+  fpSaveOpen();
+  const first = [...document.querySelectorAll("#fp-list .fp-post")].find(el => el.getBoundingClientRect().bottom > 0);
+  fpAnchor = first ? { id: first.id, top: first.getBoundingClientRect().top } : null;
+});
+document.body.addEventListener("htmx:afterSwap", e => {
+  if (!e.detail.target || e.detail.target.id !== "fp-list") return;
+  fpRestoreOpen();
+  const el = fpAnchor && document.getElementById(fpAnchor.id);
+  if (el) window.scrollBy(0, el.getBoundingClientRect().top - fpAnchor.top);
+  document.getElementById("fp-stale").hidden = true;
+});
+fpRestoreOpen();
+if (location.hash) { const t = document.querySelector(location.hash); if (t) t.scrollIntoView(); }
+
+function fpToggleRev(id) {
+  const d = document.querySelector('#fp-list details[data-k="rev-' + id + '"]');
+  if (d) { d.open = !d.open; if (d.open) d.scrollIntoView({block: "nearest"}); }
+}
+
+function fpCount(ta) {
+  const n = (ta.value.match(/[\p{L}\p{N}'-]+/gu) || []).length;
+  const el = document.getElementById(ta.id.replace("fp-text-", "fp-len-"));
+  if (el) el.textContent = ta.value.length + " znakow, " + n + " slow (calosc)";
+}
+</script>
+{% endblock %}

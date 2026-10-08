@@ -1,0 +1,21 @@
+<div {% if live %}hx-get="/jobs/{{ job.id }}/panel" hx-trigger="every 2s" hx-swap="outerHTML"{% endif %}>
+  <p><span class="tag {{ job.status.value }}">{{ job.status.value }}</span>
+     &nbsp; {{ job.progress or 0 }}/{{ job.total or "?" }} stron &nbsp;
+     <span class="muted">start {{ job.created_at | dt("%H:%M:%S") }}{% if job.finished_at %}, koniec {{ job.finished_at | dt("%H:%M:%S") }}{% endif %}</span>
+     {% if live %}
+       <form class="inline" method="post" action="/jobs/{{ job.id }}/stop"><button>Zatrzymaj</button></form>
+     {% else %}
+       <form class="inline" method="post" action="/jobs/{{ job.id }}/retry">
+         <button title="uruchom ponownie z tymi samymi ustawieniami">{% if frontier %}Kontynuuj ({{ frontier }} adresow w kolejce){% else %}Ponow{% endif %}</button></form>
+     {% endif %}
+     {% if job.retry_of %}<span class="muted">ponowienie zadania <a href="/jobs/{{ job.retry_of }}">#{{ job.retry_of }}</a></span>{% endif %}
+  </p>
+  <div class="bar"><div style="width: {{ pct }}%"></div></div>
+  {% if stats %}
+    <div class="cards" style="margin-top:12px">
+      {% for k, v in stats.items() %}<div class="card"><b>{{ v }}</b>{{ k }}</div>{% endfor %}
+    </div>
+    {% if job.source_id %}<p><a href="/items?source_id={{ job.source_id }}">Zobacz zebrane strony &rarr;</a></p>{% endif %}
+  {% endif %}
+  <pre class="log">{{ job.log or "..." }}</pre>
+</div>

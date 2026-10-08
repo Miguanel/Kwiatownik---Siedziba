@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Scrapery</h1>
+<p class="muted">Strony z profilem scrapera. <b>Pobierz cala strone</b> przechodzi sitemapy i linki strony i pobiera
+  przepisy oraz artykuly selektorami profilu - bez zapytan do LLM dla tych stron. Zadanie mozna zatrzymac i wznowic
+  (Ponow kontynuuje od zapisanej kolejki). Strony bez profilu zbuduja go same przy zwyklym skanie (etapy 1-3).</p>
+{% if msg %}<p class="box" style="display:block">{{ msg }}</p>{% endif %}
+
+<form method="post" action="/scrapers/harvest" id="harvestForm">
+  <div class="box bulkbar">
+    <label><input type="checkbox" onclick="document.querySelectorAll('.pick').forEach(c => { if (!c.disabled) c.checked = this.checked })"> zaznacz gotowe</label>
+    <label class="muted">limit stron <input name="max_pages" type="number" min="10" placeholder="{{ default_pages }}" style="width:90px"></label>
+    <button>Pobierz cala strone (zaznaczone)</button>
+  </div>
+
+  <div class="scr-grid">
+  {% for r in rows %}
+    {% set s = r.src %}
+    <div class="scr-card {% if not r.ready or not s.active %}scr-off{% endif %}">
+      <div class="scr-head">
+        <label class="scr-name">
+          <input type="checkbox" class="pick" name="ids" value="{{ s.id }}" {% if not r.ready or not s.active or r.job %}disabled{% endif %}>
+          <a href="/sources/{{ s.id }}">{{ s.name }}</a>
+        </label>
+        <span class="tag {{ s.profile_status }}">{{ s.profile_status }}</span>
+        {% if not s.active %}<span class="tag cancelled">wylaczone</span>{% endif %}
+      </div>
+      <div class="scr-stats">
+        <span title="przepisy w bazie (bez pominietych)">🌿 {{ r.recipes }}</span>
+        <span title="ciekawostki w bazie">📜 {{ r.facts }}</span>
+        <span title="stron przeskanowanych lacznie">📄 {{ s.pages_scanned or 0 }}</span>
+        {% if r.coverage is not none %}<span title="pokrycie probek przy budowie profilu">pokrycie {{ (r.coverage * 100) | round | int }}%</span>{% endif %}
+        {% if r.precision is not none %}<span title="trafnosc regexu adresow przepisow (precyzja / czulosc)">regex {{ r.precision }}/{{ r.recall }}</span>{% endif %}
+        <span title="czy profil pobiera tez artykuly z ciekawostkami">ciekawostki: {{ "tak" if r.facts_ok else "nie" }}</span>
+        {% if r.used or r.failed %}<span title="uzycia profilu: udane / nieudane">profil {{ r.used }}/{{ r.used + r.failed }}</span>{% endif %}
+      </div>
+      {% if r.prof %}<div class="muted scr-regex" title="regex adresow przepisow">{{ r.prof.recipe_url_regex or "-" }}</div>{% endif %}
+      <div class="scr-foot">
+        {% if r.job %}
+          <a href="/jobs/{{ r.job.id }}"><span class="tag {{ r.job.status.value }}">{{ r.job.kind }} {{ r.job.status.value }}</span>
+            {% if r.job.total %}{{ r.job.progress or 0 }}/{{ r.job.total }}{% endif %}</a>
+        {% elif r.last %}
+          <a href="/jobs/{{ r.last.id }}" class="muted">ostatnie pobieranie: <span class="tag {{ r.last.status.value }}">{{ r.last.status.value }}</span> {{ r.last.created_at | dt }}</a>
+        {% else %}<span class="muted">jeszcze nie pobierano calej strony</span>{% endif %}
+        <span class="scr-actions">
+          {% if r.ready and s.active and not r.job %}
+            <button formaction="/scrapers/{{ s.id }}/harvest">Pobierz cala strone</button>
+          {% endif %}
+          <button formaction="/scrapers/{{ s.id }}/rebuild" {% if r.job %}disabled{% endif %}>Przebuduj profil</button>
+        </span>
+      </div>
+    </div>
+  {% else %}
+    <p class="muted">Zadna strona nie ma jeszcze profilu - uruchom skan zrodla (Zrodla &rarr; Skanuj); profil zbuduje sie po rozpoznaniu.</p>
+  {% endfor %}
+  </div>
+</form>
+
+<style>
+  .scr-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 12px; }
+  .scr-card { background: #fff; border-radius: 8px; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+  .scr-off { opacity: .6; }
+  .scr-head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .scr-name { font-weight: 600; flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+  .scr-stats { display: flex; flex-wrap: wrap; gap: 6px 12px; font-size: .9em; }
+  .scr-regex { font-family: monospace; font-size: .8em; overflow-wrap: anywhere; }
+  .scr-foot { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: auto; }
+  .scr-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+  @media (max-width: 520px) {
+    .scr-grid { grid-template-columns: 1fr; }
+    .scr-actions, .scr-actions button { width: 100%; }
+  }
+</style>
+{% endblock %}

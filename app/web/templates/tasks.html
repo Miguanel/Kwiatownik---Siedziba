@@ -1,0 +1,275 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Proponowane zadania</h1>
+<p class="muted">Co warto teraz zrobic - pogrupowane w podobne zadania. Zaznacz pozycje (albo "wszystkie") i uruchom
+  akcje; zadania ida do kolejki i wykonuja sie w tle, a lista odswiezy sie sama.</p>
+
+<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
+  <a class="tag {{ 'done' if not cat else '' }}" href="/tasks">wszystkie</a>
+  {% for key, label in categories.items() %}
+    <a class="tag {{ 'done' if cat == key else '' }}" href="/tasks?cat={{ key }}">{{ label }} ({{ counts[key] }})</a>
+  {% endfor %}
+</div>
+
+<div id="queue" class="box" hx-get="/tasks/queue" hx-trigger="load, every 4s" style="display:block"></div>
+
+<div class="tasks-toolbar">
+  <button type="button" id="tasksCollapseAll" title="Zwin wszystkie rozwiniete sekcje">&#9650; Zwin wszystkie</button>
+  <button type="button" id="tasksExpandAll" title="Rozwin wszystkie sekcje">&#9660; Rozwin wszystkie</button>
+  <button type="button" id="tasksLast3" aria-pressed="false"
+          title="Rozwin wszystkie sekcje i pokaz w kazdej tylko 3 ostatnie pozycje; ponowne klikniecie przywraca poprzedni widok">Pokaz 3 ostatnie</button>
+  <span class="muted" id="tasksChanges" aria-live="polite"></span>
+</div>
+
+<div id="tasks-panel" hx-get="/tasks/panel?cat={{ cat }}" hx-trigger="jobs-finished from:body">
+  {% include "tasks_panel.html" %}
+</div>
+
+<style>
+  .tasks-toolbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 0 0 10px 0; }
+  .tasks-toolbar button { cursor: pointer; }
+  .tag.new { background: #ffe0b3; }
+  details.task-group.is-new { outline: 2px solid #f0b45a; outline-offset: -2px; }
+  tr.is-new td { background: #fff6e5; }
+  #tasksLast3[aria-pressed="true"] { background: #2f5d3a; color: #fff; border: 1px solid #2f5d3a; border-radius: 4px; }
+  .l3-note { margin: 6px 0 0; }
+  .l3-note button { padding: 2px 8px; font-size: .9em; cursor: pointer; }
+  @media (max-width: 760px) {
+    .tasks-toolbar button { flex: 1 1 140px; }
+    #tasksChanges { flex-basis: 100%; }
+  }
+</style>
+
+<script>
+(function () {
+  // ------------------------------------------------------------------
+  // Stan listy "Proponowane zadania" zachowywany miedzy odswiezeniami:
+  //  - ktore sekcje (grupy) sa rozwiniete / zwiniete (takze po przeladowaniu strony),
+  //  - ktore pozycje sa zaznaczone (gdy panel odswiezy sie sam po zakonczeniu zadania),
+  // oraz porownanie nowych wynikow z poprzednimi: nowe sekcje i pozycje dostaja znacznik "nowe",
+  // a pod przyciskami pojawia sie podsumowanie zmian. Wybrany filtr kategorii (?cat=) zostaje w adresie.
+  // ------------------------------------------------------------------
+  const KEY = 'siedziba_tasks_state_v1';
+  const panel = document.getElementById('tasks-panel');
+  const info = document.getElementById('tasksChanges');
+  // wyniki porownujemy w obrebie tego samego filtra kategorii
+  const CAT = new URLSearchParams(location.search).get('cat') || '';
+
+  function plural(n, one, few, many) {
+    const f = n % 10, h = n % 100;
+    return `${n} ${n === 1 ? one : (f >= 2 && f <= 4 && (h < 12 || h > 14) ? few : many)}`;
+  }
+
+  function load() {
+    try { const st = JSON.parse(sessionStorage.getItem(KEY)) || {}; return { open: st.open || {}, seen: st.seen || {}, last3: st.last3 || {} }; }
+    catch (e) { return { open: {}, seen: {}, last3: {} }; }
+  }
+  function save(st) { try { sessionStorage.setItem(KEY, JSON.stringify(st)); } catch (e) { /* brak pamieci */ } }
+
+  let state = load();
+  let pendingChecks = null;   // zaznaczenia zapamietane tuz przed podmiana panelu
+
+  const groups = () => Array.from(panel.querySelectorAll('details.task-group'));
+
+  function snapshot() {
+    // aktualna lista: grupa -> {total, ids}
+    const snap = {};
+    groups().forEach(d => {
+      const t = d.querySelector('[data-total]');
+      snap[d.dataset.group] = {
+        total: t ? parseInt(t.dataset.total, 10) : 0,
+        ids: Array.from(d.querySelectorAll('tr[data-id]')).map(r => r.dataset.id)
+      };
+    });
+    return snap;
+  }
+
+  function captureChecks() {
+    const checks = {};
+    groups().forEach(d => {
+      const ids = Array.from(d.querySelectorAll('input.pick:checked')).map(c => c.value);
+      const all = d.querySelector('input[name="all_items"]');
+      if (ids.length || (all && all.checked)) checks[d.dataset.group] = { ids, all: !!(all && all.checked) };
+    });
+    return checks;
+  }
+
+  function apply(checks, initial) {
+    const snap = snapshot();
+    const prevSeen = state.seen[CAT] || {};
+    const hadHistory = Object.keys(prevSeen).length > 0;
+    let newGroups = 0, newItems = 0, changedTotals = 0;
+    const gone = Object.keys(prevSeen).filter(k => !(k in snap)).length;
+
+    groups().forEach(d => {
+      const key = d.dataset.group;
+      // 1. rozwiniecie sekcji - tak jak uzytkownik zostawil (nowe sekcje: domyslnie z serwera)
+      if (key in state.open) d.open = !!state.open[key];
+
+      // 2. zaznaczenia - tylko pozycje, ktore nadal istnieja i nie sa w toku
+      const c = checks && checks[key];
+      if (c) {
+        c.ids.forEach(id => {
+          const box = d.querySelector(`input.pick[value="${CSS.escape(id)}"]`);
+          if (box && !box.disabled) box.checked = true;
+        });
+        const all = d.querySelector('input[name="all_items"]');
+        if (all && c.all) all.checked = true;
+      }
+
+      // 3. porownanie z poprzednimi wynikami
+      if (!hadHistory) return;
+      const before = prevSeen[key];
+      if (!before) {
+        newGroups++;
+        d.classList.add('is-new');
+        const s = d.querySelector('summary b');
+        if (s && !d.querySelector('.tag.new')) s.insertAdjacentHTML('afterend', ' <span class="tag new">nowa sekcja</span>');
+        return;
+      }
+      if (before.total !== snap[key].total) changedTotals++;
+      const known = new Set(before.ids);
+      d.querySelectorAll('tr[data-id]').forEach(r => {
+        if (!known.has(r.dataset.id)) {
+          newItems++;
+          r.classList.add('is-new');
+          const cell = r.cells[r.cells.length - 1];
+          if (cell && !cell.querySelector('.tag.new')) cell.insertAdjacentHTML('beforeend', ' <span class="tag new">nowe</span>');
+        }
+      });
+    });
+
+    state.seen[CAT] = snap;
+    save(state);
+    applyLast3();
+
+    if (!hadHistory || initial && !newGroups && !newItems && !gone) { if (!initial) info.textContent = ''; return; }
+    const parts = [];
+    if (newGroups) parts.push(plural(newGroups, 'nowa sekcja', 'nowe sekcje', 'nowych sekcji'));
+    if (newItems) parts.push(plural(newItems, 'nowa pozycja', 'nowe pozycje', 'nowych pozycji'));
+    if (gone) parts.push(plural(gone, 'sekcja ubyla', 'sekcje ubyly', 'sekcji ubylo'));
+    if (!parts.length && changedTotals) parts.push(`zmienily sie liczby w ${changedTotals} sekcjach`);
+    const time = new Date().toLocaleTimeString('pl-PL', { hour: '2-digit', minute: '2-digit' });
+    info.textContent = parts.length ? `Odswiezono ${time}: ${parts.join(', ')}.` : `Odswiezono ${time}: lista bez zmian, zaznaczenia zachowane.`;
+  }
+
+  // zapamietywanie recznego rozwijania/zwijania (zdarzenie toggle nie babelkuje - lapiemy w fazie capture)
+  panel.addEventListener('toggle', e => {
+    const d = e.target;
+    if (!d.matches || !d.matches('details.task-group')) return;
+    state.open[d.dataset.group] = d.open;
+    save(state);
+  }, true);
+
+  function setOpen(fn) {
+    const list = groups();
+    list.forEach((d, i) => { d.open = fn(d, i, list.length); state.open[d.dataset.group] = d.open; });
+    save(state);
+  }
+  // ------------------------------------------------------------------
+  // "Pokaz 3 ostatnie" - przelacznik:
+  //  1. klikniecie: zapamietuje obecny uklad (ktore sekcje rozwiniete), rozwija WSZYSTKIE sekcje
+  //     i w kazdej pokazuje tylko 3 ostatnie pozycje jej listy (reszta ukryta),
+  //  2. klikniecie: przywraca dokladnie zapamietany uklad sprzed kroku 1 (wszystkie pozycje widoczne),
+  //  3. klikniecie: znow wszystkie sekcje po 3 ostatnie pozycje ... itd.
+  // Tryb przetrwa samoczynne odswiezenie listy i przeladowanie strony (osobno dla kazdego filtra ?cat=).
+  // Ukryte pozycje maja wylaczone pola wyboru, wiec akcje dzialaja tylko na to, co widac.
+  // ------------------------------------------------------------------
+  const last3Btn = document.getElementById('tasksLast3');
+  const LAST_N = 3;
+  const l3 = () => state.last3[CAT];
+
+  function showAllRows(d) {
+    d.querySelectorAll('tr[data-id][hidden]').forEach(r => { r.hidden = false; });
+    d.querySelectorAll('input.pick[data-l3]').forEach(c => { c.disabled = false; c.removeAttribute('data-l3'); });
+    const note = d.querySelector('.l3-note');
+    if (note) note.remove();
+  }
+
+  function applyLast3() {
+    const mode = l3();
+    last3Btn.setAttribute('aria-pressed', mode ? 'true' : 'false');
+    last3Btn.textContent = mode ? 'Przywroc poprzedni widok' : 'Pokaz 3 ostatnie';
+    groups().forEach(d => {
+      showAllRows(d);
+      if (!mode || (mode.full || []).includes(d.dataset.group)) return;
+      const rows = Array.from(d.querySelectorAll('tr[data-id]'));
+      const hide = rows.slice(0, Math.max(0, rows.length - LAST_N));
+      if (!hide.length) return;
+      hide.forEach(r => {
+        r.hidden = true;
+        const box = r.querySelector('input.pick');
+        if (box && !box.disabled) { box.disabled = true; box.setAttribute('data-l3', ''); }
+      });
+      const table = d.querySelector('table');
+      if (table) table.insertAdjacentHTML('afterend',
+        `<p class="muted l3-note">Ukryto ${plural(hide.length, 'starsza pozycje', 'starsze pozycje', 'starszych pozycji')}. ` +
+        `<button type="button" data-l3-full>pokaz wszystkie w tej sekcji</button></p>`);
+    });
+  }
+
+  // "pokaz wszystkie w tej sekcji" - tylko ta sekcja wychodzi z trybu 3 ostatnich
+  panel.addEventListener('click', e => {
+    const b = e.target.closest('[data-l3-full]');
+    if (!b || !l3()) return;
+    const d = b.closest('details.task-group');
+    l3().full = (l3().full || []).concat(d.dataset.group);
+    save(state);
+    applyLast3();
+  });
+
+  function exitLast3() {
+    if (!l3()) return;
+    delete state.last3[CAT];
+    save(state);
+    applyLast3();
+  }
+
+  document.getElementById('tasksCollapseAll').addEventListener('click', () => { exitLast3(); setOpen(() => false); });
+  document.getElementById('tasksExpandAll').addEventListener('click', () => { exitLast3(); setOpen(() => true); });
+  last3Btn.addEventListener('click', () => {
+    const mode = l3();
+    if (mode) {
+      // przywroc uklad sprzed wlaczenia trybu (sekcje, ktorych wtedy nie bylo, zostaja jak sa)
+      delete state.last3[CAT];
+      groups().forEach(d => {
+        const key = d.dataset.group;
+        if (key in mode.prevOpen) { d.open = mode.prevOpen[key]; state.open[key] = d.open; }
+      });
+      save(state);
+      applyLast3();
+    } else {
+      const prevOpen = {};
+      groups().forEach(d => { prevOpen[d.dataset.group] = d.open; });
+      state.last3[CAT] = { prevOpen, full: [] };
+      setOpen(() => true);
+      applyLast3();
+    }
+    const first = groups()[0];
+    if (first) first.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
+
+  // podmiana panelu przez htmx: przed - zapamietaj zaznaczenia, po - przywroc i porownaj
+  document.body.addEventListener('htmx:beforeSwap', e => {
+    if (e.detail.target === panel) pendingChecks = captureChecks();
+  });
+  document.body.addEventListener('htmx:afterSwap', e => {
+    if (e.detail.target !== panel) return;
+    apply(pendingChecks, false);
+    pendingChecks = null;
+  });
+
+  apply(null, true);
+
+  // gdy jakies zadanie sie skonczy, odswiez liste propozycji (statusy i liczby)
+  let lastJobs = null;
+  document.body.addEventListener('htmx:afterSwap', e => {
+    if (e.detail.target.id !== 'queue') return;
+    const el = e.detail.target.querySelector('[data-n]');
+    const n = el ? parseInt(el.dataset.n) : 0;
+    if (lastJobs !== null && n < lastJobs) htmx.trigger(document.body, 'jobs-finished');
+    lastJobs = n;
+  });
+})();
+</script>
+{% endblock %}

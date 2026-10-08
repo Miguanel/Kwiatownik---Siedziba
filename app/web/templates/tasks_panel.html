@@ -1,0 +1,44 @@
+{% if message %}<p class="box" style="display:block;background:#d7ecd9">{{ message }}</p>{% endif %}
+{% for g in groups if g.total %}
+  <details class="box task-group" style="display:block" data-group="{{ g.key }}" {% if loop.index <= 4 %}open{% endif %}>
+    <summary style="cursor:pointer">
+      <b>{{ g.title }}</b> <span class="tag" data-total="{{ g.total }}">{{ g.total }}</span>
+      {% if g.busy %}<span class="tag running">{{ g.busy }} w toku</span>{% endif %}
+      <span class="muted">&middot; {{ categories[g.category] }}</span>
+    </summary>
+    <p class="muted" style="margin:6px 0">{{ g.description }}</p>
+    <form hx-post="/tasks/run" hx-target="#tasks-panel" hx-swap="innerHTML">
+      <input type="hidden" name="group" value="{{ g.key }}">
+      <input type="hidden" name="cat" value="{{ cat }}">
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:6px">
+        {% if g.items | length > 1 %}
+        <label><input type="checkbox" onclick="this.form.querySelectorAll('.pick').forEach(c => { if (!c.disabled && !c.closest('tr').hidden) c.checked = this.checked; })"> zaznacz widoczne</label>
+        {% endif %}
+        {% if g.total > g.items | length %}
+        <label class="muted"><input type="checkbox" name="all_items" value="true"> wszystkie ({{ g.total }})</label>
+        {% endif %}
+        {% for key, label in g.actions %}
+          <button name="action" value="{{ key }}">{{ label }}</button>
+        {% endfor %}
+      </div>
+      <table>
+        {% for i in g.items %}
+          <tr data-id="{{ i.id }}">
+            <td style="width:24px"><input type="checkbox" class="pick" name="ids" value="{{ i.id }}" {% if i.status %}disabled{% endif %}
+                 {% if g.items | length == 1 %}checked{% endif %}></td>
+            <td>{% if i.link %}<a href="{{ i.link }}" {% if i.link.startswith('http') %}target="_blank"{% endif %}>{{ i.label }}</a>{% else %}{{ i.label }}{% endif %}</td>
+            <td class="muted">{{ i.detail }}</td>
+            <td>{% if i.status %}<span class="tag {{ 'running' if i.status == 'dziala' else 'queued' }}">{{ i.status }}</span>{% endif %}</td>
+          </tr>
+        {% endfor %}
+      </table>
+      {% if g.total > g.items | length %}<p class="muted">Pokazano {{ g.items | length }} z {{ g.total }}.</p>{% endif %}
+    </form>
+  </details>
+{% else %}
+  <p class="box" style="display:block">Nie ma teraz nic do zrobienia w tej kategorii.</p>
+{% endfor %}
+{% set empty = groups | selectattr("total", "equalto", 0) | list %}
+{% if empty %}
+  <p class="muted">Bez zadan: {% for g in empty %}{{ g.title }}{% if not loop.last %}, {% endif %}{% endfor %}.</p>
+{% endif %}

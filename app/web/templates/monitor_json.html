@@ -1,0 +1,132 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+  .snap-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px 16px; flex-wrap: wrap; }
+  .snap-head h1 { margin: 0 0 4px; word-break: break-all; }
+  .snap-tabs { display: flex; gap: 6px; flex-wrap: wrap; margin: 14px 0 0; }
+  .snap-tabs button { border: 1px solid #c9cfc0; background: #fff; border-radius: 8px 8px 0 0; cursor: pointer; font-weight: 600; }
+  .snap-tabs button.on { background: #2f5d3a; color: #fff; border-color: #2f5d3a; }
+  .snap-pane { display: none; } .snap-pane.on { display: block; }
+  .snap-tools { display: flex; gap: 6px 12px; flex-wrap: wrap; align-items: center; margin: 8px 0; }
+  .snap-tools a, .snap-tools button { font-size: .9em; }
+  .snap-tools button[data-copy] { cursor: pointer; }
+  .snap-tools button.copied { background: #d7ecd9; }
+  pre.json { background: #fff; border: 1px solid #e3e6dc; border-radius: 8px; padding: 12px; margin: 0;
+             max-height: 75vh; overflow: auto; font-size: .82em; line-height: 1.4; tab-size: 2; }
+  pre.json.wrap { white-space: pre-wrap; word-break: break-word; }
+  .diff span { display: block; padding: 0 6px; }
+  .diff .add { background: #e2f4e4; color: #14532d; } .diff .del { background: #fbe3e3; color: #7f1d1d; }
+  .diff .hunk { background: #eef1f8; color: #46546f; margin-top: 6px; } .diff .ctx { color: #555; }
+  .split { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .split > div { min-width: 0; }
+  .split h3 { margin: 0 0 6px; font-size: 1em; }
+  @media (max-width: 900px) { .split { grid-template-columns: 1fr; } pre.json { max-height: 60vh; } }
+</style>
+
+<p><a href="/monitor">&larr; Na zywo</a></p>
+<div class="snap-head">
+  <div>
+    <h1>{% if s.link %}<a href="{{ s.link }}">{{ s.file }}</a>{% else %}{{ s.file }}{% endif %}</h1>
+    <div class="muted">{{ s.operation }} &middot; {{ ts | dt("%Y-%m-%d %H:%M:%S") }}
+      {% if s.job_id %}&middot; <a href="/jobs/{{ s.job_id }}">zadanie #{{ s.job_id }}</a>{% endif %}</div>
+    <div class="muted" style="word-break:break-all">{{ s.path }}</div>
+  </div>
+  <div>
+    {% if not s.applied %}<span class="tag failed">odrzucona przez kontrole - plik bez zmian</span>
+    {% elif s.new_file %}<span class="tag ready">nowy plik</span>
+    {% else %}<span class="tag done">zapisano</span>{% endif %}
+    <span class="tag" style="background:#e2f4e4">+{{ s.added }}</span>
+    <span class="tag" style="background:#fbe3e3">&minus;{{ s.removed }}</span>
+    <span class="muted">{{ s.size_before | filesizeformat }} &rarr; {{ s.size_after | filesizeformat }}</span>
+  </div>
+</div>
+{% if s.note %}<p style="background:#fbe3e3;padding:10px;border-radius:8px"><b>Bledy kontroli:</b> {{ s.note }}</p>{% endif %}
+
+<div class="snap-tabs" role="tablist">
+  <button type="button" data-tab="diff" class="on">Roznice</button>
+  <button type="button" data-tab="before">Przed{% if s.before_label %} - oryginal{% endif %}</button>
+  <button type="button" data-tab="after">Po</button>
+  <button type="button" data-tab="split">Obok siebie</button>
+</div>
+<div class="snap-tools">
+  {% if s.before is not none %}<button type="button" data-copy="pre-before" title="Kopiuje caly JSON sprzed operacji do schowka">Skopiuj przed</button>{% endif %}
+  <button type="button" data-copy="pre-after" title="Kopiuje caly JSON po operacji do schowka">Skopiuj po</button>
+  <span class="muted copy-msg" aria-live="polite"></span>
+  <label class="muted"><input type="checkbox" id="wrap"> zawijaj linie</label>
+  {% if s.before is not none %}<a href="/monitor/json/{{ s.id }}/before" download="przed_{{ s.file }}">pobierz przed</a>{% endif %}
+  <a href="/monitor/json/{{ s.id }}/after" download="po_{{ s.file }}">pobierz po</a>
+</div>
+
+<div class="snap-pane on" data-pane="diff">
+  {% if diff %}
+    <pre class="json diff">{% for d in diff %}<span class="{{ d.t }}">{{ d.s }}</span>{% endfor %}</pre>
+    {% if diff_cut %}<p class="muted">Pokazano pierwsze {{ diff | length }} linii roznic - pelna tresc w zakladkach "Przed" i "Po".</p>{% endif %}
+  {% else %}<p class="muted">Brak roznic w tresci.</p>{% endif %}
+</div>
+<div class="snap-pane" data-pane="before">
+  {% if s.before_label %}<p class="muted">Wersja "przed" to {{ s.before_label }} - przepis nie mial jeszcze tresci po polsku.</p>{% endif %}
+  {% if s.before is none %}<p class="muted">Plik nie istnial przed ta operacja.</p>
+  {% else %}
+  <pre class="json" id="pre-before">{{ s.before }}</pre>{% endif %}
+</div>
+<div class="snap-pane" data-pane="after">
+  <pre class="json" id="pre-after">{{ s.after }}</pre>
+</div>
+<div class="snap-pane" data-pane="split">
+  <div class="split">
+    <div><h3>Przed</h3>{% if s.before is none %}<p class="muted">(plik nie istnial)</p>{% else %}<pre class="json">{{ s.before }}</pre>{% endif %}</div>
+    <div><h3>Po</h3><pre class="json">{{ s.after }}</pre></div>
+  </div>
+</div>
+
+<script>
+(function () {
+  var tabs = document.querySelectorAll(".snap-tabs button");
+  function show(name) {
+    tabs.forEach(function (b) { b.classList.toggle("on", b.dataset.tab === name); });
+    document.querySelectorAll(".snap-pane").forEach(function (p) { p.classList.toggle("on", p.dataset.pane === name); });
+    try { history.replaceState(null, "", "#" + name); } catch (e) {}
+  }
+  tabs.forEach(function (b) { b.addEventListener("click", function () { show(b.dataset.tab); }); });
+  var start = (location.hash || "").slice(1);
+  if (["diff", "before", "after", "split"].indexOf(start) >= 0) show(start);
+  document.getElementById("wrap").addEventListener("change", function (e) {
+    document.querySelectorAll("pre.json").forEach(function (p) { p.classList.toggle("wrap", e.target.checked); });
+  });
+  // Kopiowanie calego JSON-a (takze z ukrytej zakladki). navigator.clipboard dziala tylko na https/localhost -
+  // gdy panel jest otwarty przez adres w sieci lokalnej (http://192.168...), uzywamy starszej metody.
+  function fallbackCopy(text) {
+    var ta = document.createElement("textarea");
+    ta.value = text; ta.setAttribute("readonly", ""); ta.style.position = "fixed"; ta.style.opacity = "0";
+    document.body.appendChild(ta); ta.select();
+    var ok = false;
+    try { ok = document.execCommand("copy"); } catch (e) { ok = false; }
+    document.body.removeChild(ta);
+    return ok;
+  }
+  function copyText(text) {
+    if (navigator.clipboard && window.isSecureContext) {
+      return navigator.clipboard.writeText(text).then(function () { return true; }, function () { return fallbackCopy(text); });
+    }
+    return Promise.resolve(fallbackCopy(text));
+  }
+  document.querySelectorAll("[data-copy]").forEach(function (b) {
+    b.addEventListener("click", function () {
+      var el = document.getElementById(b.dataset.copy);
+      if (!el) return;
+      var text = el.textContent;
+      copyText(text).then(function (ok) {
+        var t = b.dataset.label || (b.dataset.label = b.textContent);
+        var kb = (new Blob([text]).size / 1024).toFixed(1);
+        b.textContent = ok ? "Skopiowano" : "Nie udalo sie";
+        b.classList.toggle("copied", ok);
+        var msg = b.parentNode.querySelector(".copy-msg");
+        if (msg) msg.textContent = ok ? (b.dataset.copy === "pre-before" ? "JSON przed" : "JSON po") + " w schowku (" + kb + " KB)"
+                                       : "Przegladarka zablokowala schowek - zaznacz tekst i uzyj Ctrl+C";
+        setTimeout(function () { b.textContent = t; b.classList.remove("copied"); }, 1800);
+      });
+    });
+  });
+})();
+</script>
+{% endblock %}

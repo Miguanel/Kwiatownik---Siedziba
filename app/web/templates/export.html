@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Eksport do Kwiatownika</h1>
+<p class="muted">Kolejnosc: <b>1. tlumaczenie na polski</b> (LLM, format Kwiatownika, tylko tresc ze zrodla)
+  {% if skip_culinary %}- przepisy czysto kulinarne sa pomijane{% endif %} &rarr;
+  <b>2. sprawdzenie, czy taki przepis juz istnieje</b> (w Kwiatowniku i wsrod przepisow z innych stron/jezykow) &rarr;
+  {% if enrich_on %}<b>opracowanie</b> w tradycyjnych systemach ({{ systems | join(", ") }}) &rarr;{% endif %}
+  <b>3. zatwierdzenie</b>{% if not require_approval %} (wylaczone){% endif %} &rarr; <b>4. eksport</b> do
+  <code>{{ target }}</code>{% if target_exists %} <span class="tag done">plik istnieje</span>{% endif %}</p>
+
+<details class="box" style="display:block">
+  <summary style="cursor:pointer"><b>Magazyn przepisow Kwiatownika</b> <span class="muted">(Kwiatownik2/data/przepisy)</span></summary>
+  <p class="muted" style="margin:6px 0">Kazdy eksport zapisuje nowy plik <code>&lt;seria&gt;_&lt;RRRR-MM-DD&gt;.json</code>.
+    Kwiatownik wczytuje najnowszy plik z kazdej serii; starsze zostaja jako historia.</p>
+  <table>
+    <tr><th>Plik</th><th>Seria</th><th>Data</th><th>Rozmiar</th><th></th></tr>
+    {% for f in store_files %}<tr><td>{{ f.name }}</td><td>{{ f.series }}</td><td>{{ f.date or "-" }}</td>
+      <td>{{ f.size | filesizeformat }}</td>
+      <td>{% if f.used %}<span class="tag done">wczytywany</span>{% else %}<span class="tag">historia</span>{% endif %}</td></tr>
+    {% else %}<tr><td class="muted" colspan="5">brak plikow</td></tr>{% endfor %}
+  </table>
+</details>
+
+<p class="box" style="display:block">Publikacja na <a href="https://kwiatownik.onrender.com" target="_blank">kwiatownik.onrender.com</a>:
+  po eksporcie uruchom w terminalu w folderze <b>Kwiatownik2</b>: <code>.\publikuj_przepisy.ps1</code>
+  (commit + push tylko pliku z przepisami; Render sam zbuduje nowa wersje).</p>
+
+<div class="cards">
+  {% for st, label in [("raw", "do tlumaczenia"), ("translated", "do zatwierdzenia"), ("approved", "zatwierdzone"),
+                       ("exported", "wyeksportowane"), ("exists", "juz sa w Kwiatowniku"), ("skipped", "pominiete (m.in. kulinarne)"), ("error", "bledy")] %}
+    <a class="card" style="text-decoration:none;color:inherit" href="/items?kind=recipe&status={{ st }}"><b>{{ counts.get(st, 0) }}</b>{{ label }}</a>
+  {% endfor %}
+</div>
+
+<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px">
+  <form class="box" method="post" action="/export/import-k1">
+    <b>0.</b> Import z archiwum Kwiatownika 1
+    {% if k1_files %}<span class="muted">({{ k1_files | join(", ") }})</span> <button>Importuj</button>
+    {% else %}<span class="muted">- brak plikow (wolumen ../Kwiatownik/static/data/przepisy)</span>{% endif %}
+  </form>
+  <form class="box" method="post" action="/export/translate">
+    <b>1-2.</b> Przetlumacz i sprawdz <input name="limit" type="number" value="{{ batch }}" min="1" max="500" style="width:70px"> przepisow
+    <button>Start</button>
+  </form>
+  <form class="box" method="post" action="/export/enrich">
+    <b>2b.</b> Opracuj <input name="limit" type="number" value="{{ batch }}" min="1" max="500" style="width:70px">
+    przepisow bez opracowania ({{ to_enrich }}) <button>Start</button>
+  </form>
+  {% if require_approval %}
+  <form class="box" method="post" action="/export/approve-all" onsubmit="return confirm('Zatwierdzic wszystkie przetlumaczone przepisy?')">
+    <b>3.</b> <button>Zatwierdz wszystkie przetlumaczone ({{ counts.get("translated", 0) }})</button>
+  </form>
+  {% endif %}
+  <form class="box" method="post" action="/export/run">
+    <b>4.</b> Eksportuj
+    <label class="muted">(najpierw przetlumacz jeszcze max <input name="translate_first" type="number" value="0" min="0" style="width:60px">)</label>
+    <button>Eksportuj do Kwiatownika</button>
+  </form>
+</div>
+
+<h2>Do sprawdzenia i zatwierdzenia</h2>
+<table>
+  <tr><th>#</th><th>Tytul po polsku</th><th>Oryginal</th><th>Model</th></tr>
+  {% for i in to_review %}
+    <tr><td><a href="/items/{{ i.id }}">{{ i.id }}</a></td><td>{{ titles.get(i.id, "") }}</td>
+        <td class="muted">{{ i.title }}</td><td class="muted">{{ i.translated_by or "" }}</td></tr>
+  {% else %}<tr><td colspan="4">Brak.</td></tr>{% endfor %}
+</table>
+
+<h2>Juz istnieja w Kwiatowniku (nie beda eksportowane)</h2>
+<table>
+  <tr><th>#</th><th>Przepis</th><th>Pokrywa sie z</th><th>Jak ustalono</th></tr>
+  {% for i in exists %}
+    <tr><td><a href="/items/{{ i.id }}">{{ i.id }}</a></td><td>{{ titles.get(i.id, i.title) }}</td>
+        <td><code>{{ i.match_ref }}</code></td><td class="muted">{{ i.match_info }}</td></tr>
+  {% else %}<tr><td colspan="4">Brak.</td></tr>{% endfor %}
+</table>
+
+{% if errors %}
+<h2>Bledy tlumaczenia</h2>
+<table>{% for i in errors %}<tr><td><a href="/items/{{ i.id }}">{{ i.id }}</a></td><td>{{ i.title }}</td><td class="muted">{{ i.reason }}</td></tr>{% endfor %}</table>
+{% endif %}
+
+<h2>Zadania</h2>
+{% include "jobs_table.html" %}
+{% endblock %}

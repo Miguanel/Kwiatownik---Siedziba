@@ -1,0 +1,16 @@
+<div class="ag-bar" id="ag-status" hx-get="/agents/status" hx-trigger="every 10s" hx-swap="outerHTML">
+  <span>
+    {% if busy %}<span class="ag-dot on"></span><b>Siedziba pracuje</b> - {{ busy|length }} zadan:
+      {% for j in busy[:6] %}<a href="/jobs/{{ j.id }}">#{{ j.id }} {{ j.kind }}</a>{% if j.status.value == 'queued' %} (czeka){% elif quiet.get(j.id, 0) >= 5 %} <span class="{{ 'ag-down' if quiet[j.id] * 2 >= stall else 'muted' }}" title="brak znaku zycia (nowy krok, log, zapytanie do LLM); po {{ stall }} min planista zatrzyma zadanie">(cisza {{ quiet[j.id] }} min)</span>{% endif %}{% if not loop.last %}, {% endif %}{% endfor %}{% if busy|length > 6 %} ...{% endif %}
+    {% else %}<span class="ag-dot idle"></span><b>Kolejka stoi</b>{% if auto and enabled %} - planista zleci zadanie przy najblizszym sprawdzeniu (co {{ check_minutes }} min){% endif %}{% endif %}
+  </span>
+  <span>Modele LLM: <b>{{ load.llm_jobs }}</b> zadan z LLM (limit agentow {{ load.limit }}){% if load.overloaded %} - <span class="ag-down">{{ load.powod }}</span>{% endif %}</span>
+  <form method="post" action="/agents/auto">
+    <input type="hidden" name="value" value="{{ 'off' if auto else 'on' }}">
+    <span>Ciaglosc automatyczna: <b>{{ 'wlaczona' if auto else 'wylaczona' }}</b>{% if not enabled %} <span class="muted">(AGENTS_ENABLED=false - petla w tle nie dziala)</span>{% endif %}</span>
+    <button>{{ 'Wylacz' if auto else 'Wlacz' }}</button>
+  </form>
+  <span class="muted">
+    {% for st in ['proposed', 'ordered', 'running', 'done', 'failed'] %}{% if counts.get(st) %}<a href="/agents/tasks?status={{ st }}">{{ status_labels[st] }}: {{ counts[st] }}</a>{% if not loop.last %} &middot; {% endif %}{% endif %}{% endfor %}
+  </span>
+</div>

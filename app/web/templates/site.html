@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block content %}
+{% include "agents_style.html" %}
+<h1>Strona Kwiatownika - statystyki</h1>
+<p class="muted ag-intro">Liczby z backendu Kwiatownika na Render (bez ciasteczek i adresow IP). Siedziba co {{ sync_minutes }} min pobiera
+  kopie licznikow i odsyla ja po restarcie darmowego serwera. Ostatnie {{ days }} dni:
+  <a href="/site?days=7">7</a> &middot; <a href="/site?days=30">30</a> &middot; <a href="/site?days=90">90</a></p>
+{% if msg %}<div class="ag-msg">{{ msg }}</div>{% endif %}
+
+<div class="ag-bar">
+  {% if not configured %}<span class="ag-down">Brak polaczenia: ustaw BACKEND_URL i BACKEND_TOKEN w .env Siedziby.</span>
+  {% else %}<span>Backend: <b>{{ backend_url }}</b></span>
+    <span>ostatnia synchronizacja: <b>{{ (sync.last_ok or '-')[:16]|replace('T', ' ') }}</b> UTC</span>
+    {% if sync.last_error %}<span class="ag-down">ostatni blad: {{ sync.last_error }} ({{ (sync.last_error_at or '')[:16]|replace('T', ' ') }})</span>{% endif %}
+  {% endif %}
+  <form method="post" action="/site/sync"><button {% if not configured %}disabled{% endif %}>Synchronizuj teraz</button></form>
+</div>
+
+{% macro tile(kind, label) -%}{% set t = tiles.get(kind, {}) %}
+  <div class="ag-tile"><b>{{ t.get('okres', 0) }}</b>{{ label }}<br><span class="muted">dzis {{ t.get('dzis', 0) }} &middot; tydzien {{ t.get('tydzien', 0) }} &middot; razem {{ all_time.get(kind, 0) }}</span></div>
+{%- endmacro %}
+<div class="ag-tiles">
+  {{ tile('visitors', 'gosci') }}{{ tile('plant_view', 'odslon roslin') }}{{ tile('plantid_click', 'uzyc plant.id') }}
+  {{ tile('recipe_open', 'otwartych przepisow') }}{{ tile('source_click', 'kliknietych zrodel') }}{{ tile('search', 'wyszukiwan') }}
+</div>
+
+<div class="ag-card" style="margin-bottom:14px"><h3>Dzien po dniu (odslony roslin)</h3>
+  <div style="display:grid;grid-template-columns:repeat({{ series|length }},1fr);gap:2px;align-items:end;height:110px" role="img" aria-label="Odslony roslin dzien po dniu">
+    {% for d in series %}<div title="{{ d.day }}: {{ d.views }} odslon, {{ d.plantid }} plant.id, {{ d.visitors }} gosci" style="background:#2f5d3a;border-radius:3px 3px 0 0;min-height:2px;height:{{ (d.views * 100 / peak)|round(0) }}%"></div>{% endfor %}
+  </div>
+  <div class="muted" style="display:flex;justify-content:space-between;font-size:.8em"><span>{{ series[0].day }}</span><span>{{ series[-1].day }}</span></div>
+</div>
+
+<div class="ag-grid wide">
+  <div class="ag-card"><h3>Najczesciej czytane rosliny</h3>
+    {% set top1 = (top_plants[0][2] if top_plants else 1) %}
+    {% for pid, name, n in top_plants %}<div class="ag-row"><span><a href="/plants/{{ pid }}">{{ name }}</a></span><span class="ag-track"><i style="width:{{ (n * 100 / top1)|round(0) }}%"></i></span><b>{{ n }}</b></div>
+    {% else %}<p class="muted">Brak danych.</p>{% endfor %}</div>
+  <div class="ag-card"><h3>Jakie informacje czytaja (otwarte rozdzialy)</h3>
+    {% set top2 = (top_sections[0][1] if top_sections else 1) %}
+    {% for sec, n in top_sections %}<div class="ag-row"><span>{{ sec|replace('_', ' ') }}</span><span class="ag-track"><i style="width:{{ (n * 100 / top2)|round(0) }}%"></i></span><b>{{ n }}</b></div>
+    {% else %}<p class="muted">Brak danych.</p>{% endfor %}</div>
+  <div class="ag-card"><h3>Rozpoznane ze zdjecia, a brak w Kwiatowniku</h3>
+    <p class="muted">Czytelnicy fotografuja te rosliny - kandydaci do dopisania (Rosliny &rarr; nowa roslina).</p>
+    <ul class="ag-list">{% for k, n in unknown %}<li><i>{{ k }}</i> &times; {{ n }}</li>{% else %}<li class="muted">Brak.</li>{% endfor %}</ul></div>
+  <div class="ag-card"><h3>Najczesciej rozpoznawane (plant.id)</h3>
+    <ul class="ag-list">{% for k, n in recognized %}<li><i>{{ k or '(nie rozpoznano)' }}</i> &times; {{ n }}</li>{% else %}<li class="muted">Brak.</li>{% endfor %}</ul></div>
+  <div class="ag-card"><h3>Wyszukiwania</h3>
+    <ul class="ag-list">{% for k, n in searches %}<li>{{ k }} &times; {{ n }}</li>{% else %}<li class="muted">Brak.</li>{% endfor %}</ul></div>
+  <div class="ag-card"><h3>Klikniete zrodla</h3>
+    <ul class="ag-list">{% for k, n in sources %}<li>{{ k }} &times; {{ n }}</li>{% else %}<li class="muted">Brak.</li>{% endfor %}</ul></div>
+  <div class="ag-card"><h3>Otwierane przepisy</h3>
+    <ul class="ag-list">{% for k, n in recipes %}<li>{{ k }} &times; {{ n }}</li>{% else %}<li class="muted">Brak.</li>{% endfor %}</ul></div>
+  <div class="ag-card"><h3>Strony</h3>
+    <ul class="ag-list">{% for k, n in pages %}<li>{{ k }} &times; {{ n }}</li>{% else %}<li class="muted">Brak.</li>{% endfor %}</ul></div>
+</div>
+{% endblock %}

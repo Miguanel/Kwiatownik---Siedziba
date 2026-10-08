@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Modele LLM</h1>
+<p>Router pobiera liste modeli od Gemini i Groq, ocenia je i uklada ranking. Zapytanie trafia do pierwszego
+  dostepnego modelu; model, ktory zawiedzie, dostaje punkt karny i spada na koniec listy.</p>
+
+<div style="display:flex;gap:8px;margin-bottom:10px">
+  <button hx-post="/llm/refresh" hx-target="#models" hx-indicator="#spin-m">Odswiez liste modeli</button>
+  <button hx-post="/llm/reset" hx-target="#models" hx-confirm="Wyzerowac punkty karne i ulozyc ranking od nowa?">Resetuj ranking</button>
+  <span id="spin-m" class="htmx-indicator">Pobieram modele...</span>
+</div>
+<div id="models" hx-get="/llm/models" hx-trigger="models-changed from:body, every 30s">
+  {% include "llm_models.html" %}
+</div>
+
+<h2>Ollama (model lokalny)</h2>
+<p class="muted">Modele Ollamy sa zawsze na koncu listy (&#128190;) - router siega po nie dopiero, gdy wszystkie modele
+  w chmurze zawioda albo maja limit. Liczy wolniej, ale nie ma limitow. Modele z OLLAMA_MODELS pobieraja sie same przy starcie.</p>
+<form class="box" method="post" action="/llm/ollama/pull">
+  <input name="model" placeholder="np. qwen3:8b, gemma4:12b" size="28">
+  <button>Pobierz model do Ollamy</button>
+  <span class="muted">postep zobaczysz w zakladce Na zywo</span>
+</form>
+
+<h2>Tlumacz maszynowy NLLB (bez LLM)</h2>
+{% if not mt %}
+<p class="muted">Wylaczony (MT_ENGINE=llm) - przepisy tlumaczy LLM.</p>
+{% else %}
+<p class="muted">Przepisy z danymi strukturalnymi (profil scrapera / JSON-LD) tlumaczy lokalnie NLLB-200 - szybko i bez limitow;
+  typ przepisu ustalaja reguly (LLM tylko gdy reguly nie rozstrzygna). Surowe artykuly nadal ida przez LLM.<br>
+  Model: <code>{{ mt.model_dir }}</code> -
+  {% if mt.present %}<span class="tag done">jest</span>{% if mt.loaded %} wczytany ({{ mt.device }}, {{ mt.compute_type }}){% endif %}
+  {% else %}<span class="tag failed">brak</span> - przygotuj go raz: <code>docker compose --profile mt run --rm nllb-init</code>{% endif %}
+  {% if mt.error %}<br><span class="tag failed">{{ mt.error }}</span>{% endif %}</p>
+<form hx-post="/mt/test" hx-target="#mt-out" hx-indicator="#spin-mt" style="flex-direction:column">
+  <textarea name="text" rows="2" style="width:100%">Pour boiling water over the dried chamomile flowers and steep for 10 minutes.</textarea>
+  <label>jezyk zrodla <select name="lang">{% for l in ["en", "de", "uk", "ru", "fr", "cs", "lt", "sk", "hu", "ro", "bg", "it", "es"] %}<option>{{ l }}</option>{% endfor %}</select></label>
+  <button type="submit">Przetlumacz na polski</button>
+  <span id="spin-mt" class="htmx-indicator">Tlumacze...</span>
+</form>
+<div id="mt-out"></div>
+{% endif %}
+
+<h2>Test zapytania</h2>
+<form hx-post="/llm/test" hx-target="#out" hx-indicator="#spin" style="flex-direction:column">
+  <textarea name="prompt" rows="4" style="width:100%">{{ prompt }}</textarea>
+  <label><input type="checkbox" name="json_mode" value="true" checked> tryb JSON (niepoprawny JSON = porazka modelu)</label>
+  <button type="submit">Wyslij przez router</button>
+  <span id="spin" class="htmx-indicator">Czekam na odpowiedz...</span>
+</form>
+<div id="out"></div>
+{% endblock %}

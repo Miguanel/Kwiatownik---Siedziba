@@ -1,0 +1,103 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+  .id-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin-bottom: 14px; }
+  .id-tile { background: #fff; border-radius: 8px; padding: 10px 14px; }
+  .id-tile b { display: block; font-size: 1.6em; line-height: 1.2; }
+  .id-act { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; }
+  .id-filter { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
+  .id-filter a { text-decoration: none; } .id-filter a.sel .tag { background: #2f5d3a; color: #fff; }
+  .id-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 380px), 1fr)); gap: 12px; }
+  .id-card { background: #fff; border-radius: 8px; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+  .id-card.rejected { opacity: .55; }
+  .id-head { display: flex; gap: 12px; align-items: center; }
+  .id-score { font-size: 2em; font-weight: 800; line-height: 1; min-width: 2.2em; text-align: center; border-radius: 8px;
+              padding: 6px 4px; background: #e3e6dc; font-variant-numeric: tabular-nums; }
+  .id-score.hi { background: #d7ecd9; } .id-score.mid { background: #fff1c2; }
+  .id-teaser { font-weight: 600; }
+  .id-text { line-height: 1.45; overflow-wrap: anywhere; }
+  .id-orig { font-size: .88em; color: #555; border-left: 3px solid #e3e6dc; padding-left: 8px; overflow-wrap: anywhere; }
+  .id-meta { font-size: .88em; color: #6b7568; display: flex; gap: 4px 10px; flex-wrap: wrap; }
+  .id-btns { display: flex; gap: 6px; flex-wrap: wrap; } .id-btns form { display: flex; gap: 6px; flex: 1 1 auto; }
+  .id-btns input { flex: 1 1 140px; min-width: 0; } .id-btns button { flex: 0 0 auto; }
+  .tag.season { background: #d7ecd9; } .tag.risk { background: #f6d5d5; } .tag.used { background: #dbe6f5; }
+</style>
+
+<p><a href="/posts">&larr; Posty</a> &middot; <a href="/posts/stats">Statystyki</a></p>
+<h1>Ciekawostki - pula Siedziby</h1>
+<p class="muted">Siedziba zbiera kandydatow na ciekawostki: zweryfikowane informacje o roslinach (ze zrodlem i cytatem) oraz
+  ciekawostki wyciagniete przez model z artykulow z zagranicznych stron - kazda z doslownym cytatem oryginalu, ktory kod
+  sprawdza w artykule. Ocena = 40% kod (zagranica, rodzaj informacji, konkret, dlugosc, roslina w Kwiatowniku, swiezosc)
+  + 60% model (ciekawosc, zaskoczenie, zrozumialosc). Najlepsza nieuzyta ciekawostka (z premia za pore roku) trafia do
+  modelu, ktory pisze post "Ciekawostka z zagranicy".</p>
+{% if msg %}<p class="box" style="display:block">{{ msg }}</p>{% endif %}
+
+<div class="id-tiles">
+  <div class="id-tile"><span class="muted">W puli</span><b>{{ c.total }}</b><span class="muted">ocenione {{ c.rated }}, czeka {{ c.new }}</span></div>
+  <div class="id-tile"><span class="muted">Wykorzystane w postach</span><b>{{ c.used }}</b></div>
+  <div class="id-tile"><span class="muted">Odrzucone</span><b>{{ c.rejected }}</b><span class="muted">artykuly bez ciekawostek: {{ c.articles_empty }}</span></div>
+  <div class="id-tile"><span class="muted">Jezyki zrodel</span><b>{{ c.foreign_langs | length }}</b><span class="muted">{{ c.foreign_langs | join(", ") or "-" }}</span></div>
+</div>
+
+<div class="id-act">
+  <form method="post" action="/posts/ideas/collect" class="inline">
+    <button {% if running %}disabled{% endif %}>Zbierz i ocen ciekawostki</button>
+  </form>
+  {% if running %}<span class="tag running">w toku: <a href="/jobs/{{ running.id }}">zadanie #{{ running.id }}</a> - odswiez strone za chwile</span>
+  {% elif last %}<span class="muted">ostatnio: <a href="/jobs/{{ last.id }}">zadanie #{{ last.id }}</a> ({{ last.status.value }})</span>{% endif %}
+</div>
+
+<div class="id-filter">
+  {% for k, label in [("pool", "do wykorzystania (najlepsze)"), ("all", "wszystkie"), ("used", "wykorzystane"), ("risk", "ryzykowne"), ("rejected", "odrzucone")] %}
+  <a href="/posts/ideas?show={{ k }}" class="{% if show == k %}sel{% endif %}"><span class="tag">{{ label }}</span></a>
+  {% endfor %}
+</div>
+
+{% if not items %}<p class="muted">Brak ciekawostek{% if show == "pool" %} do wykorzystania - kliknij "Zbierz i ocen ciekawostki"{% endif %}.</p>{% endif %}
+<div class="id-grid">
+{% for it in items %}{% set x = it.x %}
+  <div class="id-card {{ x.status }}" id="idea-{{ x.id }}">
+    <div class="id-head">
+      <span class="id-score {{ 'hi' if it.sc >= 70 else 'mid' if it.sc >= 50 else '' }}" title="ocena koncowa{% if it.season %} (z premia +8 za pore roku){% endif %}">{{ it.sc | round | int }}</span>
+      <div>
+        <b>{{ x.plant_name or "roslina?" }}</b>
+        <div class="id-meta">
+          <span>kod {{ x.code_score | round | int }}</span>
+          <span>model {{ x.llm_score if x.llm_score is not none else "-" }}/10</span>
+          <span>{{ x.category or ("z artykulu" if x.source_type == "item" else "-") }}</span>
+          <span>{{ x.language or "?" }}</span>
+        </div>
+      </div>
+    </div>
+    <div>
+      {% if it.season %}<span class="tag season">na czasie</span>{% endif %}
+      {% if it.foreign %}<span class="tag">z zagranicy</span>{% endif %}
+      {% if x.risk %}<span class="tag risk">ryzyko</span>{% endif %}
+      {% if it.used %}<span class="tag used">wykorzystana</span>{% endif %}
+      {% if x.status == "new" %}<span class="tag">czeka na ocene</span>{% endif %}
+    </div>
+    {% if x.teaser %}<div class="id-teaser">{{ x.teaser }}</div>{% endif %}
+    <div class="id-text">{{ x.text }}</div>
+    {% if x.original %}<div class="id-orig" title="doslowny fragment zrodla">{{ x.original }}</div>{% endif %}
+    <div class="id-meta">
+      {% if x.source_url %}<a href="{{ x.source_url }}" target="_blank" rel="noopener">zrodlo</a>{% endif %}
+      {% if it.months %}<span>miesiace: {{ it.months | join(", ") }}</span>{% endif %}
+      {% if x.rated_by %}<span>ocenil {{ x.rated_by }}</span>{% endif %}
+    </div>
+    <div class="id-btns">
+      {% if x.status != "rejected" and not x.risk %}
+      <form method="post" action="/posts/ideas/{{ x.id }}/write">
+        <input name="hint" maxlength="300" placeholder="zyczenie (opcjonalnie)">
+        <button>Napisz post</button>
+      </form>
+      {% endif %}
+      <form method="post" action="/posts/ideas/{{ x.id }}/status" class="inline" style="flex:0 0 auto">
+        <input type="hidden" name="show" value="{{ show }}">
+        {% if x.status == "rejected" %}<button name="status" value="restore">Przywroc</button>
+        {% else %}<button name="status" value="rejected">Odrzuc</button>{% endif %}
+      </form>
+    </div>
+  </div>
+{% endfor %}
+</div>
+{% endblock %}

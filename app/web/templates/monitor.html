@@ -1,0 +1,7 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Na zywo <span class="muted" style="font-size:.5em">odswiezane co 2 s</span></h1>
+<div id="live" hx-get="/monitor/live" hx-trigger="every 2s" hx-swap="innerHTML">
+  {% include "monitor_live.html" %}
+</div>
+{% endblock %}

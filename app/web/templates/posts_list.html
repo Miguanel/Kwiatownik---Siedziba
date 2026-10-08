@@ -1,0 +1,120 @@
+<div class="fp-bar">
+  <form method="post" action="/posts/review" class="inline">
+    <button {% if not to_review %}disabled{% endif %} title="metryki + recenzja eksperta (inny model niz autor)">Ocen szkice ({{ to_review }})</button>
+  </form>
+  <a href="/posts/stats">Statystyki i oceny &rarr;</a>
+</div>
+<div class="fp-filter">
+  <a href="/posts" class="{% if not status %}sel{% endif %}"><span class="tag">wszystkie ({{ counts.values() | sum }})</span></a>
+  {% for k, label in statuses.items() %}
+  <a href="/posts?status={{ k }}" class="{% if status == k %}sel{% endif %}"><span class="tag">{{ label }} ({{ counts.get(k, 0) }})</span></a>
+  {% endfor %}
+</div>
+
+{% if not posts %}<p class="muted">Brak postow{% if status %} o tym statusie{% endif %}. Kliknij "Napisz".</p>{% endif %}
+<div class="fp-posts">
+{% for p in posts %}
+  <div class="fp-post {{ p.status }}" id="post-{{ p.id }}">
+    <div class="fp-head">
+      <span><b>#{{ p.id }}</b> <span class="tag {{ p.status }}">{{ statuses.get(p.status, p.status) }}</span>
+        <span class="tag">{{ kinds.get(p.kind, "post") }}</span>{% if p.edited %} <span class="tag">edytowany</span>{% endif %}
+        <a href="/posts/{{ p.id }}/history" class="tag" title="historia edycji i porownanie wersji">historia{% if p.versions > 1 %} ({{ p.versions }}){% endif %}</a></span>
+      <span class="muted">{{ p.created_at | dt }}</span>
+    </div>
+    <div class="muted">
+      {% if p.plants %}{% for pl in p.plants %}<a href="/plants/{{ pl.id }}">{{ pl.nazwa_pl }}</a>{% if not loop.last %}, {% endif %}{% endfor %} &middot; {% endif %}
+      {% if p.season %}{{ p.season }} &middot; {% endif %}{{ p.words }} slow tresci{% if p.model %} &middot; {{ p.model }}{% endif %}
+      {% if p.hint %}<br>zyczenie: {{ p.hint }}{% endif %}
+    </div>
+    {% if p.problems %}<div class="fp-warn">Kontrola: {{ p.problems }} - popraw recznie albo napisz nowa wersje.</div>{% endif %}
+    {% set r = p.review %}
+    {% if r %}
+    <button type="button" class="fp-big v-{{ r.verdict }}" onclick="fpToggleRev({{ p.id }})"
+            title="kliknij, aby rozwinac / zwinac raport">
+      <span class="fp-big-n">{{ "%.1f" | format(r.avg) }}<small>/10</small></span>
+      <span class="fp-big-d">
+        <b>{{ verdicts.get(r.verdict, r.verdict) }}</b>{% if r.stale %} &middot; ocena nieaktualna{% endif %}<br>
+        <span class="muted">{% if r.avg_n %}srednia z {{ r.avg_n }} ocen eksperta{% else %}tylko pomiary kodem{% endif %}
+          &middot; ocena koncowa {{ r.overall | round | int }}/100</span>
+      </span>
+    </button>
+    <details class="fp-rev" data-k="rev-{{ p.id }}">
+      <summary>
+        <b>Raport</b>
+        <span class="muted">kod {{ r.code | round | int }}{% if r.expert is not none %} &middot; ekspert {{ r.expert | round | int }}{% else %} &middot; bez eksperta{% endif %}</span>
+      </summary>
+      {% if r.rev.podsumowanie %}<p>{{ r.rev.podsumowanie }}</p>{% endif %}
+      {% if r.rev.powody_werdyktu %}<p class="muted">Werdykt: {{ r.rev.powody_werdyktu | join("; ") }}</p>{% endif %}
+      {% if r.scores %}
+      <div class="fp-crit">
+        {% for c in r.scores %}
+        <div class="fp-cr" title="{{ c.label }}: {{ c.v }}/10"><span>{{ c.label }}</span>
+          <span class="fp-track"><i style="width: {{ c.v * 10 }}%"></i></span><b>{{ c.v }}</b></div>
+        {% endfor %}
+      </div>
+      {% endif %}
+      {% if r.rev.bledy_merytoryczne %}<div class="fp-warn"><b>Bledy merytoryczne:</b><ul>{% for e in r.rev.bledy_merytoryczne %}<li>&bdquo;{{ e.cytat }}&rdquo; &ndash; {{ e.problem }}</li>{% endfor %}</ul></div>{% endif %}
+      {% if r.rev.ryzyka %}<div class="fp-warn"><b>Ryzyka:</b> {{ r.rev.ryzyka | join("; ") }}</div>{% endif %}
+      <div class="fp-cols">
+        {% if r.rev.mocne_strony %}<div><b>Mocne strony</b><ul>{% for x in r.rev.mocne_strony %}<li>{{ x }}</li>{% endfor %}</ul></div>{% endif %}
+        {% if r.rev.slabe_strony %}<div><b>Slabe strony</b><ul>{% for x in r.rev.slabe_strony %}<li>{{ x }}</li>{% endfor %}</ul></div>{% endif %}
+      </div>
+      {% if r.rev.sugestie %}<div><b>Sugestie</b><ul>{% for x in r.rev.sugestie %}<li>{{ x }}</li>{% endfor %}</ul></div>{% endif %}
+      {% if r.rev.lepszy_haczyk %}<p><b>Lepszy poczatek:</b> <i>{{ r.rev.lepszy_haczyk }}</i></p>{% endif %}
+      {% if r.rev.przewidywane_zaangazowanie %}<p><b>Prognoza zaangazowania:</b> {{ r.rev.przewidywane_zaangazowanie }}{% if r.rev.uzasadnienie_zaangazowania %} &ndash; {{ r.rev.uzasadnienie_zaangazowania }}{% endif %}</p>{% endif %}
+      {% if r.rev.grupa_docelowa %}<p><b>Grupa docelowa:</b> {{ r.rev.grupa_docelowa }}</p>{% endif %}
+      <details data-k="pm-{{ p.id }}"><summary><b>Pomiary kodem</b> <span class="muted">(wynik {{ r.code | round | int }}/100)</span></summary>
+        <div class="fp-crit">
+          {% for c in r.sub %}<div class="fp-cr" title="{{ c.label }}: {{ c.v }}/100"><span>{{ c.label }}</span>
+            <span class="fp-track"><i style="width: {{ c.v }}%"></i></span><b>{{ c.v | round | int }}</b></div>{% endfor %}
+        </div>
+        <p class="muted">{{ r.m.slowa }} slow, {{ r.m.zdania }} zdan (srednio {{ r.m.srednia_dl_zdania }} slow, najdluzsze {{ r.m.najdluzsze_zdanie }}),
+          {{ r.m.akapity }} akapit(y), FOG-PL {{ r.m.fog }} &ndash; {{ r.m.fog_opis }}, gwara {{ r.m.gwara_proc }}% slow,
+          roznorodnosc slownictwa {{ r.m.ttr }}, pytania {{ r.m.pytania }}, emoji {{ r.m.emoji }}.
+          Na telefonie przed &bdquo;Wiecej&rdquo;: <i>{{ r.m.zajawka }}...</i></p>
+        {% if r.issues %}<ul>{% for i in r.issues %}<li><b>{{ i.label }}</b>: {{ i.opis }}</li>{% endfor %}</ul>{% endif %}
+      </details>
+      <p class="muted">Ocenil: {{ r.model or "tylko kod" }}, {{ r.at | dt }}{% if r.rev.odrzucone_zarzuty %} &middot; pominiete zarzuty bez cytatu: {{ r.rev.odrzucone_zarzuty }}{% endif %}</p>
+    </details>
+    {% endif %}
+    {% if p.revision %}{% set rv = p.revision %}
+    <details class="fp-rev" data-k="chg-{{ p.id }}">
+      <summary><b>Co poprawiono</b> <span class="muted">z #{{ rv.z_posta }}:
+        {% if rv.ocena_przed is not none %}{{ rv.ocena_przed | round | int }} &rarr; {% endif %}{{ rv.ocena_po | round | int }}/100
+        {% if rv.rundy | length > 1 %}({{ rv.rundy | length }} rundy){% endif %}</span></summary>
+      {% if rv.wdrozone %}<ul>{% for x in rv.wdrozone %}<li>{{ x }}</li>{% endfor %}</ul>{% else %}<p class="muted">Model nie opisal zmian.</p>{% endif %}
+      <a href="/posts/{{ p.id }}/history?view=side">porownaj z poprzednia wersja &rarr;</a>
+    </details>
+    {% endif %}
+    <form method="post" action="/posts/{{ p.id }}/save">
+      <textarea name="text" id="fp-text-{{ p.id }}" oninput="fpCount(this)">{{ p.text }}</textarea>
+      <div class="muted" id="fp-len-{{ p.id }}">{{ p.text | length }} znakow</div>
+      <div class="fp-acts" style="margin-top:6px">
+        <button type="button" onclick="fpCopy(this, {{ p.id }})">Kopiuj</button>
+        <button name="status" value="">Zapisz</button>
+        {% if p.status != "approved" %}<button name="status" value="approved">Zatwierdz</button>{% endif %}
+        {% if p.status != "published" %}<button name="status" value="published" title="wklejony na fanpage">Opublikowany</button>{% endif %}
+        {% if r and p.status != "rejected" %}<button formaction="/posts/{{ p.id }}/rewrite" title="wysyla tekst z pola (z Twoimi poprawkami) razem z ostatnim raportem do przeredagowania; ta wersja zostanie zastapiona">Przeredaguj wg raportu</button>{% endif %}
+        {% if p.status != "rejected" %}<button name="status" value="rejected">Odrzuc</button>{% else %}<button name="status" value="draft">Przywroc</button>{% endif %}
+      </div>
+    </form>
+    <div class="fp-acts">
+      <form method="post" action="/posts/{{ p.id }}/review" class="inline"><button title="ocen ponownie (np. po edycji)">{% if r %}Ocen ponownie{% else %}Ocen{% endif %}</button></form>
+      {% if r and p.status != "rejected" %}<form method="post" action="/posts/{{ p.id }}/improve" class="inline"><button title="napisz od nowa na tych samych danych wedlug uwag; ta wersja zostanie odrzucona">Napisz od nowa wg uwag</button></form>{% endif %}
+    </div>
+    {% if p.status == "published" %}
+    <form method="post" action="/posts/{{ p.id }}/results" class="fp-res">
+      <span class="muted">Wyniki z FB:</span>
+      <input name="reach" inputmode="numeric" placeholder="zasieg" value="{{ p.reach if p.reach is not none else '' }}">
+      <input name="reactions" inputmode="numeric" placeholder="reakcje" value="{{ p.reactions if p.reactions is not none else '' }}">
+      <input name="comments" inputmode="numeric" placeholder="komentarze" value="{{ p.comments if p.comments is not none else '' }}">
+      <input name="shares" inputmode="numeric" placeholder="udostepnienia" value="{{ p.shares if p.shares is not none else '' }}">
+      <button>Zapisz wyniki</button>
+    </form>
+    {% endif %}
+    <form method="post" action="/posts/{{ p.id }}/again">
+      <button style="width:100%" title="{% if p.kind == 'siedziba' %}ta sama czesc o Siedzibie od nowa (ta wersja zostanie odrzucona){% else %}nowy post tego samego rodzaju (ta sama roslina, gdy byla wybrana){% endif %}">Napisz inna wersje</button>
+    </form>
+  </div>
+{% endfor %}
+</div>

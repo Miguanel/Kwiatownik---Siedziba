@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Zebrane strony <span class="muted" style="font-size:.5em">({{ total }})</span></h1>
+<form class="box" method="get" action="/items">
+  <select name="kind">
+    <option value="useful" {% if f.kind == "useful" %}selected{% endif %}>przepisy + ciekawostki</option>
+    <option value="" {% if f.kind == "" %}selected{% endif %}>wszystko</option>
+    {% for k in kinds %}<option {% if f.kind == k %}selected{% endif %}>{{ k }}</option>{% endfor %}
+  </select>
+  <select name="status"><option value="">kazdy status</option>
+    {% for s in statuses %}<option {% if f.status == s %}selected{% endif %}>{{ s }}</option>{% endfor %}
+  </select>
+  <select name="source_id"><option value="">kazde zrodlo</option>
+    {% for s in sources %}<option value="{{ s.id }}" {% if f.source_id == s.id %}selected{% endif %}>{{ s.name }}</option>{% endfor %}
+  </select>
+  <input name="q" value="{{ f.q }}" placeholder="szukaj w tytule/URL">
+  <label class="muted"><input type="checkbox" name="dups" value="1" {% if f.dups %}checked{% endif %}> pokaz tez duplikaty</label>
+  <button>Filtruj</button>
+</form>
+<form method="post" action="/items/bulk" id="bulk">
+  {% for k, v in f.items() %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endfor %}
+  <input type="hidden" name="back" value="{{ request.url.path }}?{{ request.url.query }}">
+  <div class="box bulkbar">
+    <label><input type="checkbox" id="check-all" onclick="document.querySelectorAll('.pick').forEach(c => c.checked = this.checked); countPicked()"> zaznacz wszystkie na stronie</label>
+    <label class="muted"><input type="checkbox" name="all_matching" value="true" onclick="countPicked()"> wszystkie wyniki filtra ({{ total }})</label>
+    <span id="picked" class="muted">zaznaczono: 0</span>
+    <button name="action" value="scan" title="pobierz ponownie zaznaczone strony i szukaj nowych przepisow w ich linkach">Skanuj zaznaczone</button>
+    <button name="action" value="translate" title="przetlumacz na polski i sprawdz, czy przepis juz istnieje">Przetlumacz i sprawdz</button>
+    <button name="action" value="enrich" title="opracowanie w tradycyjnych systemach (Piec Przemian, Kampo, ajurweda...)">Opracuj</button>
+    <button name="action" value="approve" title="tylko przetlumaczone">Zatwierdz</button>
+    <button name="action" value="reject">Odrzuc</button>
+    <button name="action" value="raw">Przywroc (raw)</button>
+  </div>
+<table>
+  <tr><th></th><th>#</th><th>Tytul</th><th>Typ</th><th>Pewnosc</th><th>Metoda</th><th>Status</th><th>Zrodlo</th><th title="na ilu stronach wystepuje">Zrodel</th></tr>
+  {% for i in items %}
+    <tr>
+      <td><input type="checkbox" class="pick" name="ids" value="{{ i.id }}" onclick="countPicked()"></td>
+      <td>{{ i.id }}</td>
+      <td><a href="/items/{{ i.id }}">{{ i.title or i.url }}</a><br><span class="muted">{{ i.url[:90] }}</span></td>
+      <td><span class="tag {{ i.kind.value }}">{{ i.kind.value }}</span></td>
+      <td>{{ "%.2f" % i.confidence if i.confidence is not none else "-" }}</td>
+      <td class="muted">{{ i.method or "-" }}</td>
+      <td>{{ i.status.value }}</td>
+      <td class="muted">{{ names.get(i.source_id, "") }}</td>
+      <td>{% if i.duplicate_of %}<a href="/items/{{ i.duplicate_of }}" title="duplikat">&rarr;#{{ i.duplicate_of }}</a>{% else %}{{ 1 + extra.get(i.id, 0) }}{% endif %}</td>
+    </tr>
+  {% else %}
+    <tr><td colspan="9">Nic nie znaleziono.</td></tr>
+  {% endfor %}
+</table>
+</form>
+<script>
+  function countPicked() {
+    const all = document.querySelector('[name=all_matching]').checked;
+    const n = document.querySelectorAll('.pick:checked').length;
+    document.getElementById('picked').textContent = 'zaznaczono: ' + (all ? '{{ total }} (wszystkie wyniki)' : n);
+  }
+  document.getElementById('bulk').addEventListener('submit', e => {
+    const all = document.querySelector('[name=all_matching]').checked;
+    if (!all && !document.querySelector('.pick:checked')) { e.preventDefault(); alert('Zaznacz najpierw strony.'); }
+  });
+</script>
+<p>
+  {% if page > 1 %}<a href="?kind={{ f.kind }}&status={{ f.status }}&source_id={{ f.source_id }}&q={{ f.q }}&dups={{ f.dups }}&page={{ page - 1 }}">&larr; poprzednie</a>{% endif %}
+  {% if has_next %}<a href="?kind={{ f.kind }}&status={{ f.status }}&source_id={{ f.source_id }}&q={{ f.q }}&dups={{ f.dups }}&page={{ page + 1 }}">nastepne &rarr;</a>{% endif %}
+</p>
+{% endblock %}

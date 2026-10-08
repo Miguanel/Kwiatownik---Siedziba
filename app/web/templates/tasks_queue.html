@@ -1,0 +1,6 @@
+{% set running = jobs | selectattr("status.value", "equalto", "running") | list %}
+<span data-n="{{ jobs | length }}"><b>Kolejka:</b> {{ running | length }}/{{ limit }} dziala, {{ jobs | length - running | length }} czeka.</span>
+{% for j in jobs %}
+  <a class="tag {{ j.status.value }}" href="/jobs/{{ j.id }}" title="{{ j.progress or 0 }}/{{ j.total or '?' }}">#{{ j.id }} {{ j.kind }}</a>
+{% endfor %}
+{% if not jobs %}<span class="muted">pusto</span>{% endif %}

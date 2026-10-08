@@ -1,0 +1,10 @@
+{% if error %}
+  <p style="color:#b00"><b>Wszystkie proby nieudane:</b> {{ error }}</p>
+{% else %}
+  <p>Odpowiedzial <b>{{ result.provider }} / {{ result.model }}</b> w {{ result.seconds }} s</p>
+  {% if result.attempts %}
+    <p>Wczesniej zawiodly:</p>
+    <ul>{% for a in result.attempts %}<li>{{ a }}</li>{% endfor %}</ul>
+  {% endif %}
+  <pre style="white-space:pre-wrap;background:#fff;padding:10px">{{ result.text }}</pre>
+{% endif %}

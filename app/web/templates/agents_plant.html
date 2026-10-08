@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% from "agents_macros.html" import bars, trend_svg, task_table %}
+{% block content %}
+{% include "agents_style.html" %}
+<h1>{{ name }} - w kolejnych audytach</h1>
+<p class="muted ag-intro"><a href="/agents">&larr; Agenci</a> &middot; <a href="/plants/{{ pid }}">strona rosliny w Siedzibie</a></p>
+{% if hist %}{% set h = hist[-1] %}
+<div class="ag-grid wide">
+  <div class="ag-card"><div class="ag-score"><span class="big">{{ h.wynik|round(0)|int }}</span><span>/100 w audycie
+    <a href="/agents/runs/{{ h.run }}">#{{ h.run }}</a>{% if hist|length > 1 %} <b class="{{ 'ag-up' if h.wynik > hist[0].wynik else 'ag-down' if h.wynik < hist[0].wynik else '' }}">{{ '%+.1f'|format(h.wynik - hist[0].wynik) }}</b> od pierwszego{% endif %}</span></div>
+    {{ bars(h.oceny, criteria) }}
+    {% if h.braki %}<p class="muted">Braki: {% for f in h.braki %}{{ flag_labels.get(f, f) }}{% if not loop.last %}, {% endif %}{% endfor %}</p>{% endif %}
+  </div>
+  <div class="ag-card"><h3>Ocena w czasie</h3>{{ trend_svg(trend, "Ocena rosliny") }}{% if not trend %}<p class="muted">Jeden audyt - wykres po kolejnym.</p>{% endif %}</div>
+</div>
+<div class="ag-tbl"><table>
+  <tr><th>Audyt</th><th>Kiedy</th><th class="num">Wynik</th>{% for k, l in criteria.items() %}<th class="num">{{ l }}</th>{% endfor %}<th class="num">Informacje</th></tr>
+  {% for x in hist|reverse %}<tr><td><a href="/agents/runs/{{ x.run }}">#{{ x.run }}</a></td><td class="nw">{{ x.at|dt }}</td>
+    <td class="num"><b>{{ x.wynik }}</b></td>{% for k in criteria %}<td class="num">{{ x.oceny[k] }}</td>{% endfor %}<td class="num">{{ x.punkty }}</td></tr>{% endfor %}
+</table></div>
+{% else %}<p class="muted">Ta roslina nie wystepuje w zadnym audycie.</p>{% endif %}
+<div class="ag-section"><h2>Zadania agentow dla tej rosliny</h2></div>
+{{ task_table(tasks, "/agents/plants/" ~ pid, False, True) }}
+{% endblock %}

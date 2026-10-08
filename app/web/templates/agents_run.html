@@ -1,0 +1,195 @@
+{% extends "base.html" %}
+{% from "agents_macros.html" import bars, task_table, proposals %}
+{% block content %}
+{% include "agents_style.html" %}
+<h1>{{ agents.get(run.agent, run.agent) }} - przebieg #{{ run.id }}</h1>
+<p class="muted ag-intro"><a href="/agents">&larr; Agenci</a> &middot; <a href="/agents/runs?agent={{ run.agent }}">historia: {{ agents.get(run.agent, run.agent) }}</a>
+  {% if prev %} &middot; <a href="/agents/runs/{{ prev.id }}">&larr; poprzedni #{{ prev.id }}</a>{% endif %}
+  {% if next %} &middot; <a href="/agents/runs/{{ next.id }}">nastepny #{{ next.id }} &rarr;</a>{% endif %}</p>
+<div class="ag-bar">
+  <span><span class="tag {{ 'running' if run.status == 'running' else ('failed' if run.status == 'failed' else 'done') }}">{{ run.status }}</span></span>
+  <span>{{ run.created_at|dt }}{% if run.finished_at %} - {{ run.finished_at|dt("%H:%M:%S") }}{% endif %}</span>
+  <span>wyzwalacz: <b>{{ run.trigger }}</b></span>
+  {% if run.job_id %}<a href="/jobs/{{ run.job_id }}">zadanie #{{ run.job_id }}</a>{% endif %}
+  {% if run.repeats %}<span class="muted">ten sam stan sprawdzony {{ run.repeats + 1 }} razy (ostatnio {{ run.updated_at|dt }})</span>{% endif %}
+  {% if run.parent_id %}<a href="/agents/runs/{{ run.parent_id }}">audyt #{{ run.parent_id }}</a>{% endif %}
+</div>
+{% if run.summary %}<p><b>{{ run.summary }}</b></p>{% endif %}
+
+{# ============================================================ AUDYTOR #}
+{% if run.agent == 'audytor' and rep.metryki %}{% set m = rep.metryki %}{% set ex = rep.ekspert %}{% set ch = rep.zmiany or {} %}
+<div class="ag-grid wide">
+  <div class="ag-card">
+    <div class="ag-score"><span class="big">{{ run.score|round(0)|int }}</span>
+      <span>/100{% if ch.ocena is defined and ch.ocena is not none %} <b class="{{ 'ag-up' if ch.ocena > 0 else 'ag-down' if ch.ocena < 0 else '' }}">{{ '%+.1f'|format(ch.ocena) }}</b>
+        od audytu <a href="/agents/runs/{{ rep.poprzedni }}">#{{ rep.poprzedni }}</a>{% endif %}<br>
+        <span class="muted">kod {{ run.code_score }} (60%){% if run.expert_score is not none %} + ekspert {{ run.expert_score }} (40%, {{ run.model }}){% else %} - bez eksperta LLM{% endif %}</span></span></div>
+    <h3>Metryki kodem - srednia {{ m.kpi.rosliny }} roslin</h3>
+    {{ bars(m.kryteria, criteria) }}
+    <p class="muted">Wagi: {% for k, w in rep.wagi.items() %}{{ criteria[k] }} {{ (w * 100)|round(0)|int }}%{% if not loop.last %}, {% endif %}{% endfor %}</p>
+  </div>
+  <div class="ag-card">
+    {% if ex %}
+      <h3>Ekspert LLM (1-10)</h3>{{ bars(ex.oceny, criteria, 10) }}
+      {% if ex.podsumowanie %}<p>{{ ex.podsumowanie }}</p>{% endif %}
+    {% else %}<h3>Ekspert LLM</h3><p class="muted">Brak oceny eksperta (brak LLM, wylaczone AGENTS_EXPERT_REVIEW albo odpowiedz nie przeszla kontroli). Raport z samych metryk.</p>{% endif %}
+  </div>
+</div>
+{% if ex %}
+<div class="ag-grid">
+  {% if ex.mocne %}<div class="ag-card"><h3>Mocne strony</h3><ul class="ag-list">{% for x in ex.mocne %}<li>{{ x }}</li>{% endfor %}</ul></div>{% endif %}
+  {% if ex.slabe %}<div class="ag-card"><h3>Slabe strony</h3><ul class="ag-list">{% for x in ex.slabe %}<li>{{ x }}</li>{% endfor %}</ul></div>{% endif %}
+  {% if ex.pomysly %}<div class="ag-card"><h3>Gdzie szukac trudnej wiedzy i opowiesci</h3><ul class="ag-list">{% for x in ex.pomysly %}<li>{{ x }}</li>{% endfor %}</ul></div>{% endif %}
+  {% if ex.odrzucone %}<div class="ag-card"><h3>Odrzucone przez kontrole kodem</h3><ul class="ag-list muted">{% for x in ex.odrzucone %}<li>{{ x }}</li>{% endfor %}</ul></div>{% endif %}
+</div>
+{% endif %}
+
+<div class="ag-tiles">
+  <div class="ag-tile"><b>{{ m.kpi.rosliny }}</b>roslin</div>
+  <div class="ag-tile"><b>{{ m.kpi.pokrycie }}%</b>srednie pokrycie schematu</div>
+  <div class="ag-tile"><b>{{ m.kpi.z_wiedza_z_sieci }}</b>z wiedza z sieci</div>
+  <div class="ag-tile"><b>{{ m.kpi.punkty }}</b>informacji z sieci</div>
+  <div class="ag-tile"><b>{{ m.kpi.udzial_trudnych }}%</b>trudno dostepnych</div>
+  <div class="ag-tile"><b>{{ m.kpi.z_azja }}</b>ze zrodlami z Azji</div>
+  <div class="ag-tile"><b>{{ m.kpi.opowiesci }}</b>opowiesci ({{ m.kpi.opowiesci_zagraniczne }} z zagranicy)</div>
+  <div class="ag-tile"><b>{{ m.kpi.przepisy_niekulinarne }}</b>przepisow niekulinarnych / {{ m.kpi.przepisy }}</div>
+  <div class="ag-tile"><b>{{ m.kpi.rosliny_bez_przepisow }}</b>roslin bez przepisow</div>
+</div>
+
+{% if m.problemy_danych %}
+<div class="ag-card" style="margin-bottom:14px;border-left:4px solid #b0412e"><h3>Bledy w plikach roslin Kwiatownika</h3>
+  <ul class="ag-list">{% for x in m.problemy_danych %}<li>{{ x }}</li>{% endfor %}</ul>
+  <p class="muted">Takie pliki zanizaja ocene i myla zbieranie wiedzy (Siedziba szuka informacji o innej roslinie) - warto je poprawic w Kwiatowniku.</p></div>
+{% endif %}
+
+{% if ch.lepsze or ch.gorsze or ch.kpi %}
+<div class="ag-section"><h2>Zmiany od poprzedniego audytu</h2></div>
+<div class="ag-grid wide">
+  {% if ch.lepsze %}<div class="ag-tbl"><table><tr><th>Lepiej</th><th class="num">Przed</th><th class="num">Po</th><th class="num">Zmiana</th><th class="num">+inf.</th></tr>
+    {% for x in ch.lepsze if x.zmiana > 0 %}<tr><td><a href="/agents/plants/{{ x.id }}">{{ x.nazwa }}</a></td><td class="num">{{ x.przed }}</td><td class="num">{{ x.po }}</td>
+      <td class="num ag-up">{{ '%+.1f'|format(x.zmiana) }}</td><td class="num">{{ x.punkty }}</td></tr>{% endfor %}</table></div>{% endif %}
+  {% if ch.gorsze %}<div class="ag-tbl"><table><tr><th>Gorzej</th><th class="num">Przed</th><th class="num">Po</th><th class="num">Zmiana</th></tr>
+    {% for x in ch.gorsze %}<tr><td><a href="/agents/plants/{{ x.id }}">{{ x.nazwa }}</a></td><td class="num">{{ x.przed }}</td><td class="num">{{ x.po }}</td>
+      <td class="num ag-down">{{ '%+.1f'|format(x.zmiana) }}</td></tr>{% endfor %}</table></div>{% endif %}
+  {% if ch.kpi %}<div class="ag-card"><h3>Wskazniki</h3><ul class="ag-list">{% for k, v in ch.kpi.items() %}<li>{{ k|replace('_', ' ') }}: <b class="{{ 'ag-up' if v > 0 else 'ag-down' }}">{{ '%+g'|format(v) }}</b></li>{% endfor %}</ul>
+    {% if ch.nowe_rosliny %}<p class="muted">Nowe rosliny: {{ ch.nowe_rosliny|join(', ') }}</p>{% endif %}</div>{% endif %}
+</div>
+{% endif %}
+
+<div class="ag-section"><h2>Zalecenia</h2><span class="muted">{{ proposed|length }} - status kazdego zalecenia i zadanie w Siedzibie</span></div>
+{{ task_table(proposed, "/agents/runs/" ~ run.id, True, True) }}
+
+<div class="ag-grid wide">
+  <div class="ag-card"><h3>Czego najczesciej brakuje (rosliny)</h3>
+    {% for label, n in m.braki.items() %}<div class="ag-row weak"><span>{{ label }}</span><span class="ag-track"><i style="width: {{ (n * 100 / m.kpi.rosliny)|round(0) }}%"></i></span><b>{{ n }}</b></div>{% endfor %}</div>
+  <div class="ag-card"><h3>Puste podrozdzialy schematu</h3>
+    {% for g in m.luki[:12] if g.brak %}<div class="ag-row weak"><span>{{ g.rozdzial }} - {{ g.tytul }}</span><span class="ag-track"><i style="width: {{ g.procent }}%"></i></span><b>{{ g.brak }}</b></div>{% endfor %}</div>
+  <div class="ag-card"><h3>Jezyki zrodel (spoza pl/en)</h3>
+    {% set top = (m.jezyki.values()|list|max) if m.jezyki else 1 %}
+    {% for lg, n in m.jezyki.items() %}<div class="ag-row"><span>{{ lg }}</span><span class="ag-track"><i style="width: {{ (n * 100 / top)|round(0) }}%"></i></span><b>{{ n }}</b></div>
+    {% else %}<p class="muted">Brak zagranicznych zrodel.</p>{% endfor %}</div>
+  <div class="ag-card"><h3>Wiedza z sieci wg sekcji</h3>
+    {% set top = (m.sekcje.values()|list|max) if m.sekcje else 1 %}
+    {% for sec, n in m.sekcje.items() %}<div class="ag-row"><span>{{ sec }}</span><span class="ag-track"><i style="width: {{ (n * 100 / top)|round(0) }}%"></i></span><b>{{ n }}</b></div>{% endfor %}</div>
+  <div class="ag-card"><h3>Przepisy wg kategorii</h3>
+    {% set top = (m.przepisy_kategorie.values()|list|max) if m.przepisy_kategorie else 1 %}
+    {% for c, n in m.przepisy_kategorie.items() %}<div class="ag-row"><span>{{ c }}{% if m.przepisy_zagraniczne_kategorie.get(c) %} <span class="muted">({{ m.przepisy_zagraniczne_kategorie[c] }} z zagranicy)</span>{% endif %}</span>
+      <span class="ag-track"><i style="width: {{ (n * 100 / top)|round(0) }}%"></i></span><b>{{ n }}</b></div>{% endfor %}</div>
+  {% if m.siedziba %}{% set sd = m.siedziba %}<div class="ag-card"><h3>Siedziba - ostatnie 30 dni</h3><ul class="ag-list">
+    <li>nowe informacje: <b>{{ sd.nowe_informacje }}</b> (zweryfikowane {{ sd.nowe_zweryfikowane }})</li>
+    <li>zapytania o luki: <b>{{ sd.zapytania }}</b>, ze strona: {{ sd.zapytania_udane }}, z nowymi informacjami: {{ sd.zapytania_z_informacjami }}</li>
+    <li>rosliny w rejestrze Siedziby jeszcze nie badane: <b>{{ sd.rejestr_nigdy_badane if sd.rejestr_nigdy_badane is defined else sd.rosliny_nigdy_badane }}</b></li>
+    {% if sd.nowe_wg_jezyka %}<li>nowa wiedza wg jezyka: {% for k, v in sd.nowe_wg_jezyka.items() %}{{ k }} {{ v }}{% if not loop.last %}, {% endif %}{% endfor %}</li>{% endif %}
+    {% if sd.przepisy_siedziby %}<li>przepisy w Siedzibie: {% for k, v in sd.przepisy_siedziby.items() %}{{ k }} {{ v }}{% if not loop.last %}, {% endif %}{% endfor %}</li>{% endif %}
+  </ul></div>{% endif %}
+</div>
+
+<div class="ag-section"><h2>Rosliny</h2>
+  <span class="muted">od najslabszych; filtr:</span>
+  <a class="tag {{ 'done' if not plants_filter else '' }}" href="/agents/runs/{{ run.id }}#rosliny">wszystkie</a>
+  {% for f, n in (m.braki_klucze or {}).items() %}<a class="tag {{ 'done' if plants_filter == f else '' }}" href="/agents/runs/{{ run.id }}?braki={{ f }}#rosliny">{{ flag_labels.get(f, f) }} ({{ n }})</a>{% endfor %}
+</div>
+<div class="ag-tbl" id="rosliny"><table>
+  <tr><th>Roslina</th><th class="num">Wynik</th>{% for k, l in criteria.items() %}<th class="num">{{ l }}</th>{% endfor %}<th class="num">Inf.</th><th>Jezyki</th><th class="num">Opow.</th><th class="num">Przepisy</th><th>Braki</th></tr>
+  {% for r in m.rosliny if not plants_filter or plants_filter in r.braki %}
+  <tr><td><a href="/agents/plants/{{ r.id }}">{{ r.nazwa }}</a>{% if r.lacina %}<br><span class="muted"><i>{{ r.lacina }}</i></span>{% endif %}</td>
+    <td class="num"><b>{{ r.wynik }}</b></td>{% for k in criteria %}<td class="num">{{ r.oceny[k] }}</td>{% endfor %}
+    <td class="num">{{ r.punkty }}{% if r.trudne %}<br><span class="muted">{{ r.trudne }} trudn.</span>{% endif %}</td>
+    <td class="nw">{{ r.jezyki|join(', ') or '-' }}</td>
+    <td class="num">{{ r.opowiesci.reczne + r.opowiesci.z_sieci }}{% if r.opowiesci.zagraniczne %}<br><span class="muted">{{ r.opowiesci.zagraniczne }} zagr.</span>{% endif %}</td>
+    <td class="num">{{ r.przepisy_niekulinarne }}/{{ r.przepisy }}</td>
+    <td class="muted">{% for f in r.braki %}{{ flag_labels.get(f, f) }}{% if not loop.last %}, {% endif %}{% endfor %}</td></tr>
+  {% endfor %}
+</table></div>
+{% endif %}
+
+{# ============================================================ ZLECENIODAWCA #}
+{% if run.agent == 'zleceniodawca' %}
+<div class="ag-tiles">
+  <div class="ag-tile"><b>{{ rep.zlecone|length if rep.zlecone is defined else 0 }}</b>zlecone</div>
+  <div class="ag-tile"><b>{{ rep.pominiete|length if rep.pominiete is defined else 0 }}</b>pominiete</div>
+  <div class="ag-tile"><b>{{ rep.czekaja|length if rep.czekaja is defined else 0 }}</b>czekaja</div>
+  <div class="ag-tile"><b>{{ rep.kolejka if rep.kolejka is defined else '-' }}</b>zadan w kolejce przed zleceniem</div>
+</div>
+<div class="ag-section"><h2>Zlecone zadania</h2></div>
+{{ task_table(ordered, "/agents/runs/" ~ run.id, False) }}
+{% if rep.pominiete %}<div class="ag-section"><h2>Pominiete</h2></div>
+<div class="ag-tbl"><table><tr><th>#</th><th>Zalecenie</th><th>Powod</th></tr>
+  {% for x in rep.pominiete %}<tr><td>{{ x.task }}</td><td>{{ x.tytul }}</td><td class="why">{{ x.powod }}</td></tr>{% endfor %}</table></div>{% endif %}
+{% if rep.czekaja %}<div class="ag-section"><h2>Czekaja na kolejny przebieg</h2></div>
+<div class="ag-tbl"><table><tr><th>#</th><th>Zalecenie</th><th>Powod</th></tr>
+  {% for x in rep.czekaja %}<tr><td>{{ x.task }}</td><td>{{ x.tytul }}</td><td class="why">{{ x.powod }}</td></tr>{% endfor %}</table></div>{% endif %}
+{% endif %}
+
+{# ============================================================ WDROZENIOWIEC #}
+{% if run.agent == 'wdrozeniowiec' and rep %}{% set z = rep.zmiany or {} %}
+<div class="ag-tiles">
+  <div class="ag-tile"><b>{{ 'tak' if rep.opublikowano else 'nie' }}</b>opublikowano{% if rep.commit %} ({{ rep.commit }}){% endif %}</div>
+  <div class="ag-tile"><b>{{ z.informacje or 0 }}</b>nowych informacji</div>
+  <div class="ag-tile"><b>{{ z.przepisy or 0 }}</b>nowych przepisow</div>
+  <div class="ag-tile"><b>{{ z.nowe_rosliny or 0 }}</b>nowych roslin</div>
+  <div class="ag-tile"><b>{{ z.zdjecia or 0 }}</b>nowych zdjec</div>
+  <div class="ag-tile"><b>{{ (rep.pliki or [])|length }}</b>zmienionych plikow</div>
+</div>
+{% if rep.powod %}<p><b>Decyzja:</b> {{ rep.powod }}{% if rep.ostatnia %} <span class="muted">(ostatnia publikacja: {{ rep.ostatnia[:16]|replace('T', ' ') }} UTC)</span>{% endif %}</p>{% endif %}
+{% if rep.push and not rep.opublikowano %}<p class="ag-msg" style="background:#f6d5d5">Push: {{ rep.push }}</p>{% endif %}
+{% if z.bledy %}<div class="ag-card" style="border-left:4px solid #b0412e"><h3>Uszkodzone pliki (publikacja wstrzymana)</h3>
+  <ul class="ag-list">{% for e in z.bledy %}<li>{{ e }}</li>{% endfor %}</ul></div>{% endif %}
+{% if rep.wpis %}<div class="ag-card"><h3>Wpis kroniki (papirus na stronie glownej)</h3><p><b>{{ rep.wpis.tytul }}</b></p><p>{{ rep.wpis.opis }}</p></div>{% endif %}
+{% if z.rosliny %}<div class="ag-section"><h2>Rosliny z nowa wiedza</h2></div>
+<div class="ag-tbl"><table><tr><th>Roslina</th><th class="num">Nowe informacje</th><th>Jezyki zrodel</th></tr>
+  {% for r in z.rosliny %}<tr><td><a href="/plants/{{ r.id }}">{{ r.nazwa }}</a>{% if r.nowa %} <span class="tag done">nowa</span>{% endif %}</td>
+    <td class="num">{{ r.nowe }}</td><td>{{ (r.jezyki or [])|join(', ') }}</td></tr>{% endfor %}</table></div>{% endif %}
+{% if z.przepisy_lista %}<div class="ag-section"><h2>Nowe przepisy (pierwsze {{ z.przepisy_lista|length }} z {{ z.przepisy }})</h2></div>
+<ul class="ag-list">{% for p in z.przepisy_lista %}<li>{{ p.tytul }}{% if p.zrodlo %} <span class="muted">({{ p.zrodlo }})</span>{% endif %}</li>{% endfor %}</ul>{% endif %}
+{% if rep.pliki %}<details class="ag-card" style="margin-top:10px"><summary>Pliki ({{ rep.pliki|length }})</summary>
+  <ul class="ag-list muted">{% for p in rep.pliki %}<li>{{ p }}</li>{% endfor %}</ul></details>{% endif %}
+{% endif %}
+
+{# ============================================================ PLANISTA #}
+{% if run.agent == 'planista' and rep %}
+<div class="ag-grid">
+  <div class="ag-card"><h3>Decyzja</h3><p>{{ rep.decyzja }}</p>
+    {% if rep.zlecono %}<p>Zlecono: <b>{{ rep.zlecono.tytul }}</b> &rarr; <a href="/jobs/{{ rep.zlecono.job }}">zadanie #{{ rep.zlecono.job }}</a>
+      (<a href="/agents/tasks?agent=planista">historia</a>)</p>{% endif %}
+    {% for x in rep.proby %}<p class="muted">{{ x }}</p>{% endfor %}</div>
+  <div class="ag-card"><h3>Stan Siedziby</h3>
+    <p>Tryb automatyczny: <b>{{ 'tak' if rep.stan.auto else 'nie' }}</b>; zadania produkcyjne: <b>{{ rep.stan.pracuje }}</b> (max {{ rep.stan.max_naraz }} naraz)</p>
+    {% if rep.stan.zadania %}<ul class="ag-list">{% for j in rep.stan.zadania %}<li>{{ j }}</li>{% endfor %}</ul>{% endif %}</div>
+</div>
+{% if rep.straznik %}
+<div class="ag-section"><h2>Straznik kolejki</h2></div>
+<div class="ag-tbl"><table><tr><th>Zadanie</th><th>Co sie stalo</th><th>Akcja</th></tr>
+  {% for e in rep.straznik %}<tr><td class="nw"><a href="/jobs/{{ e.job }}">#{{ e.job }} {{ e.kind }}</a></td>
+    <td><span class="tag {{ 'failed' if e.typ == 'martwe' else 'running' }}">{{ e.typ }}</span> <span class="why">{{ e.opis }}</span></td>
+    <td class="nw">{{ e.akcja }}</td></tr>{% endfor %}</table></div>
+{% endif %}
+{% if rep.llm %}<p class="muted">Modele LLM: {{ rep.llm.llm_jobs }} zadan z LLM (limit {{ rep.llm.limit }}), chmura {{ rep.llm.cloud_ok }}/{{ rep.llm.cloud_calls }} udanych zapytan w 10 min,
+  kolejka Ollamy {{ rep.llm.local_queue }}{% if rep.llm.overloaded %} - <b>przeciazone: {{ rep.llm.powod }}</b> (zadania z LLM odlozone){% endif %}</p>{% endif %}
+{% if ordered %}{{ task_table(ordered, "/agents/runs/" ~ run.id, False) }}{% endif %}
+<div class="ag-section"><h2>Ranking propozycji w chwili sprawdzenia</h2></div>
+{{ proposals(rep.propozycje or [], False) }}
+{% endif %}
+
+{% if run.log %}<div class="ag-section"><h2>Log</h2></div><pre class="log small">{{ run.log }}</pre>{% endif %}
+{% endblock %}

@@ -1,0 +1,11 @@
+<div id="fp-status" hx-get="/posts/status?seen={{ seen }}&status={{ status }}" hx-trigger="every {{ 3 if running else 10 }}s" hx-swap="outerHTML">
+{% if running %}
+  <div class="fp-run">
+    <b>{% if running | selectattr("kind", "equalto", "fb_review") | list %}Ocena / pisanie w toku...{% else %}Dziadyga pisze...{% endif %}</b>
+    {% for j in running %}<span class="tag {{ j.status.value }}">#{{ j.id }} {{ j.status.value }}</span> {% endfor %}
+    <span class="muted">(nowe posty i oceny pojawia sie same, bez zwijania; log w <a href="/jobs/{{ running[0].id }}">zadaniu</a>)</span>
+  </div>
+{% elif failed %}
+  <p class="fp-warn">Ostatnie zadanie nie powiodlo sie: <a href="/jobs/{{ failed.id }}">zadanie #{{ failed.id }}</a>.</p>
+{% endif %}
+</div>

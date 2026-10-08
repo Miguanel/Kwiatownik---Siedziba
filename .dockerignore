@@ -1,0 +1,14 @@
+venv/
+.venv/
+.idea/
+.git/
+__pycache__/
+data/*.db
+.env
+searxng/
+# dane sa montowane jako wolumen - nie kopiujemy ich do obrazu
+data/
+.pytest_cache/
+tests/
+*.md
+models/

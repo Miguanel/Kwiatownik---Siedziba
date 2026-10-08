@@ -1,0 +1,116 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+  .hv-wrap { display: grid; grid-template-columns: minmax(260px, 340px) 1fr; gap: 14px; align-items: start; }
+  .hv-card { background: #fff; border-radius: 8px; padding: 12px 14px; min-width: 0; }
+  .hv-list { display: flex; flex-direction: column; gap: 6px; }
+  .hv-v { border: 1px solid #e3e6dc; border-radius: 8px; padding: 7px 9px; display: grid; gap: 3px; }
+  .hv-v.sel-a { border-color: #b5651d; box-shadow: inset 4px 0 0 #b5651d; }
+  .hv-v.sel-b { border-color: #2f5d3a; box-shadow: inset 4px 0 0 #2f5d3a; }
+  .hv-v .hv-top { display: flex; justify-content: space-between; gap: 6px; flex-wrap: wrap; align-items: center; }
+  .hv-v .hv-acts { display: flex; gap: 6px; flex-wrap: wrap; font-size: .88em; }
+  .hv-v .hv-acts a, .hv-v .hv-acts button { font-size: .95em; }
+  .hv-sc { font-weight: 700; border-radius: 6px; padding: 0 6px; background: #e3e6dc; font-variant-numeric: tabular-nums; }
+  .hv-sc.v-publikuj { background: #d7ecd9; } .hv-sc.v-popraw { background: #fff1c2; } .hv-sc.v-odrzuc { background: #f6d5d5; }
+  .hv-ab { display: inline-block; font-weight: 700; color: #fff; border-radius: 4px; padding: 0 6px; font-size: .85em; }
+  .hv-ab.a { background: #b5651d; } .hv-ab.b { background: #2f5d3a; }
+  .hv-head { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px; }
+  .hv-head > div { border-radius: 8px; padding: 8px 10px; background: #f6f7f2; }
+  .hv-delta { font-weight: 700; } .hv-delta.up { color: #2f5d3a; } .hv-delta.down { color: #a33; }
+  .hv-text { white-space: pre-wrap; line-height: 1.55; font-size: 1em; overflow-wrap: anywhere; }
+  .hv-text del { background: #f6d5d5; color: #7a1f1f; text-decoration: line-through; border-radius: 3px; }
+  .hv-text ins { background: #d7ecd9; color: #173d22; text-decoration: none; border-radius: 3px; }
+  .hv-side { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .hv-side > div { border: 1px solid #e3e6dc; border-radius: 8px; padding: 10px; min-width: 0; }
+  .hv-tabs { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 8px 0 10px; }
+  .hv-tabs a.sel { font-weight: 700; text-decoration: none; color: #1f2a1f; }
+  .hv-crit { width: 100%; font-size: .9em; } .hv-crit td.num, .hv-crit th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .hv-rev ul { margin: 4px 0; padding-left: 20px; }
+  @media (max-width: 900px) { .hv-wrap { grid-template-columns: 1fr; } }
+  @media (max-width: 760px) { .hv-side, .hv-head { grid-template-columns: 1fr; } .hv-crit { white-space: normal; display: table; } }
+</style>
+
+<p><a href="/posts#post-{{ post_id }}">&larr; Posty</a></p>
+<h1>Historia edycji - post #{{ post_id }}</h1>
+<p class="muted">Wszystkie wersje tej rodziny postow: napisane, edytowane recznie, przeredagowane wedlug raportu (takze odrzucone rundy).
+  Wybierz wersje <span class="hv-ab a">A</span> i <span class="hv-ab b">B</span> - zmiany sa zaznaczone slowo po slowie.</p>
+
+<div class="hv-wrap">
+  <div class="hv-card">
+    <b>Wersje ({{ versions | length }})</b>
+    <div class="hv-list" style="margin-top:8px">
+    {% for v in versions | reverse %}
+      <div class="hv-v {% if va and v.id == va.id %}sel-a{% elif vb and v.id == vb.id %}sel-b{% endif %}">
+        <div class="hv-top">
+          <span><b>{{ v.n }}.</b> {{ v.label }}{% if v.current %} <span class="tag">obecny tekst #{{ v.post_id }}</span>{% endif %}</span>
+          {% if v.overall is not none %}<span class="hv-sc v-{{ v.verdict }}" title="ocena koncowa tej wersji">{{ v.overall | round | int }}</span>{% endif %}
+        </div>
+        <span class="muted">#{{ v.post_id }} &middot; {{ v.at | dt }} &middot; {{ v.words }} slow{% if v.note %} &middot; {{ v.note }}{% endif %}</span>
+        <div class="hv-acts">
+          <a href="?a={{ v.id }}&b={{ vb.id if vb else v.id }}&view={{ view }}">jako A</a>
+          <a href="?a={{ va.id if va else v.id }}&b={{ v.id }}&view={{ view }}">jako B</a>
+          {% if v.n > 1 %}<a href="?a={{ versions[v.n - 2].id }}&b={{ v.id }}&view={{ view }}">vs poprzednia</a>{% endif %}
+          {% if not v.current %}
+          <form method="post" action="/posts/{{ v.post_id }}/restore/{{ v.id }}" class="inline">
+            <button title="ustaw ten tekst w poscie #{{ v.post_id }} (jako nowa wersja - nic nie ginie)">Przywroc</button></form>
+          {% endif %}
+        </div>
+      </div>
+    {% endfor %}
+    </div>
+  </div>
+
+  <div class="hv-card">
+    {% if va and vb %}
+    <div class="hv-head">
+      <div><span class="hv-ab a">A</span> <b>wersja {{ va.n }}</b> &ndash; {{ va.label }} (#{{ va.post_id }})<br>
+        <span class="muted">{{ va.at | dt }} &middot; {{ va.words }} slow &middot; ocena {{ va.overall | round | int if va.overall is not none else "brak" }}</span></div>
+      <div><span class="hv-ab b">B</span> <b>wersja {{ vb.n }}</b> &ndash; {{ vb.label }} (#{{ vb.post_id }})<br>
+        <span class="muted">{{ vb.at | dt }} &middot; {{ vb.words }} slow &middot; ocena {{ vb.overall | round | int if vb.overall is not none else "brak" }}</span></div>
+    </div>
+    <p>
+      {% if va.overall is not none and vb.overall is not none %}
+        {% set d = vb.overall - va.overall %}
+        Ocena: <span class="hv-delta {{ 'up' if d > 0 else 'down' if d < 0 else '' }}">{{ "%+.0f" | format(d) }}</span> pkt &middot;
+      {% endif %}
+      slowa: <span class="hv-delta up">+{{ diff.added }}</span> / <span class="hv-delta down">&minus;{{ diff.removed }}</span>
+      &middot; podobienstwo {{ diff.similarity }}%{% if diff.same %} &middot; <b>teksty identyczne</b>{% endif %}
+    </p>
+    {% if crit %}
+    <details {% if crit | length %}open{% endif %}><summary><b>Oceny eksperta A &rarr; B</b></summary>
+      <table class="hv-crit"><tr><th>Kryterium</th><th class="num">A</th><th class="num">B</th><th class="num">zmiana</th></tr>
+      {% for c in crit %}<tr><td>{{ c.label }}</td><td class="num">{{ c.a if c.a is not none else "-" }}</td><td class="num">{{ c.b if c.b is not none else "-" }}</td>
+        <td class="num">{% if c.a is not none and c.b is not none %}{% set d = c.b - c.a %}<span class="hv-delta {{ 'up' if d > 0 else 'down' if d < 0 else '' }}">{{ "%+d" | format(d) }}</span>{% endif %}</td></tr>{% endfor %}
+      </table>
+    </details>
+    {% endif %}
+    <div class="hv-tabs">
+      <span class="muted">Widok:</span>
+      <a href="?a={{ va.id }}&b={{ vb.id }}&view=inline" class="{% if view != 'side' %}sel{% endif %}">zmiany w jednym tekscie</a>
+      <a href="?a={{ va.id }}&b={{ vb.id }}&view=side" class="{% if view == 'side' %}sel{% endif %}">obok siebie</a>
+      <a href="?a={{ vb.id }}&b={{ va.id }}&view={{ view }}">zamien A/B</a>
+    </div>
+    {% if view == 'side' %}
+    <div class="hv-side">
+      <div><span class="hv-ab a">A</span><div class="hv-text">{% for op, t in diff.ops %}{% if op == "eq" %}{{ t }}{% elif op == "del" %}<del>{{ t }}</del>{% endif %}{% endfor %}</div></div>
+      <div><span class="hv-ab b">B</span><div class="hv-text">{% for op, t in diff.ops %}{% if op == "eq" %}{{ t }}{% elif op == "ins" %}<ins>{{ t }}</ins>{% endif %}{% endfor %}</div></div>
+    </div>
+    {% else %}
+    <p class="muted"><del style="background:#f6d5d5">usuniete z A</del> &middot; <ins style="background:#d7ecd9;text-decoration:none">dodane w B</ins></p>
+    <div class="hv-text">{% for op, t in diff.ops %}{% if op == "eq" %}{{ t }}{% elif op == "del" %}<del>{{ t }}</del>{% else %}<ins>{{ t }}</ins>{% endif %}{% endfor %}</div>
+    {% endif %}
+    {% else %}
+      <p class="muted">Brak wersji do porownania.</p>
+    {% endif %}
+
+    {% for pid, rv in revisions.items() %}
+    <details class="hv-rev" style="margin-top:12px" {% if vb and vb.post_id == pid %}open{% endif %}>
+      <summary><b>Co poprawiono w #{{ pid }}</b> <span class="muted">(z #{{ rv.z_posta }}, {{ "redakcja" if rv.tryb == "redaguj" else "od nowa" }}:
+        {% if rv.ocena_przed is not none %}{{ rv.ocena_przed | round | int }} &rarr; {% endif %}{{ rv.ocena_po | round | int }}/100)</span></summary>
+      {% if rv.rundy %}<p class="muted">Rundy: {% for r in rv.rundy %}{{ r.runda }}: {{ r.ocena | round | int }}{% if r.runda == rv.najlepsza_runda %} (wybrana){% endif %}{% if not loop.last %} &middot; {% endif %}{% endfor %}</p>{% endif %}
+      {% if rv.wdrozone %}<ul>{% for x in rv.wdrozone %}<li>{{ x }}</li>{% endfor %}</ul>{% else %}<p class="muted">Model nie opisal wdrozonych zmian.</p>{% endif %}
+    </details>
+    {% endfor %}
+  </div>
+</div>
+{% endblock %}

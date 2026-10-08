@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block content %}
+{% include "agents_style.html" %}
+<h1>Historia przebiegow agentow</h1>
+<p class="muted ag-intro"><a href="/agents">&larr; Agenci</a> &middot; <a href="/agents/tasks">Historia zadan</a> &middot; {{ total }} przebiegow.
+  Planista zapisuje nowy wpis tylko wtedy, gdy cos sie zmienilo - powtorzenia tego samego stanu zwiekszaja licznik (xN).</p>
+<div class="ag-filters">
+  <a class="tag {{ 'done' if not agent else '' }}" href="/agents/runs">wszyscy</a>
+  {% for k, name in agents.items() %}<a class="tag {{ 'done' if agent == k else '' }}" href="/agents/runs?agent={{ k }}">{{ name }}</a>{% endfor %}
+</div>
+<div class="ag-tbl"><table>
+  <tr><th>#</th><th>Agent</th><th>Kiedy</th><th>Wyzwalacz</th><th>Status</th><th>Podsumowanie</th><th class="num">Ocena</th><th class="num">Zadania</th></tr>
+  {% for r in runs %}
+  <tr>
+    <td><a href="/agents/runs/{{ r.id }}">#{{ r.id }}</a></td>
+    <td class="nw">{{ agents.get(r.agent, r.agent) }}</td>
+    <td class="nw">{{ r.created_at|dt }}{% if r.repeats %}<br><span class="muted">x{{ r.repeats + 1 }}, do {{ r.updated_at|dt("%H:%M") }}</span>{% endif %}</td>
+    <td class="nw">{{ r.trigger }}{% if r.job_id %}<br><a href="/jobs/{{ r.job_id }}">zadanie #{{ r.job_id }}</a>{% endif %}</td>
+    <td><span class="tag {{ 'running' if r.status == 'running' else ('failed' if r.status == 'failed' else 'done') }}">{{ r.status }}</span></td>
+    <td><a href="/agents/runs/{{ r.id }}">{{ r.summary or '-' }}</a></td>
+    <td class="num">{{ r.score|round(0)|int if r.score is not none else '' }}</td>
+    <td class="num">{% if proposed.get(r.id) %}{{ proposed[r.id] }} zalecen{% endif %}{% if ordered.get(r.id) %}{{ ordered[r.id] }} zlecone{% endif %}</td>
+  </tr>
+  {% else %}<tr><td colspan="8" class="muted">Brak przebiegow.</td></tr>{% endfor %}
+</table></div>
+<div class="ag-pager">
+  {% if page > 1 %}<a href="/agents/runs?agent={{ agent }}&page={{ page - 1 }}">&larr; nowsze</a>{% endif %}
+  <span class="muted">strona {{ page }} / {{ pages }}</span>
+  {% if page < pages %}<a href="/agents/runs?agent={{ agent }}&page={{ page + 1 }}">starsze &rarr;</a>{% endif %}
+</div>
+{% endblock %}

@@ -1,0 +1,185 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+  .st-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin-bottom: 16px; }
+  .st-tile { background: #fff; border-radius: 8px; padding: 12px 14px; }
+  .st-tile b { display: block; font-size: 1.7em; line-height: 1.2; }
+  .st-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 460px), 1fr)); gap: 14px; margin-bottom: 14px; }
+  .st-card { background: #fff; border-radius: 8px; padding: 12px 16px; min-width: 0; }
+  .st-card h2 { font-size: 1.08em; margin: 2px 0 4px; }
+  .st-card > p.muted { margin: 0 0 10px; }
+  .st-row { display: grid; grid-template-columns: minmax(120px, 40%) 1fr 3.4em; gap: 8px; align-items: center; margin: 5px 0; font-size: .92em; }
+  .st-row b { text-align: right; font-variant-numeric: tabular-nums; }
+  .st-track { background: #eef0e8; border-radius: 4px; height: 12px; overflow: hidden; }
+  .st-track i { display: block; height: 100%; background: #2f5d3a; border-radius: 0 4px 4px 0; }
+  .st-row.weak .st-track i { background: #b5651d; }
+  .st-tbl { overflow-x: auto; }
+  .st-tbl table { font-size: .9em; white-space: nowrap; }
+  .st-tbl td.num, .st-tbl th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .st-hist { display: grid; grid-template-columns: repeat(10, 1fr); gap: 3px; align-items: end; height: 120px; margin-top: 8px; }
+  .st-hist div { background: #2f5d3a; border-radius: 4px 4px 0 0; min-height: 2px; }
+  .st-hist-l { display: grid; grid-template-columns: repeat(10, 1fr); gap: 3px; font-size: .72em; color: #6b7568; text-align: center; }
+  .st-factor { border-top: 1px solid #eef0e8; padding: 6px 0; }
+  .st-factor:first-of-type { border-top: 0; }
+  .st-best { font-size: .8em; background: #d7ecd9; border-radius: 8px; padding: 0 6px; margin-left: 6px; }
+  .st-act { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 14px; }
+  .tag.v-publikuj { background: #d7ecd9; } .tag.v-popraw { background: #fff1c2; } .tag.v-odrzuc { background: #f6d5d5; }
+  @media (max-width: 760px) { .st-row { grid-template-columns: minmax(90px, 42%) 1fr 3em; } .st-tbl table { display: table; } }
+</style>
+
+<h1>Fanpage - statystyki i oceny</h1>
+<p class="muted">Kazdy szkic oceniaja dwa niezalezne zrodla: <b>pomiary kodem</b> (czytelnosc FOG-PL, dlugosc, akapity,
+  pierwsze zdanie, gestosc gwary, pytanie do czytelnikow, powtorzenia, liczby spoza danych) oraz <b>recenzja eksperta</b>
+  &ndash; model LLM inny niz autor, w roli specjalisty od content marketingu i fact-checkera (9 kryteriow 1&ndash;10).
+  Ocena koncowa = 65% ekspert + 35% kod. Zarzuty merytoryczne bez dokladnego cytatu z posta sa odrzucane.</p>
+
+<div class="st-act">
+  <a href="/posts">&larr; Posty</a>
+  <form method="post" action="/posts/review" class="inline">
+    <button {% if not to_review or running %}disabled{% endif %}>Ocen szkice bez aktualnej oceny ({{ to_review }})</button>
+  </form>
+  {% if running %}<span class="tag running">ocena w toku (#{{ running.id }}) - odswiez strone za chwile</span>{% endif %}
+</div>
+
+{% if not st.n_reviewed %}
+  <p class="box" style="display:block">Brak ocenionych postow. Kliknij "Ocen szkice" - statystyki pojawia sie po pierwszej ocenie.</p>
+{% else %}
+<div class="st-tiles">
+  <div class="st-tile"><span class="muted">Srednia ocena</span><b>{{ st.avg_overall | round | int }}<small class="muted">/100</small></b>
+    <span class="muted">ekspert {{ st.avg_expert | round | int if st.avg_expert is not none else "-" }} &middot; kod {{ st.avg_code | round | int }}</span></div>
+  <div class="st-tile"><span class="muted">Gotowe do publikacji</span><b>{{ st.ready_pct }}%</b>
+    <span class="muted">{{ st.verdicts.get("publikuj", 0) }} z {{ st.n_reviewed }} ocenionych</span></div>
+  <div class="st-tile"><span class="muted">Do poprawy / odrzucenia</span><b>{{ st.verdicts.get("popraw", 0) }} / {{ st.verdicts.get("odrzuc", 0) }}</b>
+    <span class="muted">bledy merytoryczne: {{ st.fact_errors }}</span></div>
+  <div class="st-tile"><span class="muted">Posty</span><b>{{ st.n_posts }}</b>
+    <span class="muted">ocenione {{ st.n_reviewed }}{% if st.unreviewed %}, bez oceny {{ st.unreviewed }}{% endif %}{% if st.stale %}, nieaktualne {{ st.stale }}{% endif %}</span></div>
+  <div class="st-tile"><span class="muted">Opublikowane</span><b>{{ st.status.get("published", 0) }}</b>
+    <span class="muted">zatwierdzone {{ st.status.get("approved", 0) }}, odrzucone {{ st.status.get("rejected", 0) }}</span></div>
+</div>
+
+{% if st.weakest %}
+<p class="box" style="display:block"><b>Najslabsze obszary:</b>
+  {% for c in st.weakest %}{{ c.label }} ({{ c.avg }}/10){% if not loop.last %}, {% endif %}{% endfor %}
+  {% if st.issues %} &middot; <b>najczestszy problem:</b> {{ st.issues[0].label }} ({{ st.issues[0].pct }}% postow){% endif %}.
+  Te uwagi trafiaja do modelu przy "Popraw wedlug uwag".</p>
+{% endif %}
+
+<div class="st-grid">
+  <div class="st-card">
+    <h2>Ocena eksperta wg kryteriow</h2>
+    <p class="muted">srednia 1&ndash;10; pomaranczowe = ponizej 6</p>
+    {% for c in st.criteria %}
+    <div class="st-row {% if c.avg is not none and c.avg < 6 %}weak{% endif %}" title="{{ c.label }}: {{ c.avg }}/10 (waga {{ c.weight }}, {{ c.n }} ocen) - {{ c.desc }}">
+      <span>{{ c.label }}</span><span class="st-track"><i style="width: {{ (c.avg or 0) * 10 }}%"></i></span><b>{{ c.avg }}</b></div>
+    {% endfor %}
+  </div>
+  <div class="st-card">
+    <h2>Pomiary kodem</h2>
+    <p class="muted">srednie podwyniki 0&ndash;100; pomaranczowe = ponizej 60</p>
+    {% for c in st.subscores %}
+    <div class="st-row {% if c.avg is not none and c.avg < 60 %}weak{% endif %}" title="{{ c.label }}: {{ c.avg }}/100">
+      <span>{{ c.label }}</span><span class="st-track"><i style="width: {{ c.avg or 0 }}%"></i></span><b>{{ c.avg | round | int if c.avg is not none else "-" }}</b></div>
+    {% endfor %}
+  </div>
+</div>
+
+<div class="st-grid">
+  <div class="st-card">
+    <h2>Najczestsze problemy</h2>
+    <p class="muted">% ocenionych postow, w ktorych kod wykryl problem</p>
+    {% for i in st.issues %}
+    <div class="st-row" title="{{ i.label }}: {{ i.n }} postow ({{ i.pct }}%)"><span>{{ i.label }}</span>
+      <span class="st-track"><i style="width: {{ i.pct }}%"></i></span><b>{{ i.pct }}%</b></div>
+    {% else %}<p class="muted">Brak wykrytych problemow.</p>{% endfor %}
+    {% if st.risks %}<p><b>Ryzyka wg eksperta:</b> {% for r, c in st.risks %}{{ r }}{% if c > 1 %} (&times;{{ c }}){% endif %}{% if not loop.last %}; {% endif %}{% endfor %}</p>{% endif %}
+    {% if st.dropped_claims %}<p class="muted">Odrzucone zarzuty eksperta bez cytatu: {{ st.dropped_claims }}</p>{% endif %}
+  </div>
+  <div class="st-card">
+    <h2>Rozklad ocen</h2>
+    <p class="muted">liczba postow w przedzialach oceny koncowej</p>
+    <div class="st-hist">{% for h in st.hist %}<div style="height: {{ (100 * h.n / st.hist_max) | round(1) }}%" title="{{ h.label }}: {{ h.n }} postow"></div>{% endfor %}</div>
+    <div class="st-hist-l">{% for h in st.hist %}<span>{{ h.label.split("–")[0] }}</span>{% endfor %}</div>
+    {% if st.trend | length > 1 %}
+    <h2 style="margin-top:14px">Srednia ocena wg dnia</h2>
+    {% for t in st.trend %}
+    <div class="st-row" title="{{ t.day }}: srednio {{ t.avg }} ({{ t.n }} postow)"><span>{{ t.day }} <span class="muted">({{ t.n }})</span></span>
+      <span class="st-track"><i style="width: {{ t.avg }}%"></i></span><b>{{ t.avg | round | int }}</b></div>
+    {% endfor %}
+    {% endif %}
+  </div>
+</div>
+
+<div class="st-card" style="margin-bottom:14px">
+  <h2>Co wplywa na ocene</h2>
+  <p class="muted">srednia ocena koncowa postow w kazdej grupie; "lepiej" = najwyzsza srednia (grupy z min. 2 postami). To korelacja, nie dowod przyczyny - im wiecej postow, tym pewniej.</p>
+  <div class="st-grid" style="margin:0">
+  {% for f in st.factors %}{% if f["items"] | length > 1 %}
+    <div class="st-factor"><b>{{ f.name }}</b>
+      {% for i in f["items"] %}
+      <div class="st-row" title="{{ f.name }} - {{ i.label }}: srednio {{ i.avg }} ({{ i.n }} postow)">
+        <span>{{ i.label }} <span class="muted">({{ i.n }})</span>{% if f.best == i.label %}<span class="st-best">lepiej</span>{% endif %}</span>
+        <span class="st-track"><i style="width: {{ i.avg }}%"></i></span><b>{{ i.avg | round | int }}</b></div>
+      {% endfor %}
+    </div>
+  {% endif %}{% endfor %}
+  </div>
+  {% if not st.factors_any %}
+  <p class="muted">Wszystkie ocenione posty sa na razie podobne pod tymi wzgledami - porownanie pojawi sie, gdy beda sie roznic.</p>
+  {% endif %}
+</div>
+
+<div class="st-grid">
+  <div class="st-card st-tbl">
+    <h2>Wg rodzaju posta</h2>
+    <table><tr><th>Temat</th><th class="num">Postow</th><th class="num">Ocena</th><th class="num">Ekspert</th><th class="num">Kod</th><th class="num">Gotowe</th><th class="num">Opubl.</th><th class="num">Zaang.</th></tr>
+    {% for g in st.by_kind %}<tr><td>{{ g.label }}</td><td class="num">{{ g.n }}</td><td class="num"><b>{{ g.overall }}</b></td><td class="num">{{ g.expert if g.expert is not none else "-" }}</td>
+      <td class="num">{{ g.code }}</td><td class="num">{{ g.publikuj }}%</td><td class="num">{{ g.published }}</td><td class="num">{{ g.eng if g.eng is not none else "-" }}</td></tr>{% endfor %}
+    </table>
+  </div>
+  <div class="st-card st-tbl">
+    <h2>Ktory model pisze najlepiej</h2>
+    <table><tr><th>Autor</th><th class="num">Postow</th><th class="num">Ocena</th><th class="num">Ekspert</th><th class="num">Kod</th><th class="num">Gwara</th><th class="num">FOG</th><th class="num">Gotowe</th></tr>
+    {% for g in st.by_author %}<tr><td>{{ g.label }}</td><td class="num">{{ g.n }}</td><td class="num"><b>{{ g.overall }}</b></td><td class="num">{{ g.expert if g.expert is not none else "-" }}</td>
+      <td class="num">{{ g.code }}</td><td class="num">{{ g.gwara }}%</td><td class="num">{{ g.fog }}</td><td class="num">{{ g.publikuj }}%</td></tr>{% endfor %}
+    </table>
+    {% if st.by_reviewer %}
+    <h2 style="margin-top:12px">Recenzenci</h2>
+    <p class="muted">roznica = srednio ekspert minus kod (dodatnia: recenzent lagodniejszy niz pomiary)</p>
+    <table><tr><th>Model</th><th class="num">Ocen</th><th class="num">Ekspert</th><th class="num">Kod</th><th class="num">Roznica</th></tr>
+    {% for g in st.by_reviewer %}<tr><td>{{ g.label }}</td><td class="num">{{ g.n }}</td><td class="num">{{ g.expert }}</td><td class="num">{{ g.code }}</td><td class="num">{{ "%+.1f" | format(g.gap) if g.gap is not none else "-" }}</td></tr>{% endfor %}
+    </table>
+    {% endif %}
+  </div>
+</div>
+
+<div class="st-grid">
+  <div class="st-card st-tbl">
+    <h2>Najlepsze</h2>
+    <table>{% for r in st.top %}<tr><td><a href="/posts#post-{{ r.id }}">#{{ r.id }}</a></td><td class="num"><b>{{ r.overall | round | int }}</b></td>
+      <td><span class="tag v-{{ r.verdict }}">{{ verdicts.get(r.verdict, r.verdict) }}</span></td><td style="white-space:normal;min-width:180px">{{ r.hook }}...</td></tr>{% endfor %}</table>
+  </div>
+  {% if st.bottom %}
+  <div class="st-card st-tbl">
+    <h2>Najslabsze</h2>
+    <table>{% for r in st.bottom %}<tr><td><a href="/posts#post-{{ r.id }}">#{{ r.id }}</a></td><td class="num"><b>{{ r.overall | round | int }}</b></td>
+      <td><span class="tag v-{{ r.verdict }}">{{ verdicts.get(r.verdict, r.verdict) }}</span></td><td style="white-space:normal;min-width:180px">{{ r.hook }}...</td></tr>{% endfor %}</table>
+  </div>
+  {% endif %}
+</div>
+
+<div class="st-card" style="margin-bottom:14px">
+  <h2>Ocena a prawdziwe wyniki na Facebooku</h2>
+  {% if st.n_results %}
+  <p>Postow z wpisanymi wynikami: <b>{{ st.n_results }}</b>. Zaangazowanie = reakcje + 2&times; komentarze + 3&times; udostepnienia.</p>
+  <p>Korelacja (Pearson) oceny koncowej z zaangazowaniem: <b>{{ st.corr_overall if st.corr_overall is not none else "za malo danych (min. 3)" }}</b>;
+     samego wyniku kodu: <b>{{ st.corr_code if st.corr_code is not none else "-" }}</b>.
+     Blisko 1 = oceny dobrze przewiduja wyniki, blisko 0 = nie przewiduja.</p>
+  <div class="st-tbl"><table><tr><th>Prognoza eksperta</th><th class="num">Postow</th><th class="num">Srednie zaangazowanie</th></tr>
+    {% for p in st.pred_vs_real %}<tr><td>{{ p.label }}</td><td class="num">{{ p.n }}</td><td class="num">{{ p.avg }}</td></tr>{% endfor %}</table></div>
+  {% else %}
+  <p class="muted">Po publikacji wpisz przy poscie wyniki z Facebooka (zasieg, reakcje, komentarze, udostepnienia) - tu pojawi sie
+    porownanie ocen z prawdziwym zaangazowaniem, czyli sprawdzian, czy ocenianie dziala.</p>
+  {% endif %}
+</div>
+{% endif %}
+{% endblock %}

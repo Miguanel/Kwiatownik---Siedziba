@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Odkrywanie nowych stron</h1>
+<p class="muted">LLM uklada zapytania w jezyku kraju, wyszukiwarki ({{ engines | join(", ") or "BRAK - ustaw SEARXNG_URL / BRAVE_API_KEY" }})
+  zwracaja wyniki, a kazda nowa domena jest sprawdzana (czy ma przepisy). Kazda strona trafia tu tylko raz -
+  znane zrodla i wczesniej znalezione domeny (takze odrzucone) sa pomijane. Strona dodana do zrodel znika z tej listy.</p>
+
+<form class="box" method="post" action="/discover/run" style="align-items:flex-start">
+  <div>
+    <b>Kraje</b> <span class="muted">(Ctrl = kilka)</span><br>
+    <select name="countries" multiple size="8" required>
+      {% for code, c in countries.items() %}
+        <option value="{{ code }}">{{ c.name }} ({{ code }}){% if proxies[code] %} - VPN{% endif %}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div style="display:flex;flex-direction:column;gap:6px">
+    <label>Zapytan na kraj <input name="queries" type="number" value="5" min="1" max="30" style="width:60px"></label>
+    <label>Stron wynikow <input name="pages" type="number" value="1" min="1" max="3" style="width:60px"></label>
+    <label>Max nowych stron <input name="max_new" type="number" value="30" min="1" max="200" style="width:70px"></label>
+    <label><input type="checkbox" name="auto_add" value="true"> od razu dodaj zweryfikowane jako zrodla</label>
+  </div>
+  <div style="flex:1;display:flex;flex-direction:column;gap:6px">
+    <input name="topic" placeholder="temat (opcjonalnie), np. nalewki i syropy z dzikich owocow">
+    <textarea name="own_queries" rows="3" placeholder="wlasne zapytania (opcjonalnie, jedno w linii, w jezyku kraju)"></textarea>
+    <button>Szukaj stron</button>
+  </div>
+</form>
+
+<h2>Znalezione</h2>
+<div class="cards">
+  {% for code, st in counts.items() %}
+    <a class="card" style="text-decoration:none;color:inherit" href="/discover?country={{ code }}&status=">
+      <b>{{ st.values() | sum }}</b>{{ countries[code].name if code in countries else code }}
+      <span class="muted">{{ st.get("verified", 0) }} zweryfik.</span></a>
+  {% endfor %}
+</div>
+<form class="box" method="get" action="/discover">
+  <select name="country"><option value="">kazdy kraj</option>
+    {% for code, c in countries.items() %}<option value="{{ code }}" {% if f.country == code %}selected{% endif %}>{{ c.name }}</option>{% endfor %}
+  </select>
+  <select name="status"><option value="">kazdy status</option>
+    {% for s in statuses %}<option {% if f.status == s %}selected{% endif %}>{{ s }}</option>{% endfor %}
+  </select>
+  <input name="q" value="{{ f.q }}" placeholder="domena / tytul">
+  <button>Filtruj</button>
+</form>
+<form method="post" action="/discover/add-verified" style="margin-bottom:8px">
+  <input type="hidden" name="country" value="{{ f.country }}">
+  <button>Dodaj wszystkie zweryfikowane{% if f.country %} ({{ f.country }}){% endif %} jako zrodla</button>
+</form>
+<table>
+  <tr><th>Domena</th><th>Kraj</th><th>Tytul / znaleziona strona</th><th>Ocena</th><th>Status</th><th>Trafien</th><th></th></tr>
+  {% for s in sites %}
+    <tr>
+      <td><b>{{ s.domain }}</b><br><span class="muted">{{ s.language or "" }}</span></td>
+      <td>{{ s.country }}</td>
+      <td>{{ s.title }}<br><a class="muted" href="{{ s.url }}" target="_blank">{{ s.url[:80] }}</a>
+          <br><span class="muted" title="{{ s.snippet or '' }}">zapytanie: {{ s.query }} &middot; {{ s.reason or "" }}</span></td>
+      <td>{{ "%.2f" % s.score if s.score is not none else "-" }}</td>
+      <td><span class="tag {{ 'done' if s.status in ('verified', 'added') else ('running' if s.status == 'maybe' else 'other') }}">{{ s.status }}</span></td>
+      <td>{{ s.hits }}</td>
+      <td style="white-space:nowrap">
+        <form class="inline" method="post" action="/discover/{{ s.id }}/add"><button title="dodaj do zrodel (zniknie z tej listy)">Dodaj</button></form>
+        {% if s.status != "rejected" %}<form class="inline" method="post" action="/discover/{{ s.id }}/status">
+          <input type="hidden" name="status" value="rejected"><button>Odrzuc</button></form>{% endif %}
+      </td>
+    </tr>
+  {% else %}
+    <tr><td colspan="7">Nic tu nie ma - uruchom szukanie albo zmien filtr.</td></tr>
+  {% endfor %}
+</table>
+
+<h2>VPN per kraj</h2>
+<p class="muted">Ustawiane w .env: COUNTRY_PROXIES=ua=http://vpn-ua:8888 (kontener gluetun). Ruch do stron danego kraju
+  (weryfikacja, skany zrodel z tym krajem) idzie przez jego VPN.</p>
+<table>
+  <tr><th>Kraj</th><th>Proxy</th><th>Test</th></tr>
+  {% for code, p in proxies.items() if p %}
+    <tr><td>{{ countries[code].name }} ({{ code }})</td><td><code>{{ p }}</code></td>
+        <td><button hx-get="/vpn/{{ code }}" hx-target="#vpn-{{ code }}">Sprawdz IP</button> <span id="vpn-{{ code }}"></span></td></tr>
+  {% else %}
+    <tr><td colspan="3">Brak skonfigurowanych VPN.</td></tr>
+  {% endfor %}
+</table>
+
+<h2>Ostatnie zapytania</h2>
+<table>
+  <tr><th>Kraj</th><th>Zapytanie</th><th>Wynikow</th><th>Nowych stron</th><th>Kiedy</th></tr>
+  {% for q in queries %}<tr><td>{{ q.country }}</td><td>{{ q.text }}</td><td>{{ q.results }}</td><td>{{ q.new_sites }}</td><td>{{ q.created_at | dt }}</td></tr>{% endfor %}
+</table>
+
+<h2>Zadania szukania</h2>
+{% include "jobs_table.html" %}
+{% endblock %}

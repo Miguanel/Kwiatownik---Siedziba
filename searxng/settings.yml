@@ -1,0 +1,22 @@
+# Lokalny SearXNG dla Siedziby Kwiatownika (meta-wyszukiwarka: Google, Bing, DuckDuckGo, Brave, ...)
+use_default_settings: true
+
+server:
+  secret_key: "b6b1398846ef4d21535070acbd115495948ed414feb3f4f82c7290ac4da89d19"
+  limiter: false          # tylko do uzytku lokalnego
+  image_proxy: false
+  public_instance: false
+
+search:
+  safe_search: 0
+  formats:                # "json" jest wymagany przez Siedzibe
+    - html
+    - json
+
+# Wyszukiwarki chinskie i japonskie - wiedza zielarska (TCM, kampo, 草木染め) trudno dostepna z Google/Bing.
+# Siedziba pyta je o brakujace informacje o roslinach (KNOWLEDGE_SEARCH_LANGS=...,zh,ja).
+engines:
+  - name: baidu
+    disabled: false
+  - name: sogou
+    disabled: false

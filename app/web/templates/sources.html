@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Zrodla</h1>
+<form method="post" action="/sources/scan-all" style="margin-bottom:12px">
+  <button>Skanuj wszystkie aktywne</button>
+  <span class="muted">zadania ida do kolejki - naraz dziala tyle, ile ustawiono w MAX_CONCURRENT_JOBS</span>
+</form>
+<form class="box" method="post" action="/sources">
+  <input name="name" placeholder="Nazwa" required>
+  <input name="base_url" placeholder="https://strona.com/ (strona startowa)" required size="36">
+  <input name="language" value="en" size="3" title="jezyk strony">
+  <input name="country" placeholder="kraj" size="3" title="kod kraju, np. ua - wlacza VPN tego kraju">
+  <input name="keywords" placeholder="dodatkowe slowa kluczowe, po przecinku" size="30">
+  <label class="muted">stron <input name="max_pages" type="number" value="50" min="1" style="width:70px"></label>
+  <label class="muted">glebokosc <input name="max_depth" type="number" value="3" min="1" max="8" style="width:55px"></label>
+  <button type="submit">Dodaj</button>
+</form>
+<table>
+  <tr><th>#</th><th>Nazwa</th><th>URL</th><th>Przepisy</th><th>Ciekawostki</th><th>Scraper</th><th>Ostatni skan</th><th></th></tr>
+  {% for s in sources %}
+    {% set c = counts.get(s.id, {}) %}
+    <tr {% if not s.active %}style="opacity:.5"{% endif %}>
+      <td>{{ s.id }}</td>
+      <td><a href="/sources/{{ s.id }}">{{ s.name }}</a>{% if s.country %} <span class="tag" title="kraj{{ ' - przez VPN' if s.country in vpn else '' }}">{{ s.country }}{% if s.country in vpn %} VPN{% endif %}</span>{% endif %}{% if s.needs_js %} <span class="tag failed" title="strona renderowana w JavaScript">JS</span>{% endif %}</td>
+      <td><a href="{{ s.base_url }}" target="_blank">{{ s.base_url }}</a></td>
+      <td><a href="/items?kind=recipe&source_id={{ s.id }}">{{ c.get("recipe", 0) }}</a></td>
+      <td><a href="/items?kind=fact&source_id={{ s.id }}">{{ c.get("fact", 0) }}</a></td>
+      <td>{% if s.profile_status %}<span class="tag {{ s.profile_status }}">{{ s.profile_status }}</span>{% else %}<span class="muted">-</span>{% endif %}
+          {% if s.auto_scan %}<span class="tag" title="skanowane automatycznie co dzien">auto</span>{% endif %}</td>
+      <td>{{ s.last_scan_at | dt }}</td>
+      <td>
+        <form class="inline" method="post" action="/sources/{{ s.id }}/scan">
+          <input name="max_pages" type="number" placeholder="{{ s.max_pages }}" min="1" style="width:70px" title="limit stron">
+          <button {% if not s.active %}disabled{% endif %}>Skanuj</button>
+        </form>
+      </td>
+    </tr>
+  {% else %}
+    <tr><td colspan="8">Brak zrodel - dodaj pierwsza strone powyzej.</td></tr>
+  {% endfor %}
+</table>
+{% endblock %}

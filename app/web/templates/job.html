@@ -1,0 +1,5 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Zadanie #{{ job.id }} - {{ job.kind }}{% if src %}: <a href="/sources/{{ src.id }}">{{ src.name }}</a>{% endif %}</h1>
+<div id="panel">{% include "job_panel.html" %}</div>
+{% endblock %}

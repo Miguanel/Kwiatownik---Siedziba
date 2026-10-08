@@ -1,0 +1,20 @@
+{# Historia zmian jednej pozycji: {% include "snapshot_history.html" %} z ustawionym history_link #}
+{% set hist = snapshot_history(history_link) %}
+<details class="box" style="display:block;margin:12px 0" {% if hist %}open{% endif %}>
+  <summary style="cursor:pointer"><b>Historia zmian</b> <span class="tag">{{ hist | length }}</span>
+    <span class="muted">&middot; co zadania zmienialy w tresci - przed i po</span></summary>
+  {% if hist %}
+  <table style="margin-top:8px">
+    <tr><th>Kiedy</th><th>Operacja</th><th>Zmiany</th><th>Zadanie</th><th>Podglad</th></tr>
+    {% for sn in hist %}
+      <tr><td class="muted">{{ sn.ts | dt("%Y-%m-%d %H:%M") }}</td>
+        <td>{{ sn.operation }}{% if not sn.applied %} <span class="tag failed" title="{{ sn.note }}">odrzucona</span>{% endif %}
+          {% if sn.path.endswith(".json") and not sn.path.startswith("baza") %}<span class="muted">(plik)</span>{% endif %}</td>
+        <td><span style="color:#14532d">+{{ sn.added }}</span> <span style="color:#7f1d1d">&minus;{{ sn.removed }}</span></td>
+        <td>{% if sn.job_id %}<a href="/jobs/{{ sn.job_id }}">#{{ sn.job_id }}</a>{% else %}<span class="muted">reczna</span>{% endif %}</td>
+        <td style="white-space:nowrap"><a href="/monitor/json/{{ sn.id }}#diff">Roznice</a> &middot;
+          <a href="/monitor/json/{{ sn.id }}#before">Przed</a> &middot; <a href="/monitor/json/{{ sn.id }}#after">Po</a></td></tr>
+    {% endfor %}
+  </table>
+  {% else %}<p class="muted">Jeszcze nie ma zapisanych zmian tej pozycji (historia jest zbierana od wlaczenia podgladu).</p>{% endif %}
+</details>

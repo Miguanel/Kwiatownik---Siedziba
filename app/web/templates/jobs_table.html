@@ -1,0 +1,16 @@
+<table>
+  <tr><th>#</th><th>Typ</th><th>Status</th><th>Postep</th><th>Start</th><th>Koniec</th><th></th></tr>
+  {% for j in jobs %}
+    <tr><td><a href="/jobs/{{ j.id }}">{{ j.id }}</a></td>
+        <td>{{ j.kind }}{% if names is defined and j.source_id %} - {{ names.get(j.source_id, "") }}{% endif %}
+            {% if j.retry_of %}<span class="muted" title="ponowienie zadania #{{ j.retry_of }}">&#8635;{{ j.retry_of }}</span>{% endif %}</td>
+        <td><span class="tag {{ j.status.value }}">{{ j.status.value }}</span></td>
+        <td>{{ j.progress or 0 }}/{{ j.total or "?" }}</td>
+        <td>{{ j.created_at | dt }}</td><td>{{ j.finished_at | dt }}</td>
+        <td>{% if j.status.value in ("failed", "cancelled") %}
+              <form class="inline" method="post" action="/jobs/{{ j.id }}/retry"><button title="uruchom ponownie / kontynuuj">Ponow</button></form>
+            {% endif %}</td></tr>
+  {% else %}
+    <tr><td colspan="7">Brak zadan.</td></tr>
+  {% endfor %}
+</table>

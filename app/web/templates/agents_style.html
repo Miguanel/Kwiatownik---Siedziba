@@ -1,0 +1,54 @@
+<style>
+  .ag-intro { margin-top: -6px; }
+  .ag-msg { background: #d7ecd9; border-radius: 8px; padding: 8px 12px; margin-bottom: 12px; }
+  .ag-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); gap: 12px; margin-bottom: 16px; }
+  .ag-grid.wide { grid-template-columns: repeat(auto-fit, minmax(min(100%, 440px), 1fr)); }
+  .ag-card { background: #fff; border-radius: 8px; padding: 12px 16px; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+  .ag-card h2, .ag-card h3 { font-size: 1.08em; margin: 2px 0; }
+  .ag-card p { margin: 0; }
+  .ag-card .ag-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: auto; padding-top: 6px; }
+  .ag-card form { margin: 0; }
+  .ag-bar { background: #fff; border-radius: 8px; padding: 10px 14px; display: flex; flex-wrap: wrap; gap: 8px 18px; align-items: center; margin-bottom: 14px; }
+  .ag-bar form { margin: 0; display: flex; gap: 6px; align-items: center; }
+  .ag-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: #b5b9ae; margin-right: 6px; }
+  .ag-dot.on { background: #3b9b4f; box-shadow: 0 0 0 3px #d7ecd9; }
+  .ag-dot.idle { background: #e0a43a; box-shadow: 0 0 0 3px #fff1c2; }
+  .ag-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; margin: 8px 0 14px; }
+  .ag-tile { background: #fff; border-radius: 8px; padding: 10px 12px; }
+  .ag-tile b { display: block; font-size: 1.5em; line-height: 1.2; font-variant-numeric: tabular-nums; }
+  .ag-score { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
+  .ag-score .big { font-size: 2.6em; font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums; }
+  .ag-up { color: #2f7d3a; } .ag-down { color: #b0412e; }
+  .ag-row { display: grid; grid-template-columns: minmax(110px, 38%) 1fr 3.2em; gap: 8px; align-items: center; margin: 5px 0; font-size: .92em; }
+  .ag-row b { text-align: right; font-variant-numeric: tabular-nums; }
+  .ag-track { background: #eef0e8; border-radius: 4px; height: 12px; overflow: hidden; }
+  .ag-track i { display: block; height: 100%; background: #2f5d3a; }
+  .ag-row.weak .ag-track i { background: #b5651d; }
+  .ag-tbl { overflow-x: auto; background: #fff; border-radius: 8px; margin-bottom: 14px; }
+  .ag-tbl table { font-size: .9em; }
+  .ag-tbl td.num, .ag-tbl th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .ag-tbl td.nw { white-space: nowrap; }
+  .ag-tbl .why { color: #4d574a; font-size: .92em; max-width: 520px; }
+  .ag-trend svg { width: 100%; height: 110px; display: block; overflow: visible; }
+  .ag-trend polyline { fill: none; stroke: #2f5d3a; stroke-width: 2; vector-effect: non-scaling-stroke; }
+  .ag-trend circle { fill: #2f5d3a; }
+  .ag-trend .grid { stroke: #e3e6dc; stroke-width: 1; vector-effect: non-scaling-stroke; }
+  .ag-list { margin: 4px 0 0; padding-left: 18px; }
+  .ag-list li { margin: 3px 0; }
+  .ag-filters { display: flex; gap: 6px; flex-wrap: wrap; margin: 0 0 12px; }
+  .ag-pager { display: flex; gap: 10px; align-items: center; margin: 10px 0 20px; }
+  .tag.s-proposed { background: #e6e0f5; } .tag.s-ordered { background: #dbe6f5; } .tag.s-running { background: #fff1c2; }
+  .tag.s-done { background: #d7ecd9; } .tag.s-failed { background: #f6d5d5; } .tag.s-skipped, .tag.s-expired { background: #eee; color: #666; }
+  .tag.src-audyt { background: #f3e3d3; } .tag.src-potok { background: #dbe6f5; } .tag.src-ciaglosc { background: #e3e6dc; }
+  .tag.p1 { background: #f6d5d5; } .tag.p2 { background: #ffe0b3; } .tag.p3 { background: #fff1c2; } .tag.p4, .tag.p5 { background: #eee; }
+  .ag-section { margin: 22px 0 8px; display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+  .ag-section h2 { margin: 0; font-size: 1.2em; }
+  pre.log.small { max-height: 260px; }
+  @media (max-width: 760px) {
+    .ag-row { grid-template-columns: minmax(90px, 42%) 1fr 3em; }
+    .ag-score .big { font-size: 2.1em; }
+    .ag-card .ag-actions button { flex: 1 1 140px; }
+    .ag-tbl table { display: table; white-space: normal; }
+    .ag-tbl .why { min-width: 220px; }
+  }
+</style>

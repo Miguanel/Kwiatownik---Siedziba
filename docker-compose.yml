@@ -1,0 +1,124 @@
+services:
+  siedziba:
+    build: .
+    container_name: siedziba
+    restart: unless-stopped
+    stop_grace_period: 30s          # czas na zapisanie stanu zadan przy zatrzymaniu (potem kill)
+    ports:
+      - "127.0.0.1:8000:8000"      # panel tylko z tego komputera (bez logowania - nie wystawiac w sieci)
+    env_file:
+      - .env
+    environment:
+      SEARXNG_URL: http://searxng:8080
+      OLLAMA_URL: http://ollama:11434
+      KWIATOWNIK_PRZEPISY_DIR: /kwiatownik/przepisy
+      KWIATOWNIK_PLANTS_DIR: /kwiatownik/plants
+      KWIATOWNIK1_PRZEPISY_DIR: /kwiatownik1/przepisy
+      MT_MODEL_DIR: ${MT_MODEL_DIR:-/models/nllb-200-distilled-600M}
+      DEPLOY_REPO_DIR: /kwiatownik2
+    volumes:
+      - ./data:/app/data
+      # Kwiatownik2: istniejace przepisy (sprawdzanie duplikatow) + tu trafia siedziba_przepisy.json
+      - ../Kwiatownik2/data/przepisy:/kwiatownik/przepisy
+      # katalog roslin: link_id skladnikow + zapis wiedzy o roslinach (blok "wiedza", nowe rosliny)
+      - ../Kwiatownik2/data/plants:/kwiatownik/plants
+      # cale repozytorium Kwiatownika2 - agent wdrozen robi commit danych + push (Render buduje strone sam)
+      - ../Kwiatownik2:/kwiatownik2
+      # archiwum starego Kwiatownika (1) - import przepisow leczniczych - tylko do odczytu
+      - ../Kwiatownik/static/data/przepisy:/kwiatownik1/przepisy:ro
+      # model tlumaczenia maszynowego NLLB (przygotowanie: docker compose --profile mt run --rm nllb-init)
+      - ./models:/models:ro
+    depends_on:
+      searxng:
+        condition: service_started
+        required: false
+      # Ollama opcjonalna: gdy nie wstanie (np. brak GPU po restarcie), Siedziba i tak startuje
+      ollama:
+        condition: service_started
+        required: false
+
+  # Lokalny model LLM - zapas, gdy Gemini i Groq maja limity (API z komputera: http://localhost:11435)
+  ollama:
+    image: ollama/ollama:latest
+    container_name: siedziba-ollama
+    ports:
+      # port na komputerze 11435 (11434 zajmuje zwykle Ollama zainstalowana w Windows); Siedziba laczy sie
+      # wewnatrz Dockera przez http://ollama:11434, wiec ten port jest tylko do podgladu z przegladarki
+      - "11435:11434"
+    volumes:
+      - ollama_models:/root/.ollama
+    environment:
+      OLLAMA_KEEP_ALIVE: 10m        # po 10 min bez uzycia model zwalnia pamiec (RAM/VRAM)
+      OLLAMA_FLASH_ATTENTION: "1"   # mniej pamieci na kontekst -> wiecej modelu miesci sie w GPU
+      OLLAMA_KV_CACHE_TYPE: q8_0    # pamiec kontekstu w 8 bitach (~polowa)
+      OLLAMA_MAX_LOADED_MODELS: "1" # nigdy dwa modele naraz w pamieci
+    restart: unless-stopped
+    # Karta NVIDIA (znacznie szybciej). Bez GPU NVIDIA zakomentuj caly blok deploy ponizej:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  # Meta-wyszukiwarka do odkrywania nowych stron (panel SearXNG: http://localhost:8081)
+  searxng:
+    image: searxng/searxng:latest
+    container_name: siedziba-searxng
+    ports:
+      - "8081:8080"
+    volumes:
+      - ./searxng:/etc/searxng
+    restart: unless-stopped
+
+  # Jednorazowe przygotowanie modelu tlumaczenia NLLB-200 (Meta) dla CTranslate2 -> ./models
+  #   docker compose --profile mt run --rm nllb-init
+  # Pobiera model z Hugging Face (~2,5 GB) i zapisuje wersje int8 (~0,6 GB). Gdy model juz jest - konczy od razu.
+  # Wiekszy, lepszy model: NLLB_MODEL=facebook/nllb-200-distilled-1.3B (i MT_MODEL_DIR w .env / ponizej).
+  # Licencja modelu NLLB: CC-BY-NC 4.0 (uzycie niekomercyjne).
+  nllb-init:
+    image: python:3.11-slim
+    profiles: ["mt"]
+    volumes:
+      - ./models:/models
+    environment:
+      NLLB_MODEL: ${NLLB_MODEL:-facebook/nllb-200-distilled-600M}
+    command:
+      - sh
+      - -c
+      - |
+        set -e
+        OUT=/models/$$(basename $$NLLB_MODEL)
+        if [ -f $$OUT/model.bin ] && [ -f $$OUT/sentencepiece.bpe.model ]; then echo "Model juz jest: $$OUT"; exit 0; fi
+        pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu torch
+        pip install --no-cache-dir "ctranslate2>=4.4" "transformers>=4.40,<5" sentencepiece protobuf
+        ct2-transformers-converter --model $$NLLB_MODEL --output_dir $$OUT.tmp --quantization int8 --copy_files sentencepiece.bpe.model --force
+        rm -rf $$OUT && mv $$OUT.tmp $$OUT
+        echo "Gotowe: $$OUT"; ls -la $$OUT
+
+  # VPN dla Ukrainy (proxy HTTP na porcie 8888). Start: docker compose --profile vpn up -d
+  # Dane logowania dostawcy VPN ustaw w .env (VPN_SERVICE_PROVIDER, VPN_TYPE, WIREGUARD_... / OPENVPN_...).
+  # Kolejny kraj = skopiuj ten blok (vpn-de, SERVER_COUNTRIES=Germany) i dopisz do COUNTRY_PROXIES.
+  vpn-ua:
+    image: qmcgaw/gluetun:latest
+    container_name: siedziba-vpn-ua
+    profiles: ["vpn"]
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    environment:
+      VPN_SERVICE_PROVIDER: ${VPN_SERVICE_PROVIDER:-}
+      VPN_TYPE: ${VPN_TYPE:-openvpn}
+      OPENVPN_USER: ${OPENVPN_USER:-}
+      OPENVPN_PASSWORD: ${OPENVPN_PASSWORD:-}
+      WIREGUARD_PRIVATE_KEY: ${WIREGUARD_PRIVATE_KEY:-}
+      WIREGUARD_ADDRESSES: ${WIREGUARD_ADDRESSES:-}
+      SERVER_COUNTRIES: Ukraine
+      HTTPPROXY: "on"
+      TZ: Europe/Warsaw
+    restart: unless-stopped
+
+volumes:
+  ollama_models:

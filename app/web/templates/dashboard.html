@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Panel</h1>
+<p class="muted">Zrodel: {{ sources }} &middot; zadania: {{ running }}/{{ limit }} dziala, {{ waiting }} w kolejce
+  &middot; przepisow znalezionych na kilku stronach (dodatkowe zrodla): {{ dups }}</p>
+{% for kind, label in [("recipe", "Przepisy"), ("fact", "Ciekawostki")] %}
+<h2>{{ label }}</h2>
+<div class="cards">
+  {% for status, n in counts[kind].items() if status not in ("error",) %}
+    <a class="card" style="text-decoration:none;color:inherit" href="/items?kind={{ kind }}&status={{ status }}"><b>{{ n }}</b>{{ status }}</a>
+  {% endfor %}
+</div>
+{% endfor %}
+<h2>Ostatnie zadania</h2>
+{% include "jobs_table.html" %}
+{% endblock %}

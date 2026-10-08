@@ -1,0 +1,152 @@
+{% extends "base.html" %}
+{% block content %}
+<p><a href="/plants">&larr; Rosliny</a></p>
+<h1>{{ plant.nazwa_pl }} <small class="muted"><i>{{ plant.nazwa_lat or "" }}</i></small></h1>
+<p class="muted">
+  <span class="tag">{{ plant.origin }}</span>
+  {% if plant.wikidata %} &middot; <a href="https://www.wikidata.org/wiki/{{ plant.wikidata }}" target="_blank" rel="noopener">Wikidata {{ plant.wikidata }}</a>{% endif %}
+  {% for lang, t in titles.items() %}{% if loop.index <= 12 %} &middot; <a href="https://{{ lang }}.wikipedia.org/wiki/{{ t | replace(' ', '_') }}" target="_blank" rel="noopener">{{ lang }}</a>{% endif %}{% endfor %}
+  &middot; {% if has_file %}plik w Kwiatowniku: {{ plant.id }}.json{% else %}brak pliku w Kwiatowniku{% endif %}
+  {% if plant.note %}<br><span class="tag failed">{{ plant.note }}</span>{% endif %}
+</p>
+
+<div class="pl-actions">
+  <form class="inline" method="post" action="/plants/{{ plant.id }}/research"><button>Zbierz wiedze ponownie</button></form>
+  <form class="inline" method="post" action="/plants/{{ plant.id }}/apply"><button title="zapis zweryfikowanych informacji do pliku rosliny (kopia + kontrola)">Zapisz zweryfikowane do Kwiatownika</button></form>
+  {% if has_file %}<form class="inline" method="post" action="/plants/{{ plant.id }}/organize"><button title="agregator: uklada wiedze z pliku w sekcje, laczy powtorzenia, numeruje zrodla">Uporzadkuj wiedze w pliku</button></form>{% endif %}
+  {% if has_file %}<form class="inline" method="post" action="/plants/{{ plant.id }}/merge"><button title="wmontuj wiedze z sieci w istniejace rozdzialy i podrozdzialy strony (Bielik -> inne modele), ze zrodlami">Scal z rozdzialami</button></form>{% endif %}
+  {% if merged %}<form class="inline" method="post" action="/plants/{{ plant.id }}/unmerge" onsubmit="return confirm('Usunac scalenie? Strona wroci do recznych tekstow, wiedza z sieci zostanie w swojej zakladce.')"><button title="strona wraca do recznych tekstow (kopia zapasowa w data/backups)">Usun scalenie</button></form>{% endif %}
+</div>
+{% if msg %}<p class="box" style="display:block">{{ msg }}</p>{% endif %}
+
+<details class="box schema-box" open>
+  <summary><b>Schemat rosliny: {{ cov.procent }}% podrozdzialow ma tresc</b>
+    {% if cov.puste %}<span class="muted"> - brakuje {{ cov.puste | length }}; kolejne "Zbierz wiedze" szuka wlasnie ich (takze po chinsku i japonsku)</span>{% endif %}</summary>
+  <div class="schema-grid">
+  {% for chapter, rows in chapters %}
+    <div class="schema-ch">
+      <b>{{ chapter }}</b>
+      <ul>
+      {% for r in rows %}
+        <li><span class="st {{ r.status | replace('+', '_') }}">{{ status_labels.get(r.status, r.status) }}</span> {{ r.title }}
+          {% if r.zrodla %}<span class="muted">({{ r.zrodla }} zrodel)</span>{% endif %}
+          {% if r.status == "czeka" %}<span class="muted">({{ r.web }} inf.)</span>{% endif %}</li>
+      {% endfor %}
+      </ul>
+    </div>
+  {% endfor %}
+  </div>
+</details>
+
+{% set history_link = "/plants/" ~ plant.id %}{% include "snapshot_history.html" %}
+{% if merged %}
+<h2>Wiedza wmontowana w rozdzialy ({{ merged | length }})</h2>
+<p class="muted">Tak wyglada strona rosliny w Kwiatowniku: tekst reczny polaczony z informacjami z sieci, numery prowadza do zrodel.
+  Reczne pola pliku sa nietkniete - "oryginal" mozna zawsze przywrocic.</p>
+<div class="merged-list">
+{% for m in merged %}
+  <div class="merged {% if not m.aktualny %}stale{% endif %}">
+    <div class="merged-head"><b>{{ m.tytul }}</b> <span class="muted">{{ m.model }}</span>
+      {% if not m.aktualny %}<span class="tag failed" title="reczny tekst zmienil sie po scaleniu - strona pokazuje tekst reczny; kliknij Scal z rozdzialami">nieaktualne</span>{% endif %}</div>
+    {% if m.typ == "lista" %}<ul>{% for t in m.tresc %}<li>{{ t.tekst }}{% for z in t.linki %} <a class="ref" href="{{ z.url }}" target="_blank" rel="noopener nofollow" title="{{ z.nazwa }}">[{{ z.nr }}]</a>{% endfor %}</li>{% endfor %}</ul>
+    {% else %}<p>{% for t in m.tresc %}{{ t.tekst }}{% for z in t.linki %}<a class="ref" href="{{ z.url }}" target="_blank" rel="noopener nofollow" title="{{ z.nazwa }}">[{{ z.nr }}]</a>{% endfor %} {% endfor %}</p>{% endif %}
+    {% if m.oryginal %}<details><summary class="muted">tekst Kwiatownika (oryginal)</summary>
+      <blockquote>{% if m.oryginal is string %}{{ m.oryginal }}{% else %}{{ m.oryginal | join(" / ") }}{% endif %}</blockquote></details>
+    {% else %}<p class="muted">nowy podrozdzial (w pliku byl pusty)</p>{% endif %}
+  </div>
+{% endfor %}
+</div>
+{% endif %}
+
+{% if queries %}
+<details class="box schema-box">
+  <summary><b>Ostatnie zapytania o brakujace informacje ({{ queries | length }})</b></summary>
+  <table>
+    <tr><th>kiedy</th><th>jezyk</th><th>luka</th><th>zapytanie</th><th>wynik</th></tr>
+    {% for q in queries %}
+    <tr><td>{{ q.created_at.strftime('%Y-%m-%d') }}</td><td>{{ q.language }}</td><td>{{ q.slot }}</td><td>{{ q.query }}</td>
+      <td>{% if q.used_url %}<a href="{{ q.used_url }}" target="_blank" rel="noopener nofollow">strona</a>, {{ q.facts }} inf.{% else %}<span class="muted">{{ q.results }} wynikow, nic o roslinie</span>{% endif %}</td></tr>
+    {% endfor %}
+  </table>
+</details>
+{% endif %}
+{% if has_file %}<div class="pl-actions"><form class="inline" method="post" action="/plants/{{ plant.id }}/photos"><button title="Wikidata + Wikimedia Commons, bez LLM">Pobierz zdjecia z Wikipedii</button></form></div>{% endif %}
+{% if photos.zdjecia or photos.autorzy %}
+<h2>Zdjecia z Wikipedii / Commons{% if photos.at %} <small class="muted">{{ photos.at.strftime('%Y-%m-%d') }}</small>{% endif %}</h2>
+{% if photos.autorzy %}<p class="muted">Galeria w Kwiatowniku jest wpisana recznie - Siedziba jej nie zmienia, dopisuje tylko autorow i licencje.</p>{% endif %}
+<div class="photo-grid">
+  {% for z in (photos.zdjecia or photos.autorzy) %}
+  <figure class="photo-card">
+    <a href="{{ z.plik }}" target="_blank" rel="noopener"><img src="{{ z.url }}" alt="{{ z.podpis }}" loading="lazy"></a>
+    <figcaption><b>{{ z.podpis }}</b><br><span class="muted">{{ z.autor }}, {% if z.licencja_url %}<a href="{{ z.licencja_url }}" target="_blank" rel="noopener">{{ z.licencja }}</a>{% else %}{{ z.licencja }}{% endif %}</span></figcaption>
+  </figure>
+  {% endfor %}
+</div>
+<style>
+  .photo-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 10px; margin-bottom: 14px; }
+  .photo-card { margin: 0; border: 1px solid #ddd; border-radius: 6px; overflow: hidden; background: #fff; }
+  .photo-card img { width: 100%; height: 140px; object-fit: cover; display: block; }
+  .photo-card figcaption { padding: 6px 8px; font-size: .85em; overflow-wrap: anywhere; }
+</style>
+{% endif %}
+{% if layout %}
+<p class="muted">Uklad w pliku Kwiatownika: {{ layout.points }} punktow w {{ layout.sections }} sekcjach,
+  {{ layout.sources }} zrodel{% if layout.how %} &middot; {{ layout.how }}{% endif %}{% if layout.date %} &middot; {{ layout.date }}{% endif %}</p>
+{% elif has_file and plant.last_apply_at %}
+<p class="muted">Wiedza w pliku nie jest jeszcze uporzadkowana - kliknij "Uporzadkuj wiedze w pliku".</p>
+{% endif %}
+
+<p class="pl-filter">
+  <a href="/plants/{{ plant.id }}" {% if not status %}style="font-weight:bold"{% endif %}>wszystkie</a>
+  {% for st in statuses %} &middot; <a href="/plants/{{ plant.id }}?status={{ st }}" {% if status == st %}style="font-weight:bold"{% endif %}>{{ st }} ({{ counts.get(st, 0) }})</a>{% endfor %}
+</p>
+
+{% for section, facts in by_section.items() %}
+  <h2>{{ section_titles.get(section, section) }}</h2>
+  <div class="fact-list">
+  {% for f in facts %}
+    <div class="fact {{ f.status }}">
+      <div>{{ f.text }}{% if f.part %} <span class="tag">{{ f.part }}</span>{% endif %}</div>
+      <div class="muted fact-meta">
+        <span class="tag {{ 'applied' if f.status == 'applied' else ('done' if f.status == 'verified' else ('failed' if f.status == 'rejected' else 'queued')) }}">{{ f.status }}</span>
+        <a href="{{ f.source_url }}" target="_blank" rel="noopener nofollow">{{ f.source_name or f.source_url }}</a>
+        {% if f.language %}[{{ f.language }}]{% endif %}
+        {% if f.reason %} &middot; {{ f.reason }}{% endif %}
+      </div>
+      {% if f.quote %}<details><summary class="muted">cytat ze zrodla</summary><blockquote>{{ f.quote }}</blockquote></details>{% endif %}
+      {% if f.status != "applied" %}
+      <form class="inline" method="post" action="/plants/facts/{{ f.id }}/status">
+        {% if f.status == "rejected" %}<button name="status" value="new">Przywroc do weryfikacji</button>
+        {% else %}<button name="status" value="rejected">Odrzuc</button>{% endif %}
+      </form>
+      {% endif %}
+    </div>
+  {% endfor %}
+  </div>
+{% else %}
+  <p class="muted">Brak informacji - kliknij "Zbierz wiedze ponownie".</p>
+{% endfor %}
+
+<style>
+  .pl-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+  .fact-list { display: flex; flex-direction: column; gap: 8px; }
+  .fact { background: #fff; border-radius: 8px; padding: 10px 12px; border-left: 4px solid #e3e6dc; overflow-wrap: anywhere; }
+  .fact.applied { border-left-color: #2f5d3a; } .fact.verified { border-left-color: #7fb685; }
+  .fact.rejected { opacity: .6; border-left-color: #d98c8c; }
+  .fact-meta { margin-top: 4px; }
+  .schema-box { display: block; }
+  .schema-box summary { cursor: pointer; }
+  .schema-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px; margin-top: 10px; }
+  .schema-ch ul { list-style: none; padding: 0; margin: 4px 0 0; }
+  .schema-ch li { margin: 3px 0; overflow-wrap: anywhere; }
+  .st { display: inline-block; min-width: 92px; padding: 0 6px; border-radius: 8px; font-size: .78em; text-align: center; }
+  .st.reczne { background: #cfe8d2; } .st.reczne_sieci, .st.z_sieci { background: #d3e2f4; }
+  .st.czeka { background: #f7e7b4; } .st.brak { background: #f3d6cf; }
+  .merged-list { display: flex; flex-direction: column; gap: 10px; margin-bottom: 14px; }
+  .merged { background: #fff; border-radius: 8px; padding: 10px 12px; border-left: 4px solid #4f86c6; overflow-wrap: anywhere; }
+  .merged.stale { border-left-color: #d98c8c; opacity: .8; }
+  .merged-head { display: flex; flex-wrap: wrap; gap: 6px; align-items: baseline; }
+  .ref { font-size: .75em; vertical-align: super; text-decoration: none; margin-left: 1px; }
+  blockquote { margin: 6px 0; padding-left: 10px; border-left: 3px solid #e3e6dc; color: #555; font-size: .9em; }
+</style>
+{% endblock %}

@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+{% from "agents_macros.html" import bars, trend_svg, task_table, proposals %}
+{% block content %}
+{% include "agents_style.html" %}
+<h1>Agenci Siedziby</h1>
+<p class="muted ag-intro">Cel: wiedza o roslinach trudna do zdobycia (zrodla zagraniczne, Chiny, Japonia, medycyna Wschodu, barwienie)
+  i opowiesci z nimi zwiazane. Audytor ocenia baze wiedzy Kwiatownika, Zleceniodawca zleca zalecenia Siedzibie,
+  a Planista pilnuje, zeby kolejka nigdy nie stala.
+  <a href="/agents/runs">Historia przebiegow</a> &middot; <a href="/agents/tasks">Historia zadan</a></p>
+{% if msg %}<div class="ag-msg">{{ msg }}</div>{% endif %}
+
+{% include "agents_status.html" %}
+
+<div class="ag-grid">
+  {% for key, name in agents.items() %}{% set r = last[key] %}
+  <div class="ag-card">
+    <h2>{{ name }}</h2>
+    <p class="muted">{{ info[key] }}</p>
+    <p>{% if r %}Ostatnio: <a href="/agents/runs/{{ r.id }}">#{{ r.id }}</a> {{ (r.updated_at or r.created_at)|dt }}
+        <span class="tag {{ 'running' if r.status == 'running' else ('failed' if r.status == 'failed' else 'done') }}">{{ r.status }}</span>
+        {% if r.repeats %}<span class="muted">(x{{ r.repeats + 1 }})</span>{% endif %}<br>{{ r.summary or '' }}
+      {% else %}<span class="muted">Jeszcze nie dzialal.</span>{% endif %}</p>
+    <p class="muted"><a href="/agents/runs?agent={{ key }}">przebiegi: {{ n_runs.get(key, 0) }}</a></p>
+    <div class="ag-actions">
+      {% if key == 'audytor' %}
+        <form method="post" action="/agents/run/audytor"><button {% if running.audytor %}disabled{% endif %}>{{ 'Audyt w toku...' if running.audytor else 'Uruchom audyt' }}</button></form>
+        {% if not has_llm %}<span class="muted">bez LLM - tylko metryki</span>{% endif %}
+      {% elif key == 'zleceniodawca' %}
+        <form method="post" action="/agents/run/zleceniodawca"><button {% if running.zleceniodawca or not counts.get('proposed') %}disabled{% endif %}>Zlec zalecenia audytu ({{ counts.get('proposed', 0) }})</button></form>
+      {% elif key == 'wdrozeniowiec' %}
+        {% if deploy_ready %}<span class="muted ag-down">{{ deploy_ready }}</span>{% endif %}
+        <form method="post" action="/agents/run/wdrozeniowiec"><input type="hidden" name="mode" value="check"><button {% if running.wdrozeniowiec %}disabled{% endif %} title="Policz nowe dane i sprawdz, czy juz pora publikowac (bez publikacji)">Sprawdz, co nowego</button></form>
+        <form method="post" action="/agents/run/wdrozeniowiec"><input type="hidden" name="mode" value="force"><button {% if running.wdrozeniowiec or deploy_ready %}disabled{% endif %} title="Commit i push nowych danych teraz, bez czekania na progi">Opublikuj teraz</button></form>
+      {% else %}
+        <form method="post" action="/agents/run/planista"><input type="hidden" name="mode" value="check"><button>Sprawdz teraz</button></form>
+        <form method="post" action="/agents/run/planista"><input type="hidden" name="mode" value="order"><button title="Zleca najlepsza propozycje nawet gdy cos juz dziala">Zlec nastepne zadanie</button></form>
+      {% endif %}
+    </div>
+  </div>
+  {% endfor %}
+</div>
+
+{% if audit %}{% set m = rep.metryki %}{% set ex = rep.ekspert %}{% set ch = rep.zmiany or {} %}
+<div class="ag-section"><h2>Ostatni raport audytu</h2>
+  <a href="/agents/runs/{{ audit.id }}">pelny raport #{{ audit.id }}</a><span class="muted">{{ audit.created_at|dt }}</span></div>
+<div class="ag-grid wide">
+  <div class="ag-card">
+    <div class="ag-score"><span class="big">{{ audit.score|round(0)|int }}</span>
+      <span>/100{% if ch.ocena is defined and ch.ocena is not none %} <b class="{{ 'ag-up' if ch.ocena > 0 else 'ag-down' if ch.ocena < 0 else '' }}">{{ '%+.1f'|format(ch.ocena) }}</b> od poprzedniego{% endif %}<br>
+        <span class="muted">kod {{ audit.code_score }}{% if audit.expert_score is not none %} &middot; ekspert {{ audit.expert_score }} ({{ audit.model }}){% else %} &middot; bez eksperta LLM{% endif %}</span></span></div>
+    <h3>Metryki kodem (srednia roslin)</h3>
+    {{ bars(m.kryteria, criteria) }}
+    {% if ex %}<h3>Ekspert (1-10)</h3>{{ bars(ex.oceny, criteria, 10) }}{% endif %}
+  </div>
+  <div class="ag-card">
+    <h3>Ocena w czasie</h3>
+    {{ trend_svg(trend) or '' }}{% if not trend %}<p class="muted">Wykres pojawi sie po drugim audycie.</p>{% endif %}
+    {% if ex and ex.podsumowanie %}<h3>Podsumowanie eksperta</h3><p>{{ ex.podsumowanie }}</p>{% endif %}
+    {% if ex and ex.pomysly %}<h3>Gdzie szukac</h3><ul class="ag-list">{% for x in ex.pomysly %}<li>{{ x }}</li>{% endfor %}</ul>{% endif %}
+  </div>
+</div>
+<div class="ag-tiles">
+  <div class="ag-tile"><b>{{ m.kpi.rosliny }}</b>roslin</div>
+  <div class="ag-tile"><b>{{ m.kpi.z_wiedza_z_sieci }}</b>z wiedza z sieci</div>
+  <div class="ag-tile"><b>{{ m.kpi.punkty }}</b>informacji z sieci</div>
+  <div class="ag-tile"><b>{{ m.kpi.udzial_trudnych }}%</b>trudno dostepnych</div>
+  <div class="ag-tile"><b>{{ m.kpi.z_azja }}</b>roslin ze zrodlami z Azji</div>
+  <div class="ag-tile"><b>{{ m.kpi.opowiesci_zagraniczne }}</b>opowiesci z zagranicy</div>
+  <div class="ag-tile"><b>{{ m.kpi.przepisy_niekulinarne }}</b>przepisow niekulinarnych</div>
+</div>
+{% if m.problemy_danych %}<p class="ag-msg" style="background:#f6d5d5">Audytor znalazl bledy w plikach roslin ({{ m.problemy_danych|length }}):
+  {{ m.problemy_danych[:2]|join('; ') }}{% if m.problemy_danych|length > 2 %} ... <a href="/agents/runs/{{ audit.id }}">wszystkie</a>{% endif %}</p>{% endif %}
+{% endif %}
+
+{% if guard %}
+<div class="ag-section"><h2>Straznik kolejki</h2><span class="muted">zadania zawieszone (bez znaku zycia od {{ stall }} min) i martwe - ostatnie zdarzenia</span></div>
+<div class="ag-tbl"><table>
+  <tr><th>Kiedy</th><th>Zadanie</th><th>Co sie stalo</th><th>Akcja</th></tr>
+  {% for e in guard %}<tr><td class="nw"><a href="/agents/runs/{{ e.run }}">{{ e.at|dt("%m-%d %H:%M") }}</a></td>
+    <td class="nw"><a href="/jobs/{{ e.job }}">#{{ e.job }} {{ e.kind }}</a></td>
+    <td><span class="tag {{ 'failed' if e.typ == 'martwe' else 'running' }}">{{ e.typ }}</span> <span class="why">{{ e.opis }}</span></td>
+    <td class="nw">{{ e.akcja }}</td></tr>{% endfor %}
+</table></div>
+{% endif %}
+
+<div class="ag-section"><h2>Propozycje planisty</h2>
+  {% if plan %}<span class="muted">{{ last.planista.updated_at|dt if last.planista.updated_at else '' }} - {{ plan.decyzja }}</span>{% endif %}</div>
+{% if plan and plan.propozycje %}{{ proposals(plan.propozycje[:6]) }}{% else %}
+<p class="muted">Planista jeszcze nie sprawdzal kolejki - kliknij "Sprawdz teraz".</p>{% endif %}
+
+<div class="ag-section"><h2>Zalecenia audytu do zlecenia</h2><span class="muted">{{ proposed|length }} najpilniejszych</span></div>
+{{ task_table(proposed, "/agents", True, True) }}
+
+<div class="ag-section"><h2>Ostatnio zlecone zadania</h2><a href="/agents/tasks">cala historia</a></div>
+{{ task_table(tasks, "/agents") }}
+{% endblock %}

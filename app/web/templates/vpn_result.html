@@ -1,0 +1,6 @@
+{% if r.ok %}
+  IP {{ r.ip }} &middot; kraj <b>{{ r.country | upper }}</b>{% if r.city %} ({{ r.city }}){% endif %} &middot; {{ r.ms }} ms
+  {% if r.country != country %}<span style="color:#b00"> - uwaga: to nie jest {{ country | upper }}!</span>{% else %} <span class="tag done">OK</span>{% endif %}
+{% else %}
+  <span style="color:#b00">{{ r.error }}</span>
+{% endif %}

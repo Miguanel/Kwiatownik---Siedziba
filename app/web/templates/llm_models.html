@@ -1,0 +1,28 @@
+{% if not configured %}
+  <p style="color:#b00">Brak providerow - uzupelnij GEMINI_API_KEY / GROQ_API_KEY w .env i zrestartuj aplikacje.</p>
+{% endif %}
+{% for name, err in errors.items() %}
+  <p style="color:#b00">Nie pobrano modeli z {{ name }}: {{ err }}</p>
+{% endfor %}
+<table>
+  <tr><th>#</th><th>Provider</th><th>Model</th><th title="ocena z nazwy modelu">Ocena</th><th title="ocena x niezawodnosc - spada po bledach i limitach">Biezaca</th><th>OK</th><th>Kary</th><th title="ile razy wyczerpal limit">Limity</th><th>Sr. czas [s]</th><th>Status</th></tr>
+  {% for m in models %}
+    <tr {% if m.cooldown_s %}style="opacity:.55"{% endif %}>
+      <td>{{ m.position }}</td>
+      <td>{{ m.provider }}</td>
+      <td>{{ m.model }}{% if m.pinned %} &#128204;{% endif %}{% if m.fallback %} <span class="tag" title="lokalny model zapasowy - uzywany na koncu">&#128190; zapas</span>{% endif %}</td>
+      <td>{{ m.score }}</td>
+      <td><b>{{ m.rating }}</b></td>
+      <td>{{ m.successes }}</td>
+      <td>{{ m.failures }}</td>
+      <td>{{ m.limit_hits or 0 }}</td>
+      <td>{{ m.avg_latency if m.avg_latency is not none else "-" }}</td>
+      <td title="{{ m.last_error or '' }}">
+        {% if m.cooldown_s %}{% if m.cooldown_s >= 3600 %}limit - przerwa {{ (m.cooldown_s / 3600) | round(1) }} h{% elif m.cooldown_s >= 120 %}przerwa {{ (m.cooldown_s / 60) | round | int }} min{% else %}przerwa {{ m.cooldown_s }} s{% endif %}
+        {% elif m.streak %}zawiodl {{ m.streak }}x{% else %}gotowy{% endif %}
+      </td>
+    </tr>
+  {% else %}
+    <tr><td colspan="10">Brak modeli - kliknij "Odswiez liste modeli".</td></tr>
+  {% endfor %}
+</table>

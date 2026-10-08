@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>{{ src.name }}</h1>
+<p><a href="{{ src.base_url }}" target="_blank">{{ src.base_url }}</a> &middot; jezyk: {{ src.language }}
+  &middot; przeskanowanych stron: {{ src.pages_scanned or 0 }} &middot; ostatni skan: {{ src.last_scan_at | dt }}</p>
+{% if src.needs_js %}<p style="color:#b00">Ta strona wyglada na renderowana w JavaScript - czesc tresci moze byc niedostepna.</p>{% endif %}
+
+<form class="box" method="post" action="/sources/{{ src.id }}/edit">
+  <label>Slowa kluczowe <input name="keywords" value="{{ src.keywords or '' }}" size="40"></label>
+  <label title="kod kraju - wlacza VPN tego kraju (COUNTRY_PROXIES)">Kraj <input name="country" value="{{ src.country or '' }}" size="3"></label>
+  <label>stron <input name="max_pages" type="number" value="{{ src.max_pages }}" style="width:70px"></label>
+  <label>glebokosc <input name="max_depth" type="number" value="{{ src.max_depth }}" style="width:55px"></label>
+  <label><input type="checkbox" name="active" value="true" {% if src.active %}checked{% endif %}> aktywne</label>
+  <label title="codzienny automatyczny skan"><input type="checkbox" name="auto_scan" value="true" {% if src.auto_scan %}checked{% endif %}> auto (co dzien)</label>
+  <button>Zapisz</button>
+</form>
+<form class="inline" method="post" action="/sources/{{ src.id }}/scan"><button>Skanuj teraz</button></form>
+{% if src.profile_status in ("ready", "degraded") %}
+<form class="inline" method="post" action="/scrapers/{{ src.id }}/harvest"><button title="pelne pobieranie strony gotowym profilem scrapera">Pobierz cala strone</button></form>
+{% endif %}
+<a href="/items?source_id={{ src.id }}">Zebrane z tej strony &rarr;</a>
+
+<h2>Scraper tej strony (zbudowany przez LLM)</h2>
+{% if profile %}
+  <p><span class="tag {{ src.profile_status }}">{{ src.profile_status }}</span>
+     zbudowany {{ profile.built_at[:16].replace("T", " ") }} przez <b>{{ profile.built_with }}</b>
+     &middot; walidacja: pokrycie {{ ((profile.validation.coverage or 0) * 100) | round | int }}%,
+     regex P={{ profile.validation.regex.precision if profile.validation.regex else "-" }}
+     R={{ profile.validation.regex.recall if profile.validation.regex else "-" }}
+     &middot; uzyty {{ profile.stats.used or 0 }}x, zawiodl {{ profile.stats.failed or 0 }}x</p>
+  {% if src.profile_status == "failed" %}<p style="color:#b00">Profil nie przeszedl walidacji: {{ (profile.validation.errors or [])[:3] | join("; ") }}</p>{% endif %}
+  {% if src.profile_status == "degraded" %}<p style="color:#a60">Profil coraz czesciej zawodzi - strona mogla zmienic wyglad. Przebuduj go.</p>{% endif %}
+  <details><summary>Pokaz profil (regex + selektory)</summary><pre class="log">{{ profile_json }}</pre></details>
+{% else %}
+  <p class="muted">Brak profilu. LLM obejrzy kilka znalezionych przepisow z tej strony i zapisze regex adresow oraz
+    selektory CSS (skladniki, kroki, tytul...). Profil jest sprawdzany na prawdziwych stronach, a potem skany
+    i pobieranie z listy dzialaja bez LLM. Potrzebne min. 2 znalezione przepisy (teraz: {{ recipes }}).</p>
+{% endif %}
+<div style="display:flex;gap:8px;margin:8px 0 16px">
+  <form method="post" action="/sources/{{ src.id }}/build-profile"><button {% if recipes < 2 %}disabled{% endif %}>
+    {% if profile %}Przebuduj scraper{% else %}Zbuduj scraper (LLM){% endif %}</button></form>
+  {% if profile %}<form method="post" action="/sources/{{ src.id }}/profile/delete"
+     onsubmit="return confirm('Usunac profil scrapera?')"><button>Usun profil</button></form>{% endif %}
+</div>
+
+<h3>Pobierz z listy adresow</h3>
+<form method="post" action="/sources/{{ src.id }}/fetch-list" class="box" style="flex-direction:column;align-items:stretch">
+  <textarea name="urls" rows="5" placeholder="https://... (jeden adres w linii, tylko z tej domeny)"></textarea>
+  <div><button>Pobierz te strony</button>
+    <span class="muted">{% if profile and src.profile_status in ("ready", "degraded") %}uzyje profilu scrapera{% else %}bez profilu - klasyfikacja jak przy skanie{% endif %}</span></div>
+</form>
+
+<h2>Czego crawler nauczyl sie o tej stronie</h2>
+<p class="muted">Wzorce adresow: trafienia = przepisy/ciekawostki, pudla = inne strony, odkrycia = trafienia znalezione
+  przez linki z takich stron (huby). Wzorce z 8+ pudlami i zerem trafien/odkryc sa pomijane.</p>
+<table>
+  <tr><th>Wzorzec URL</th><th>Trafienia</th><th>Pudla</th><th>Odkrycia</th><th>Skutecznosc</th></tr>
+  {% for p in patterns %}
+    {% set dead = p.misses >= 8 and p.hits == 0 and p.discovered == 0 %}
+    <tr {% if dead %}style="opacity:.5"{% endif %}>
+      <td><code>{{ p.pattern }}</code>{% if dead %} <span class="tag">pomijany</span>{% endif %}</td>
+      <td>{{ p.hits }}</td><td>{{ p.misses }}</td><td>{{ p.discovered }}</td>
+      <td>{{ ((p.hits + 1) / (p.hits + p.misses + 2) * 100) | round | int }}%</td>
+    </tr>
+  {% else %}
+    <tr><td colspan="5">Jeszcze nic - uruchom skanowanie.</td></tr>
+  {% endfor %}
+</table>
+{% if patterns %}
+<form method="post" action="/sources/{{ src.id }}/forget-patterns" style="margin-top:8px"
+      onsubmit="return confirm('Zapomniec wyuczone wzorce tej strony?')"><button>Zapomnij wzorce</button></form>
+{% endif %}
+
+<h2>Zadania</h2>
+{% include "jobs_table.html" %}
+{% endblock %}

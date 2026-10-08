@@ -1,0 +1,63 @@
+{% macro bars(values, labels, scale=100, weak=50) -%}
+  {% for k, label in labels.items() %}{% if values.get(k) is not none %}
+    {% set v = values[k] %}
+    <div class="ag-row {{ 'weak' if v * 100 / scale < weak else '' }}"><span>{{ label }}</span>
+      <span class="ag-track"><i style="width: {{ (v * 100 / scale)|round(0) }}%"></i></span><b>{{ v }}</b></div>
+  {% endif %}{% endfor %}
+{%- endmacro %}
+
+{% macro trend_svg(trend, label="Ocena kolejnych audytow") -%}
+  {% if trend %}
+  <div class="ag-trend" role="img" aria-label="{{ label }}">
+    <svg viewBox="0 -4 100 108" preserveAspectRatio="none">
+      <line class="grid" x1="0" y1="25" x2="100" y2="25"></line><line class="grid" x1="0" y1="50" x2="100" y2="50"></line>
+      <line class="grid" x1="0" y1="75" x2="100" y2="75"></line>
+      <polyline points="{{ trend.line }}"></polyline>
+    </svg>
+    <div class="muted" style="display:flex;justify-content:space-between;font-size:.8em">
+      <span>#{{ trend.pts[0][2] }}: {{ trend.pts[0][3] }}</span><span>{{ label }} (0-100)</span><span>#{{ trend.pts[-1][2] }}: {{ trend.pts[-1][3] }}</span>
+    </div>
+  </div>
+  {% endif %}
+{%- endmacro %}
+
+{% macro task_table(rows, back="/agents", actions=True, show_reason=False) -%}
+  <div class="ag-tbl"><table>
+    <tr><th>#</th><th>Zadanie</th><th>Od</th><th>Status</th><th>W Siedzibie</th><th>Wynik</th>{% if actions %}<th></th>{% endif %}</tr>
+    {% for r in rows %}{% set t = r.t %}
+    <tr>
+      <td class="nw">{{ t.id }}<br><span class="tag p{{ t.priority }}" title="priorytet">P{{ t.priority }}</span></td>
+      <td><b>{{ r.kind }}</b>{% if r.title %}<br>{{ r.title }}{% endif %}
+        {% if show_reason and t.reason %}<div class="why">{{ t.reason }}</div>{% endif %}
+        {% if t.note %}<div class="muted">{{ t.note }}</div>{% endif %}</td>
+      <td class="nw">{{ t.agent }}{% if t.run_id %}<br><a href="/agents/runs/{{ t.run_id }}">przebieg #{{ t.run_id }}</a>{% endif %}
+        <br><span class="muted">{{ t.created_at|dt("%m-%d %H:%M") }}</span></td>
+      <td class="nw"><span class="tag s-{{ t.status }}">{{ r.status }}</span>
+        {% if t.ordered_at %}<br><span class="muted">zlecone {{ t.ordered_at|dt("%m-%d %H:%M") }}</span>{% endif %}</td>
+      <td class="nw">{% if r.job %}<a href="/jobs/{{ r.job.id }}">#{{ r.job.id }} {{ r.job.kind }}</a><br>
+        <span class="tag {{ r.job.status.value }}">{{ r.job.status.value }}</span> <span class="muted">{{ r.progress }}</span>{% else %}-{% endif %}</td>
+      <td class="muted">{{ r.result or '' }}</td>
+      {% if actions %}<td class="nw">
+        {% if t.status in ['proposed', 'failed', 'skipped', 'expired'] %}
+        <form method="post" action="/agents/tasks/{{ t.id }}/order" class="inline"><input type="hidden" name="back" value="{{ back }}"><button>Zlec</button></form>{% endif %}
+        {% if t.status == 'proposed' %}
+        <form method="post" action="/agents/tasks/{{ t.id }}/skip" class="inline"><input type="hidden" name="back" value="{{ back }}"><button title="Nie zlecaj tego zalecenia">Pomin</button></form>{% endif %}
+      </td>{% endif %}
+    </tr>
+    {% else %}<tr><td colspan="7" class="muted">Brak zadan.</td></tr>{% endfor %}
+  </table></div>
+{%- endmacro %}
+
+{% macro proposals(props, form=True) -%}
+  <div class="ag-tbl"><table>
+    <tr><th class="num">Ocena</th><th>Propozycja</th><th>Skad</th>{% if form %}<th></th>{% endif %}</tr>
+    {% for p in props %}
+    <tr><td class="num">{{ p.score|round(0)|int }}</td>
+      <td><b>{{ p.title }}</b><div class="why">{{ p.why }}</div></td>
+      <td class="nw"><span class="tag src-{{ p.source }}">{{ {'audyt': 'zalecenie audytu', 'potok': 'domykanie potoku', 'ciaglosc': 'ciaglosc'}.get(p.source, p.source) }}</span></td>
+      {% if form %}<td class="nw"><form method="post" action="/agents/run/planista" class="inline">
+        <input type="hidden" name="mode" value="order"><input type="hidden" name="pick" value="{{ p.key }}"><button>Zlec</button></form></td>{% endif %}
+    </tr>
+    {% else %}<tr><td colspan="4" class="muted">Brak propozycji.</td></tr>{% endfor %}
+  </table></div>
+{%- endmacro %}

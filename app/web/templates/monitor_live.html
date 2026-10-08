@@ -1,0 +1,85 @@
+<div class="cards">
+  <div class="card"><b>{{ cards | length }}/{{ limit }}</b>dziala</div>
+  <div class="card"><b>{{ queued | length }}</b>w kolejce</div>
+  <div class="card"><b>{{ llm_inflight.values() | sum }}</b>zapytan LLM w toku</div>
+  <div class="card"><b>{{ done_h }}</b>ukonczonych (1 h)</div>
+  <div class="card"><b {% if failed_h %}style="color:#b00"{% endif %}>{{ failed_h }}</b>nieudanych (1 h)</div>
+</div>
+
+<h2>Teraz pracuje nad</h2>
+{% for c in cards %}
+  {% set j = c.job %}
+  <div class="box" style="display:block">
+    <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap">
+      <div><a href="/jobs/{{ j.id }}"><b>#{{ j.id }} {{ j.kind }}</b></a>{% if c.name %} - {{ c.name }}{% endif %}
+        {% if j.retry_of %}<span class="muted">(ponowienie #{{ j.retry_of }})</span>{% endif %}</div>
+      <div class="muted">trwa {{ c.elapsed }}{% if c.eta != "-" %} &middot; zostalo ok. {{ c.eta }}{% endif %}
+        &middot; {{ j.progress or 0 }}/{{ j.total or "?" }}
+        <form class="inline" method="post" action="/jobs/{{ j.id }}/stop"><button>Zatrzymaj</button></form></div>
+    </div>
+    {% if c.pct is not none %}<div class="bar" style="margin:6px 0"><div style="width: {{ c.pct }}%"></div></div>{% endif %}
+    {% if c.act %}
+      <p style="margin:6px 0"><span class="tag running">{{ c.act.step }}</span>
+        <span style="word-break:break-all">{{ c.act.detail }}</span>
+        <span class="muted">({{ c.act.age }} s temu)</span></p>
+    {% endif %}
+    {% if c.last %}<pre class="log" style="max-height:90px;margin:0">{{ c.last | join("\n") }}</pre>{% endif %}
+  </div>
+{% else %}
+  <p class="box" style="display:block">System teraz odpoczywa - nie ma dzialajacych zadan.
+    <a href="/tasks">Zobacz proponowane zadania &rarr;</a></p>
+{% endfor %}
+
+<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px">
+  <div>
+    <h2>Kolejka</h2>
+    <table>
+      {% for j in queued %}<tr><td>{{ loop.index }}.</td><td><a href="/jobs/{{ j.id }}">#{{ j.id }} {{ j.kind }}</a>{% if j.source_id %} - {{ names.get(j.source_id, "") }}{% endif %}</td>
+        <td class="muted">czeka od {{ j.created_at | dt("%H:%M:%S") }}</td></tr>
+      {% else %}<tr><td class="muted">pusto</td></tr>{% endfor %}
+    </table>
+
+    <h2>Modele LLM</h2>
+    <p>{% for m, n in llm_inflight.items() %}<span class="tag running">{{ m }} &times;{{ n }}</span> {% else %}<span class="muted">brak zapytan w toku</span>{% endfor %}</p>
+    <table>
+      {% for r in llm_recent %}<tr><td class="muted">{{ r.ago }} s temu</td><td>{{ r.model }}</td>
+        <td>{% if r.ok %}<span class="tag done">{{ r.s }} s</span>{% else %}<span class="tag failed">{{ r.error }}</span>{% endif %}</td></tr>
+      {% endfor %}
+    </table>
+  </div>
+  <div>
+    <h2>Dziennik na zywo</h2>
+    <table style="font-size:.9em">
+      {% for f in feed %}<tr><td class="muted">{{ f.time }}</td><td class="muted">#{{ f.job }}</td><td>{{ f.text }}</td></tr>
+      {% else %}<tr><td class="muted">cisza</td></tr>{% endfor %}
+    </table>
+  </div>
+</div>
+
+<h2>Ostatnio zakonczone</h2>
+<table>
+  <tr><th>#</th><th>Zadanie</th><th>Status</th><th>Czas</th><th>Koniec</th><th></th></tr>
+  {% for f in finished %}{% set j = f.job %}
+    <tr><td><a href="/jobs/{{ j.id }}">{{ j.id }}</a></td><td>{{ j.kind }}{% if f.name %} - {{ f.name }}{% endif %}</td>
+      <td><span class="tag {{ j.status.value }}">{{ j.status.value }}</span></td><td>{{ f.took }}</td>
+      <td>{{ j.finished_at | dt("%H:%M:%S") }}</td>
+      <td>{% if j.status.value in ("failed", "cancelled") %}<form class="inline" method="post" action="/jobs/{{ j.id }}/retry"><button>Ponow</button></form>{% endif %}</td></tr>
+  {% endfor %}
+</table>
+
+<h2>Zmiany w plikach JSON <span class="muted" style="font-size:.6em">kazda operacja zapisu - podglad przed i po</span></h2>
+<table>
+  <tr><th>Kiedy</th><th>Operacja</th><th>Plik</th><th>Zmiany</th><th>Zadanie</th><th>Podglad</th></tr>
+  {% for sn in snapshots %}
+    <tr><td class="muted">{{ sn.ts | dt("%H:%M:%S") }}</td>
+      <td>{{ sn.operation }}
+        {% if not sn.applied %}<span class="tag failed" title="{{ sn.note }}">odrzucona</span>
+        {% elif sn.new_file %}<span class="tag ready">nowy plik</span>{% endif %}</td>
+      <td style="word-break:break-all">{% if sn.link %}<a href="{{ sn.link }}">{{ sn.file }}</a>{% else %}{{ sn.file }}{% endif %}</td>
+      <td><span style="color:#14532d">+{{ sn.added }}</span> <span style="color:#7f1d1d">&minus;{{ sn.removed }}</span>
+        <span class="muted">{{ sn.size_after | filesizeformat }}</span></td>
+      <td>{% if sn.job_id %}<a href="/jobs/{{ sn.job_id }}">#{{ sn.job_id }}</a>{% else %}<span class="muted">reczna</span>{% endif %}</td>
+      <td style="white-space:nowrap"><a href="/monitor/json/{{ sn.id }}#diff">Roznice</a> &middot;
+        <a href="/monitor/json/{{ sn.id }}#before">Przed</a> &middot; <a href="/monitor/json/{{ sn.id }}#after">Po</a></td></tr>
+  {% else %}<tr><td class="muted" colspan="6">jeszcze nie bylo zapisow plikow JSON</td></tr>{% endfor %}
+</table>
