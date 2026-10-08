@@ -2,6 +2,7 @@
 import asyncio
 import json
 import subprocess
+from datetime import timedelta
 from types import SimpleNamespace
 
 import httpx
@@ -50,6 +51,7 @@ def repo(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "deploy_min_recipes", 3)
     monkeypatch.setattr(settings, "deploy_min_hours", 6)
     monkeypatch.setattr(settings, "deploy_enabled", True)
+    monkeypatch.setattr(settings, "deploy_status_hours", 0)       # stan tylko przy publikacji (osobne testy nizej)
     monkeypatch.setattr(deploy, "push_url", lambda repo: str(remote))   # zamiast GitHuba lokalne repozytorium
     monkeypatch.setattr(settings, "backend_url", "")
     init_db()
@@ -108,6 +110,9 @@ def test_run_deploy_commits_only_data_writes_changelog_and_pushes(repo):
     remote_files = sh(repo.remote, "show", "--name-only", "--format=%an|%s", "main")
     assert "Siedziba Kwiatownika|Siedziba: Nowa wiedza o 1 roślinie" in remote_files
     assert "data/plants/lipa.json" in remote_files and "data/changelog.json" in remote_files
+    assert "data/siedziba_stan.json" in remote_files                       # stan Siedziby razem z danymi
+    stan = json.loads((w / "data" / "siedziba_stan.json").read_text(encoding="utf-8"))
+    assert stan["zaktualizowano"] and "statystyki" in stan and "siedziba" in stan
     assert "app.py" not in remote_files                                    # zmiana uzytkownika nietknieta
     assert sh(w, "status", "--porcelain", "--", "app.py").startswith("M")
     log = json.loads((w / "data" / "changelog.json").read_text(encoding="utf-8"))
@@ -144,6 +149,45 @@ def test_maybe_start_only_when_due(repo):
         assert asyncio.run(deploy.maybe_start(None)) == 1 and started == ["auto"]
     finally:
         actions.start_agent_deploy = orig
+
+
+def test_status_only_commit_when_stale(repo, monkeypatch):
+    """Bez nowych danych: sam stan Siedziby + statystyki (data/siedziba_stan.json) najczesciej co DEPLOY_STATUS_HOURS."""
+    monkeypatch.setattr(settings, "deploy_status_hours", 6)
+    with Session(engine) as s:
+        if not s.get(Plant, "lipa"):
+            s.add(Plant(id="lipa", nazwa_pl="Lipa drobnolistna"))
+        s.add(SiteStat(day=store.now().astimezone(deploy.TZ).strftime("%Y-%m-%d"), kind="plant_view", key="lipa", n=5))
+        s.add(SiteStat(day="archiwum", kind="plantid_click", key="", n=40))
+        s.commit()
+    w = repo.work
+    (w / "app.py").write_text("print('zmiana uzytkownika')\n", encoding="utf-8")
+    assert deploy.status_due(w)                                              # stanu jeszcze nie ma
+    rid = asyncio.run(deploy.run_deploy())
+    with Session(engine) as s:
+        run = s.get(AgentRun, rid)
+    rep = store.report(run)
+    assert rep.get("stan_opublikowano") is True and not rep.get("opublikowano")   # nie blokuje publikacji danych
+    remote_files = sh(repo.remote, "show", "--name-only", "--format=%s", "main")
+    assert remote_files.splitlines()[0] == "Siedziba: stan pracy i statystyki strony"
+    assert "data/siedziba_stan.json" in remote_files and "app.py" not in remote_files
+    stan = json.loads((w / "data" / "siedziba_stan.json").read_text(encoding="utf-8"))
+    st = stan["statystyki"]
+    assert st["odslony_tydzien"] == 5 and st["plantid_razem"] == 40
+    assert st["najczesciej_czytane"][0] == {"id": "lipa", "nazwa": "Lipa drobnolistna", "n": 5}
+    assert not deploy.status_due(w) and deploy.last_publication() is None
+    asyncio.run(deploy.run_deploy())                                         # swiezy stan - nic do zrobienia
+    assert sh(repo.remote, "rev-list", "--count", "main") == "2"
+    later = store.now() + timedelta(hours=7)
+    assert deploy.status_due(w, later)
+
+
+def test_maybe_start_when_status_stale(repo, monkeypatch):
+    monkeypatch.setattr(settings, "deploy_status_hours", 6)
+    started = []
+    from app.worker import actions
+    monkeypatch.setattr(actions, "start_agent_deploy", lambda state, trigger="auto": started.append(trigger) or 7)
+    assert asyncio.run(deploy.maybe_start(None)) == 7 and started == ["auto"]
 
 
 # ------------------------------------------------------------------ backend Kwiatownika

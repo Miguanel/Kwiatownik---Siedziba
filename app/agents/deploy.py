@@ -10,6 +10,10 @@ Agent:
      a ostatnia publikacja byla ponad DEPLOY_MAX_HOURS temu; najczesciej co DEPLOY_MIN_HOURS (kazda publikacja = build),
   4. dopisuje wpis do data/changelog.json (kronika - papirus na stronie glownej), robi commit tylko tych plikow
      (`git commit -- <pliki>`: inne zmiany w repozytorium zostaja nietkniete) i push na DEPLOY_BRANCH.
+Przy kazdej publikacji zapisuje tez data/siedziba_stan.json: nad czym Siedziba pracuje, ostatnie wpisy dziennika
+i statystyki strony (z kopii licznikow backendu). Kwiatownik pokazuje go w papirusie od razu, bez pytania backendu
+(szybkie ladowanie na telefonie); swiezsze dane doklada w tle papirus.js, gdy backend odpowie. Bez nowych danych
+sam stan jest odswiezany najczesciej co DEPLOY_STATUS_HOURS (osobny, maly commit).
 Nie publikuje, gdy: repozytorium jest na innej galezi, trwa merge/rebase, git jest zajety (index.lock) albo plik
 JSON jest uszkodzony. Token GitHub nie trafia do logow ani do konfiguracji repozytorium.
 """
@@ -32,6 +36,7 @@ from app.models import AgentRun, Job, JobStatus
 TZ = ZoneInfo(settings.timezone)
 DATA_PATHS = ("data/przepisy", "data/plants", "data/changelog.json")
 CHANGELOG = "data/changelog.json"
+STATUS_FILE = "data/siedziba_stan.json"
 CHANGELOG_KEEP = 200
 CHECK_EVERY_MIN = 30                      # automatyczne sprawdzenie (bez zapisu w historii) najczesciej co tyle
 _last_check = {"t": None}
@@ -295,6 +300,51 @@ def write_changelog(repo: Path, entry: dict) -> None:
     os.replace(tmp, path)
 
 
+# ------------------------------------------------------------------ stan Siedziby dla strony (papirus)
+def status_snapshot(when: datetime | None = None) -> dict:
+    """Stan Siedziby + ostatnie wpisy + statystyki strony (format czyta Kwiatownik2: app/utils/kronika.py)."""
+    from app.agents import backend_sync
+    when = (when or store.now()).astimezone(TZ)
+    st = backend_sync.status_payload()
+    return {"wersja": 1,
+            "opis": "Stan Siedziby Kwiatownika i statystyki strony - zapisuje agent wdrozen (Siedziba). "
+                    "Strona pokazuje go w papirusie bez pytania backendu.",
+            "zaktualizowano": when.isoformat(timespec="seconds"),
+            "siedziba": {"status": st.get("status"), "zadania": st.get("zadania") or [], "info": st.get("info") or {}},
+            "wpisy": backend_sync.recent_events(),
+            "statystyki": backend_sync.site_summary()}
+
+
+def write_status(repo: Path, when: datetime | None = None) -> dict:
+    data = status_snapshot(when)
+    path = repo / STATUS_FILE
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
+    os.replace(tmp, path)
+    return data
+
+
+def status_age_hours(repo: Path, now: datetime | None = None) -> float | None:
+    """Ile godzin temu opublikowano stan (plik w HEAD); None = jeszcze nigdy."""
+    data = _head_json(repo, STATUS_FILE)
+    try:
+        when = datetime.fromisoformat(str((data or {}).get("zaktualizowano")))
+    except ValueError:
+        return None
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    return ((now or store.now()) - when).total_seconds() / 3600
+
+
+def status_due(repo: Path, now: datetime | None = None) -> bool:
+    """Czas odswiezyc sam stan na stronie (bez nowych danych)?"""
+    if settings.deploy_status_hours <= 0:
+        return False
+    age = status_age_hours(repo, now)
+    return age is None or age >= settings.deploy_status_hours
+
+
 def push_url(repo: Path) -> str:
     remote = git(repo, "remote", "get-url", "origin").stdout.strip()
     token = settings.github_token.strip()
@@ -352,13 +402,39 @@ async def run_deploy(trigger: str = "reczny", job_id: int | None = None, logf=No
             f"{summary['przepisy']}, nowe rosliny: {summary['nowe_rosliny']}, zdjecia: {summary['zdjecia']}")
         for e in summary["bledy"]:
             say(f"BLAD: {e}")
+        if not go and not summary["bledy"] and await asyncio.to_thread(status_due, repo):
+            # nic do publikacji, ale stan Siedziby na stronie jest stary - maly commit samego stanu
+            if dry_run:
+                say(f"Proba: {reason}; stan Siedziby na stronie do odswiezenia")
+                store.finish_run(run_id, "done", {**report, "stan_do_odswiezenia": True},
+                                 summary=f"{reason}; stan Siedziby do odswiezenia")
+                return run_id
+            await asyncio.to_thread(write_status, repo)
+            say(f"{reason} - odswiezam tylko stan Siedziby i statystyki na stronie")
+            sha, pushed, msg = await asyncio.to_thread(
+                commit_and_push, repo, [STATUS_FILE],
+                "Siedziba: stan pracy i statystyki strony\n\nAgent wdrozen Siedziby Kwiatownika (papirus).")
+            report.update(commit=sha, stan_opublikowano=pushed, push=msg)
+            if pushed:
+                say(f"Wypchnieto commit {sha} (stan Siedziby)")
+                store.finish_run(run_id, "done", report, summary=f"Odswiezono stan Siedziby na stronie ({sha})")
+            else:
+                say(f"Commit {sha} zapisany lokalnie, ale push sie nie udal: {msg}")
+                store.finish_run(run_id, "failed", report, summary=f"Push stanu nieudany (commit {sha} czeka lokalnie): {msg[:120]}")
+            return run_id
         if not go or dry_run:
             say(("Proba: " if dry_run and go else "") + reason)
             store.finish_run(run_id, "done", report, summary=("Gotowe do publikacji: " if go else "") + reason)
             return run_id
         entry = changelog_entry(summary)
         await asyncio.to_thread(write_changelog, repo, entry)
-        paths = sorted({p for s, p in files if s != "D"} | {CHANGELOG})
+        try:
+            await asyncio.to_thread(write_status, repo)
+            status_paths = {STATUS_FILE}
+        except Exception as exc:  # noqa: BLE001 - stan to dodatek, publikacja danych idzie dalej
+            say(f"Nie udalo sie zapisac stanu Siedziby: {type(exc).__name__}: {exc}")
+            status_paths = set()
+        paths = sorted({p for s, p in files if s != "D"} | {CHANGELOG} | status_paths)
         message = f"Siedziba: {entry['tytul']}\n\n{entry['opis']}\n\nAgent wdrozen Siedziby Kwiatownika ({reason})."
         say(f"Publikuje: {entry['tytul']} ({len(paths)} plikow)")
         sha, pushed, msg = await asyncio.to_thread(commit_and_push, repo, paths, message)
@@ -391,10 +467,14 @@ def _check() -> bool:
     if why_not:
         return False
     files = changed_files(repo)
-    if not files:
-        return False
-    go, _reason = decide(summarize(repo, files), last_publication())
-    return go
+    if files:
+        summary = summarize(repo, files)
+        go, _reason = decide(summary, last_publication())
+        if go:
+            return True
+        if summary["bledy"]:
+            return False
+    return status_due(repo)
 
 
 async def maybe_start(state) -> int | None:

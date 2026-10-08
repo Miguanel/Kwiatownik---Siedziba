@@ -155,6 +155,8 @@ class Settings(BaseSettings):
     deploy_min_recipes: int = 10         # ...albo tyle nowych przepisow...
     deploy_max_hours: int = 48           # ...albo cokolwiek nowego, a ostatnia publikacja byla tak dawno
     deploy_min_hours: int = 6            # najczesciej co tyle godzin (kazda publikacja = nowy build na Render)
+    deploy_status_hours: int = 6         # stan Siedziby + statystyki (data/siedziba_stan.json) odswiezany na stronie
+                                         # najczesciej co tyle godzin, takze bez nowych danych (0 = tylko przy publikacji)
     deploy_git_name: str = "Siedziba Kwiatownika"
     deploy_git_email: str = "siedziba-kwiatownika@users.noreply.github.com"
 

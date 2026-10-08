@@ -280,6 +280,38 @@ async def push_event(text: str, kind: str = "info", eid: str | None = None, url:
         log.warning("Backend Kwiatownika: wpis nieudany: %s", exc)
 
 
+def recent_events(days: int = 3, limit: int = 8) -> list[dict]:
+    """Ostatnie wpisy dziennika (jak w heartbeacie, ale bez kursora) - do pliku stanu w repozytorium strony."""
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+    with Session(engine) as s:
+        jobs = s.exec(select(Job).where(Job.status == JobStatus.done, col(Job.finished_at) >= since)
+                      .order_by(col(Job.id).desc()).limit(300)).all()
+        runs = s.exec(select(AgentRun).where(AgentRun.status == "done", AgentRun.created_at >= since)
+                      .order_by(col(AgentRun.id).desc()).limit(100)).all()
+    out = [ev for ev in (_event_for_job(j) for j in jobs if j.kind.split(":", 1)[0] in EVENT_KINDS) if ev]
+    out += [ev for ev in (_event_for_run(r) for r in runs) if ev]
+    out.sort(key=lambda e: e.get("ts") or "", reverse=True)
+    return out[:limit]
+
+
+def site_summary(days: int = 7) -> dict:
+    """Statystyki strony z kopii licznikow (SiteStat) do papirusu: goscie i odslony z ostatnich `days` dni,
+    rozpoznania plant.id od poczatku, najczesciej czytane rosliny."""
+    cut = (datetime.now(TZ) - timedelta(days=days - 1)).strftime("%Y-%m-%d")
+    with Session(engine) as s:
+        week = dict(s.exec(select(SiteStat.kind, func.sum(SiteStat.n)).where(
+            SiteStat.day >= cut, SiteStat.day != "archiwum").group_by(SiteStat.kind)).all())
+        plantid_all = s.exec(select(func.sum(SiteStat.n)).where(SiteStat.kind == "plantid_click")).one() or 0
+        top = s.exec(select(SiteStat.key, func.sum(SiteStat.n).label("n")).where(
+            SiteStat.kind == "plant_view", SiteStat.day >= cut, SiteStat.day != "archiwum", SiteStat.key != "")
+            .group_by(SiteStat.key).order_by(func.sum(SiteStat.n).desc()).limit(4)).all()
+    names = _names([k for k, _ in top])
+    return {"okres_dni": days, "goscie_tydzien": int(week.get("visitors") or 0),
+            "odslony_tydzien": int(week.get("plant_view") or 0), "plantid_tydzien": int(week.get("plantid_click") or 0),
+            "plantid_razem": int(plantid_all),
+            "najczesciej_czytane": [{"id": k, "nazwa": names.get(k, k), "n": int(n)} for k, n in top]}
+
+
 def site_views(days: int = 30) -> dict[str, int]:
     """Odslony roslin na stronie z ostatnich `days` dni (do audytu: popularne rosliny najpierw)."""
     cut = (datetime.now(TZ) - timedelta(days=days)).strftime("%Y-%m-%d")
