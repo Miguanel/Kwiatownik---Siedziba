@@ -1,0 +1,829 @@
+{% extends "base.html" %}
+{% block title %}{{ seo.title }} | Kwiatownik{% endblock %}
+{% block meta_description %}{{ seo.description }}{% endblock %}
+{% block og_type %}article{% endblock %}
+{% block og_image %}{% if seo.image %}{{ seo.image }}{% else %}{{ super() }}{% endif %}{% endblock %}
+{% block structured_data %}
+<script type="application/ld+json">
+{{ {
+  "@context": "https://schema.org",
+  "@type": "BreadcrumbList",
+  "itemListElement": [
+    {"@type": "ListItem", "position": 1, "name": "Kwiatownik", "item": site_url ~ "/"},
+    {"@type": "ListItem", "position": 2, "name": seo.name, "item": canonical_url}
+  ]
+} | tojson }}
+</script>
+{% endblock %}
+{% macro arch_value(v, depth=0) -%}
+    {%- if v is mapping -%}
+        <dl class="arch-dl">
+        {%- for k, x in v.items() if x not in (None, '', []) and k not in ('zrodlo', 'źródło', 'zrodla') -%}
+            <dt>{{ k | replace('_', ' ') | capitalize }}</dt><dd>{{ arch_value(x, depth + 1) }}</dd>
+        {%- endfor -%}
+        {%- set src = v.get('zrodlo') or v.get('źródło') or v.get('zrodla') -%}
+        {%- if src %}<dd class="arch-src">{{ arch_value(src if src is not string else [src], depth + 1) }}</dd>{% endif -%}
+        </dl>
+    {%- elif v is string -%}
+        {%- if v.startswith('http://') or v.startswith('https://') -%}
+            <a href="{{ v }}" target="_blank" rel="noopener nofollow" class="arch-link">źródło: {{ v.split('/')[2] }}</a>
+        {%- else -%}{{ v }}{%- endif -%}
+    {%- elif v is iterable -%}
+        {%- if v | select('number') | list | length == v | length and v | length > 0 -%}
+            {%- set mies = ['', 'styczeń', 'luty', 'marzec', 'kwiecień', 'maj', 'czerwiec', 'lipiec', 'sierpień', 'wrzesień', 'październik', 'listopad', 'grudzień'] -%}
+            {%- for m in v -%}{{ mies[m] if m is integer and 0 < m < 13 else m }}{{ ', ' if not loop.last }}{%- endfor -%}
+        {%- else -%}
+        <ul class="arch-list">{% for x in v %}<li>{{ arch_value(x, depth + 1) }}</li>{% endfor %}</ul>
+        {%- endif -%}
+    {%- else -%}{{ v }}{%- endif -%}
+{%- endmacro %}
+
+{# Wiedza z sieci wmontowana przez Siedzibe w rozdzialy (blok "scalone", app/utils/merged.py):
+   tekst reczny + informacje z sieci, z przypisami [n] do zrodel; oryginal do rozwiniecia. #}
+{% macro sc_refs(t) -%}
+    {%- for z in t.refs %}<a class="web-ref" href="{{ z.url }}" target="_blank" rel="noopener nofollow" title="{{ z.nazwa or z.url }}">[{{ z.nr }}]</a>{% endfor -%}
+{%- endmacro %}
+{% macro sc_inline(m) -%}
+    <span class="merged-text" data-n="{{ m.tresc | length }}">{% for t in m.tresc %}{{ t.tekst }}{{ sc_refs(t) }}{{ ' ' if not loop.last }}{% endfor %}</span>
+{%- endmacro %}
+{% macro sc_orig(m) -%}
+    {%- if m.oryginal_txt %}<details class="orig-text"><summary>Tekst oryginalny Kwiatownika</summary><p>{{ m.oryginal_txt }}</p></details>{% endif -%}
+{%- endmacro %}
+{% macro pole(p, path, value) -%}
+    {%- set m = scalone(p, path) -%}
+    {%- if m %}{{ sc_inline(m) }}{% else %}{{ value if value is not undefined and value is not none else '' }}{% endif -%}
+{%- endmacro %}
+{% macro blok(p, path, value) -%}
+    {%- set m = scalone(p, path) -%}
+    <p>{% if m %}{{ sc_inline(m) }}{% else %}{{ value if value is not undefined and value is not none else '' }}{% endif %}</p>{% if m %}{{ sc_orig(m) }}{% endif %}
+{%- endmacro %}
+{% macro lista(p, path, items, icon) -%}
+    {%- set m = scalone(p, path) -%}
+    {%- if m %}{% for t in m.tresc %}<li><i class="ra {{ icon }}"></i> {{ t.tekst }}{{ sc_refs(t) }}</li>{% endfor %}
+    {%- else %}{% for x in (items or []) %}<li><i class="ra {{ icon }}"></i> {{ x }}</li>{% endfor %}{% endif -%}
+{%- endmacro %}
+
+{% block content %}
+{% set galeria = plant.url if (plant.url is mapping) else {} %}
+{% set tlo = galeria.get('pokrój') or galeria.get('Pokrój') or '' %}
+{% set autorzy = {} %}
+{% for z in ((plant.zdjecia_wiki or {}).zdjecia or []) %}{% if z.url and z.plik and z.plik.startswith('https://commons.wikimedia.org/') %}{% set _ = autorzy.update({z.url: z}) %}{% endif %}{% endfor %}
+<div class="grimmoire-wrapper" style="background-image: url('{{ tlo }}');">
+    <div class="grimmoire-overlay"></div>
+
+    <article class="grimmoire-container">
+
+        <header class="grimmoire-hero">
+            <h1 class="hero-title">{{ plant.nazwa_pl }}</h1>
+            <p class="hero-subtitle">{{ plant.nazwa_lat }}{% if plant.rodzina %} <span class="hero-family">| {% set rd = plant.rodzina|string %}<span data-wiki-term="{{ rd.split('(')[0].strip() }}{% if '(' in rd %}|{{ rd.split('(')[1].split(')')[0].strip() }}{% endif %}">{{ rd }}</span></span>{% endif %}</p>
+            <div class="hero-divider"></div>
+            <p class="hero-desc" data-wiki-scan>{{ pole(plant, 'opis', plant.opis) }}</p>
+            <a class="compare-link" href="{{ url_for('plants.porownaj', a=plant_id) }}"><i class="ra ra-scroll-unfurled"></i> Porównaj z inną rośliną</a>
+
+            {% if galeria %}
+            <div class="plant-gallery">
+                {% for klucz, link in galeria.items() %}{% if link is string and (link.startswith('https://') or link.startswith('http://') or link.startswith('/')) %}
+                {% set a = autorzy.get(link) %}
+                <div class="gallery-thumb" data-src="{{ link }}" data-caption="{{ klucz }}{% if a %} — fot. {{ a.autor }}, {{ a.licencja }}, Wikimedia Commons{% endif %}" onclick="openLightbox(this.dataset.src, this.dataset.caption)">
+                    <img src="{{ link }}" alt="{{ klucz }}" loading="lazy">
+                    <span class="gallery-caption">{{ klucz }}</span>
+                </div>
+                {% endif %}{% endfor %}
+            </div>
+            {% if autorzy %}
+            <details class="photo-credits">
+                <summary>Zdjęcia: Wikimedia Commons (autorzy i licencje)</summary>
+                <ul>
+                {% for z in plant.zdjecia_wiki.zdjecia %}{% if z.url in autorzy %}
+                    <li>{{ z.podpis }}: <a href="{{ z.plik }}" target="_blank" rel="noopener nofollow">{{ z.autor }}</a>,
+                        {% if z.licencja_url and (z.licencja_url.startswith('https://') or z.licencja_url.startswith('http://')) %}<a href="{{ z.licencja_url }}" target="_blank" rel="noopener nofollow">{{ z.licencja }}</a>{% else %}{{ z.licencja }}{% endif %}</li>
+                {% endif %}{% endfor %}
+                </ul>
+            </details>
+            {% endif %}
+            {% endif %}
+        </header>
+
+        <div class="grimmoire-book" data-wiki-scan>
+
+            {% set pe = plant.profil_energetyczny if plant.profil_energetyczny is mapping else {} %}
+            {% set wy = plant.wymagania if plant.wymagania is mapping else {} %}
+            {% if pe or wy or scalone_jest(plant, 'profil_energetyczny') or scalone_jest(plant, 'wymagania') %}
+            <details class="grimmoire-tab">
+                <summary><i class="ra ra-moon-sun"></i> Natura i Siedlisko</summary>
+                <div class="tab-content">
+
+                    {% if pe or scalone_jest(plant, 'profil_energetyczny') %}
+                    <details class="grimmoire-subtab">
+                        <summary><i class="ra ra-burning-embers"></i> Profil Energetyczny</summary>
+                        <div class="subtab-content">
+                            <ul class="sub-list">
+                                <li><strong>Smak:</strong> {{ pole(plant, 'profil_energetyczny.smak', pe.smak) }}</li>
+                                <li><strong>Termika:</strong> {{ pole(plant, 'profil_energetyczny.termika', pe.termika) }}</li>
+                                <li><strong>Wilgotność:</strong> {{ pole(plant, 'profil_energetyczny.wilgotnosc', pe.wilgotnosc) }}</li>
+                                <li><strong>Żywioł:</strong> {{ pole(plant, 'profil_energetyczny.zywiol', pe.zywiol) }}</li>
+                            </ul>
+                            {% set m_pe = scalone(plant, 'profil_energetyczny.opis') %}
+                            {% if pe.opis or m_pe %}<p class="energy-quote">{% if m_pe %}{{ sc_inline(m_pe) }}{% else %}"{{ pe.opis }}"{% endif %}</p>{% if m_pe %}{{ sc_orig(m_pe) }}{% endif %}{% endif %}
+                        </div>
+                    </details>
+                    {% endif %}
+
+                    {% if wy or scalone_jest(plant, 'wymagania') %}
+                    <details class="grimmoire-subtab">
+                        <summary><i class="ra ra-compass"></i> Wymagania Siedliskowe</summary>
+                        <div class="subtab-content">
+                            <ul class="sub-list">
+                                <li><strong>Stanowisko:</strong> {{ pole(plant, 'wymagania.stanowisko', wy.stanowisko) }}</li>
+                                <li><strong>Gleba:</strong> {{ pole(plant, 'wymagania.gleba', wy.gleba) }}</li>
+                                <li><strong>Woda:</strong> {{ pole(plant, 'wymagania.woda', wy.woda) }}</li>
+                                {% if wy.ph_gleby or scalone(plant, 'wymagania.ph_gleby') %}<li><strong>pH gleby:</strong> {{ pole(plant, 'wymagania.ph_gleby', wy.ph_gleby) }}</li>{% endif %}
+                                <li><strong>Mrozoodporność:</strong> {{ pole(plant, 'wymagania.mrozoodpornosc', wy.mrozoodpornosc) }}</li>
+                            </ul>
+                        </div>
+                    </details>
+                    {% endif %}
+
+                </div>
+            </details>
+            {% endif %}
+
+            {% set idf = plant.identyfikacja if plant.identyfikacja is mapping else {} %}
+            {% if idf or scalone_jest(plant, 'identyfikacja') %}
+            <details class="grimmoire-tab">
+                <summary><i class="ra ra-eye-monster"></i> Rozpoznawanie w terenie</summary>
+                <div class="tab-content">
+                    <ul class="feature-list">
+                        {{ lista(plant, 'identyfikacja.cechy_kluczowe', idf.cechy_kluczowe, 'ra-leaf') }}
+                    </ul>
+
+                    {% if idf.mozliwe_pomyłki %}
+                    <details class="grimmoire-subtab danger-subtab">
+                        <summary><i class="ra ra-skull"></i> Możliwe pomyłki (Zagrożenia!)</summary>
+                        <div class="subtab-content warning-box">
+                            {% for pomylka in idf.mozliwe_pomyłki %}
+                                <p><strong>{{ pomylka.nazwa }}:</strong> {{ pomylka.roznica }}</p>
+                            {% endfor %}
+                        </div>
+                    </details>
+                    {% endif %}
+                </div>
+            </details>
+            {% endif %}
+
+            {% set czesci = wszystkie_czesci(plant) %}
+            {% if czesci %}
+            <details class="grimmoire-tab">
+                <summary><i class="ra ra-fizzing-flask"></i> Surowce i Zbiory</summary>
+                <div class="tab-content">
+                    {% for klucz, dane in czesci.items() %}{% if dane is mapping %}
+                    <details class="grimmoire-subtab part-subtab">
+                        <summary>
+                            <span class="subtab-title-group">
+                                <i class="ra ra-potion"></i> {{ dane.nazwa_surowca }} <span class="part-badge">{{ klucz }}</span>{% if dane._z_sieci %} <span class="part-badge web-part-badge" title="Część rośliny opisana na podstawie źródeł z sieci (Siedziba Kwiatownika)">🌐 z sieci</span>{% endif %}
+                            </span>
+                        </summary>
+                        <div class="subtab-content">
+                            {% set cp = 'czesci_rosliny.' ~ klucz ~ '.' %}
+                            {% set wk = 'wlasciwosci' if ('wlasciwosci' in dane and 'wlasciwości' not in dane) else 'wlasciwości' %}
+                            <p class="part-desc">{{ pole(plant, cp ~ 'opis_botaniczny', dane.opis_botaniczny) }}</p>
+
+                            <div class="part-effects">
+                                <strong>Działanie:</strong> {{ pole(plant, cp ~ wk, dane[wk]) }}
+                            </div>
+
+                            <div class="part-chem mt-3">
+                                <strong>Substancje czynne:</strong>
+                                <div class="chem-tags">
+                                    {% set m_sk = scalone(plant, cp ~ 'skladniki_aktywne') %}
+                                    {% if m_sk %}
+                                        {% for t in m_sk.tresc %}<span class="chem-link">{{ t.tekst }}{{ sc_refs(t) }}</span>{% endfor %}
+                                    {% elif dane.skladniki_aktywne is string %}
+                                        <span class="chem-link" data-wiki-ingredient>{{ dane.skladniki_aktywne }}</span>
+                                    {% else %}
+                                        {% for skladnik in dane.skladniki_aktywne %}
+                                            <span class="chem-link" data-wiki-ingredient>{{ skladnik }}</span>
+                                        {% endfor %}
+                                    {% endif %}
+                                </div>
+                            </div>
+
+                            {% if dane.ostrzezenia or scalone(plant, cp ~ 'ostrzezenia') %}
+                            <div class="part-warning"><i class="ra ra-poison-cloud"></i> {{ pole(plant, cp ~ 'ostrzezenia', dane.ostrzezenia) }}</div>
+                            {% endif %}
+
+                            {% if dane.czas_zbioru or scalone(plant, cp ~ 'czas_zbioru') %}
+                            <div class="part-time"><i class="ra ra-hourglass"></i> Zbiór: <strong>{{ pole(plant, cp ~ 'czas_zbioru', dane.czas_zbioru) }}</strong></div>
+                            {% endif %}
+                        </div>
+                    </details>
+                    {% endif %}{% endfor %}
+                </div>
+            </details>
+            {% endif %}
+
+            {% set za = plant.zastosowanie if plant.zastosowanie is mapping else {} %}
+            {% if za or scalone_jest(plant, 'zastosowanie') %}
+            <details class="grimmoire-tab">
+                <summary><i class="ra ra-anvil"></i> Praktyczne Zastosowanie</summary>
+                <div class="tab-content">
+                    {% if za.medyczne or scalone(plant, 'zastosowanie.medyczne') %}
+                    <details class="grimmoire-subtab">
+                        <summary><i class="ra ra-health"></i> Medycyna</summary>
+                        <div class="subtab-content">{{ blok(plant, 'zastosowanie.medyczne', za.medyczne) }}</div>
+                    </details>
+                    {% endif %}
+
+                    {% if za.kulinarne or scalone(plant, 'zastosowanie.kulinarne') %}
+                    <details class="grimmoire-subtab">
+                        <summary><i class="ra ra-meat"></i> Kuchnia</summary>
+                        <div class="subtab-content">{{ blok(plant, 'zastosowanie.kulinarne', za.kulinarne) }}</div>
+                    </details>
+                    {% endif %}
+
+                    {% if za.rzemieslnicze or scalone(plant, 'zastosowanie.rzemieslnicze') %}
+                    <details class="grimmoire-subtab">
+                        <summary><i class="ra ra-hammer"></i> Rzemiosło</summary>
+                        <div class="subtab-content">{{ blok(plant, 'zastosowanie.rzemieslnicze', za.rzemieslnicze) }}</div>
+                    </details>
+                    {% endif %}
+
+                    {% if za.kosmetyczne or scalone(plant, 'zastosowanie.kosmetyczne') %}
+                    <details class="grimmoire-subtab">
+                        <summary><i class="ra ra-flower"></i> Kosmetyka</summary>
+                        <div class="subtab-content">{{ blok(plant, 'zastosowanie.kosmetyczne', za.kosmetyczne) }}</div>
+                    </details>
+                    {% endif %}
+
+                    {% if za.ogrodowe or scalone(plant, 'zastosowanie.ogrodowe') %}
+                    <details class="grimmoire-subtab">
+                        <summary><i class="ra ra-pine-tree"></i> Ogród</summary>
+                        <div class="subtab-content">{{ blok(plant, 'zastosowanie.ogrodowe', za.ogrodowe) }}</div>
+                    </details>
+                    {% endif %}
+                </div>
+            </details>
+            {% endif %}
+
+            {% if plant.interakcje or plant.ostrzezenia or scalone(plant, 'interakcje') or scalone(plant, 'ostrzezenia') %}
+            <details class="grimmoire-tab danger-tab">
+                <summary><i class="ra ra-bleeding-eye"></i> Bezpieczeństwo i Interakcje</summary>
+                <div class="tab-content">
+                    {% if plant.interakcje or scalone(plant, 'interakcje') %}
+                    <details class="grimmoire-subtab danger-subtab" open>
+                        <summary><i class="ra ra-potion"></i> Interakcje z lekami</summary>
+                        <div class="subtab-content danger-block">{{ blok(plant, 'interakcje', plant.interakcje) }}</div>
+                    </details>
+                    {% endif %}
+
+                    {% if plant.ostrzezenia or scalone(plant, 'ostrzezenia') %}
+                    <details class="grimmoire-subtab danger-subtab" open>
+                        <summary><i class="ra ra-lightning-bolt"></i> Przeciwwskazania</summary>
+                        <div class="subtab-content danger-block">{{ blok(plant, 'ostrzezenia', plant.ostrzezenia) }}</div>
+                    </details>
+                    {% endif %}
+                </div>
+            </details>
+            {% endif %}
+
+            {% if plant.kalendarz_ogrodnika or plant.permakultura %}
+            <details class="grimmoire-tab">
+                <summary><i class="ra ra-cycle"></i> Cykl Życia i Ekosystem</summary>
+                <div class="tab-content">
+
+                    {% if plant.kalendarz_ogrodnika %}
+                    <details class="grimmoire-subtab">
+                        <summary><i class="ra ra-sickle"></i> Kalendarz Biodynamiczny</summary>
+                        <div class="subtab-content task-list">
+                            {% for zadanie in plant.kalendarz_ogrodnika.zadania %}
+                            <div class="task-item">
+                                <div class="task-head">
+                                    <strong>{{ zadanie.czynnosc }}</strong>
+                                    <span class="task-month">M-c: {{ zadanie.miesiace|join(', ') }}</span>
+                                </div>
+                                <p class="task-desc">{{ zadanie.opis }}</p>
+                                <div class="task-meta">
+                                    <span><i class="ra ra-moon-phases"></i> {{ zadanie.faza_ksiezyca }}</span>
+                                    <span><i class="ra ra-cloud-ring"></i> {{ zadanie.pogoda }}</span>
+                                </div>
+                            </div>
+                            {% endfor %}
+                        </div>
+                    </details>
+                    {% endif %}
+
+                    {% if plant.permakultura %}
+                    <details class="grimmoire-subtab">
+                        <summary><i class="ra ra-trefoil"></i> Permakultura i Gildie</summary>
+                        <div class="subtab-content">
+                            <p class="kw-label"><strong>Rola w systemie:</strong></p>
+                            <ul class="eco-list mb-4">
+                                {{ lista(plant, 'permakultura.funkcje', (plant.permakultura or {}).funkcje, 'ra-leaf') }}
+                            </ul>
+
+                            <p class="kw-label"><strong>Towarzysze (Gildia):</strong></p>
+                            <div class="guild-list">
+                                {% for g in plant.permakultura.gildie %}
+                                    {% set g_name = g.nazwa if g.nazwa else g %}
+                                    {% set g_role = g.rola if g.rola else "Towarzysz wspierający wzrost i rozwój." %}
+                                    <div class="guild-item">
+                                        <a href="/plant/{{ g_name | lower | replace(' ', '_') }}" class="guild-link">
+                                            <i class="ra ra-double-leaf"></i> {{ g_name }}
+                                        </a>
+                                        <p class="guild-role">{{ g_role }}</p>
+                                    </div>
+                                {% endfor %}
+                            </div>
+                        </div>
+                    </details>
+                    {% endif %}
+
+                </div>
+            </details>
+            {% endif %}
+
+            {% if plant.wiedza and plant.wiedza.sekcje %}
+            {# Wiedza uporzadkowana przez agregator Siedziby: sekcje -> punkty z numerami zrodel [n] #}
+            {% set zr = {} %}
+            {% for z in plant.wiedza.zrodla or [] %}{% if z.url and (z.url.startswith('http://') or z.url.startswith('https://')) %}{% set _ = zr.update({z.nr: z}) %}{% endif %}{% endfor %}
+            {% set n_pkt = namespace(v=0) %}
+            {% set n_all = namespace(v=0) %}
+            {% for s in plant.wiedza.sekcje %}{% for p in s.punkty or [] %}{% set n_all.v = n_all.v + 1 %}{% if poza_rozdzialami(plant, p) %}{% set n_pkt.v = n_pkt.v + 1 %}{% endif %}{% endfor %}{% endfor %}
+            <details class="grimmoire-tab" open>
+                <summary><i class="ra ra-globe"></i> Wiedza z sieci</summary>
+                <div class="tab-content">
+                    <p class="web-note">Informacje zebrane z Wikipedii i stron z różnych krajów, każda sprawdzona z cytatem
+                    źródła i uporządkowana. Numery [1] prowadzą do źródeł.{% if n_all.v > n_pkt.v %} {{ n_all.v - n_pkt.v }} informacji
+                    wmontowano w rozdziały powyżej (Natura, Surowce, Zastosowanie...) - tam też mają przypisy do źródeł.{% endif %}{% if plant.wiedza.zaktualizowano %} Aktualizacja: {{ plant.wiedza.zaktualizowano }}.{% endif %}</p>
+                    {% if plant.wiedza.czesci %}
+                    <p class="web-parts">Części rośliny:
+                        {% for part, ids in plant.wiedza.czesci.items() %}<span class="web-chip">{{ part }} ({{ ids | length }})</span>{% endfor %}
+                    </p>
+                    {% endif %}
+                    {% for sec in plant.wiedza.sekcje %}{% set ns_r = namespace(items=[]) %}{% for p in sec.punkty or [] %}{% if poza_rozdzialami(plant, p) %}{% set ns_r.items = ns_r.items + [p] %}{% endif %}{% endfor %}{% if ns_r.items %}
+                        <details class="grimmoire-subtab"{% if sec.klucz in ('barwienie', 'kultura', 'zastosowanie_lecznicze', 'bezpieczenstwo') %} open{% endif %}>
+                            <summary>{{ '🎨 ' if sec.klucz == 'barwienie' else ('⚠️ ' if sec.klucz == 'bezpieczenstwo' else '') }}{{ sec.tytul or sec.klucz }}</summary>
+                            <div class="subtab-content">
+                                {% if sec.podsumowanie and ns_r.items | length == sec.punkty | length %}
+                                <p class="web-summary">{{ sec.podsumowanie }}{% for n in sec.podsumowanie_zrodla or [] %}{% if n in zr %}<a class="web-ref" href="{{ zr[n].url }}" target="_blank" rel="noopener nofollow" title="{{ zr[n].nazwa }}">[{{ n }}]</a>{% endif %}{% endfor %}</p>
+                                {% endif %}
+                                <ul class="web-facts">
+                                {% for p in ns_r.items %}
+                                    <li>{% if p.czesc %}<span class="web-chip">{{ p.czesc }}</span> {% endif %}{{ p.tekst }}{% for n in p.zrodla or [] %}{% if n in zr %}<a class="web-ref" href="{{ zr[n].url }}" target="_blank" rel="noopener nofollow" title="{{ zr[n].nazwa }}">[{{ n }}]</a>{% endif %}{% endfor %}</li>
+                                {% endfor %}
+                                </ul>
+                            </div>
+                        </details>
+                    {% endif %}{% endfor %}
+                    {% if zr %}
+                    <details class="grimmoire-subtab" data-kw-zrodla>
+                        <summary><i class="ra ra-quill-ink"></i> Źródła wiedzy</summary>
+                        <div class="subtab-content">
+                            <ol class="web-sources">
+                            {% for z in plant.wiedza.zrodla %}{% if z.nr in zr %}
+                                <li value="{{ z.nr }}"><a href="{{ z.url }}" target="_blank" rel="noopener nofollow">{{ z.nazwa or z.url }}</a>{% if z.jezyk %} <span class="web-lang">[{{ z.jezyk }}]</span>{% endif %}</li>
+                            {% endif %}{% endfor %}
+                            </ol>
+                        </div>
+                    </details>
+                    {% endif %}
+                </div>
+            </details>
+            {% elif plant.wiedza and plant.wiedza.fakty %}
+            {% set sekcje = {'opis': 'Opis i wygląd', 'wystepowanie': 'Występowanie', 'czesci_rosliny': 'Części rośliny i surowce',
+                             'sklad': 'Skład i substancje czynne', 'zastosowanie_lecznicze': 'Ziołolecznictwo i medycyna ludowa',
+                             'barwienie': 'Barwienie i rzemiosło', 'kosmetyka': 'Kosmetyka', 'historia': 'Historia i nazwa',
+                             'kultura': 'Wierzenia i tradycje', 'nazwy_ludowe': 'Nazwy ludowe', 'bezpieczenstwo': 'Bezpieczeństwo',
+                             'uprawa': 'Uprawa', 'ciekawostki': 'Ciekawostki'} %}
+            <details class="grimmoire-tab" open>
+                <summary><i class="ra ra-globe"></i> Wiedza z sieci</summary>
+                <div class="tab-content">
+                    <p class="web-note">Informacje zebrane z Wikipedii i stron z różnych krajów, każda sprawdzona z cytatem
+                    źródła. Kliknij źródło, aby zweryfikować je samodzielnie.{% if plant.wiedza.zaktualizowano %} Aktualizacja: {{ plant.wiedza.zaktualizowano }}.{% endif %}</p>
+                    {% for key, title in sekcje.items() %}
+                        {% set items = plant.wiedza.fakty | selectattr('sekcja', 'equalto', key) | list %}
+                        {% if items %}
+                        <details class="grimmoire-subtab"{% if key in ('barwienie', 'kultura', 'zastosowanie_lecznicze') %} open{% endif %}>
+                            <summary>{{ '🎨 ' if key == 'barwienie' else '' }}{{ title }}</summary>
+                            <div class="subtab-content">
+                                <ul class="web-facts">
+                                {% for f in items %}
+                                    <li>{{ f.tekst }}{% if f.czesc %} <em class="web-part">({{ f.czesc }})</em>{% endif %}
+                                        {% if f.zrodlo and f.zrodlo.url and (f.zrodlo.url.startswith('http://') or f.zrodlo.url.startswith('https://')) %}
+                                        <a class="web-src" href="{{ f.zrodlo.url }}" target="_blank" rel="noopener nofollow" title="{{ f.zrodlo.nazwa }}">↗ {{ f.zrodlo.url.split('/')[2] }}{% if f.jezyk %} [{{ f.jezyk }}]{% endif %}</a>
+                                        {% endif %}
+                                    </li>
+                                {% endfor %}
+                                </ul>
+                            </div>
+                        </details>
+                        {% endif %}
+                    {% endfor %}
+                    {% if plant.wiedza.zrodla %}
+                    <details class="grimmoire-subtab" data-kw-zrodla>
+                        <summary><i class="ra ra-quill-ink"></i> Źródła wiedzy</summary>
+                        <div class="subtab-content">
+                            <ol class="arch-bib">
+                            {% for z in plant.wiedza.zrodla %}{% if z.url and (z.url.startswith('http://') or z.url.startswith('https://')) %}
+                                <li><a href="{{ z.url }}" target="_blank" rel="noopener nofollow">{{ z.nazwa or z.url }}</a></li>
+                            {% endif %}{% endfor %}
+                            </ol>
+                        </div>
+                    </details>
+                    {% endif %}
+                </div>
+            </details>
+            {% endif %}
+
+            {% if legacy and legacy.sekcje %}
+            <details class="grimmoire-tab">
+                <summary><i class="ra ra-book"></i> Z archiwum Kwiatownika{% if plant._archiwum %} (roślina z archiwum){% endif %}</summary>
+                <div class="tab-content">
+                    {% for key, title, value in legacy.sekcje %}
+                    <details class="grimmoire-subtab"{% if key == 'barwniki' %} open{% endif %}>
+                        <summary>{% if key == 'barwniki' %}🎨 {% endif %}{{ title }}</summary>
+                        <div class="subtab-content">{{ arch_value(value) }}</div>
+                    </details>
+                    {% endfor %}
+                    {% if legacy.bibliografia %}
+                    <details class="grimmoire-subtab" data-kw-zrodla>
+                        <summary><i class="ra ra-quill-ink"></i> Bibliografia</summary>
+                        <div class="subtab-content">
+                            <ol class="arch-bib">
+                                {% for url in legacy.bibliografia %}<li><a href="{{ url }}" target="_blank" rel="noopener nofollow">{{ url }}</a></li>{% endfor %}
+                            </ol>
+                        </div>
+                    </details>
+                    {% endif %}
+                </div>
+            </details>
+            {% endif %}
+
+            {% if plant_recipes %}
+            <details class="grimmoire-tab" data-kw-slowa="przepis|przepisy|przepisów">
+                <summary><i class="ra ra-cauldron"></i> Przepisy z tą rośliną</summary>
+                <div class="tab-content">
+                    <ul class="trivia-list">
+                        {% for r in plant_recipes %}
+                            <li><i class="ra ra-emerald"></i>
+                                <a href="{{ url_for('recipes.przepisy', q=r.get('tytul'), autoopen='true') }}">{{ r.get('tytul') }}</a>
+                                {% if r.get('_z_sieci') %}<small title="przepis z internetu, przetłumaczony">🌐</small>{% endif %}
+                                {% if r.get('metoda') %}<small style="color:#888;"> · {{ r.get('metoda') }}</small>{% endif %}
+                            </li>
+                        {% endfor %}
+                    </ul>
+                </div>
+            </details>
+            {% endif %}
+
+            {% if plant.ciekawostki or scalone(plant, 'ciekawostki') %}
+            <details class="grimmoire-tab">
+                <summary><i class="ra ra-scroll"></i> Wiedza Tajemna</summary>
+                <div class="tab-content">
+                    <ul class="trivia-list">
+                        {{ lista(plant, 'ciekawostki', plant.ciekawostki if plant.ciekawostki is iterable and plant.ciekawostki is not string else [], 'ra-emerald') }}
+                    </ul>
+                </div>
+            </details>
+            {% endif %}
+
+        </div>
+    </article>
+</div>
+
+<div id="grimmoireLightbox" class="lightbox-overlay" onclick="closeLightbox()">
+    <div class="lightbox-content">
+        <img id="lightboxImg" src="" alt="Powiększenie">
+        <div id="lightboxCaption" class="lightbox-caption-text"></div>
+    </div>
+</div>
+
+<style>
+    /* =====================================================================
+       STRONA ROŚLINY – jasno, „encyklopedycznie” (jak Wikipedia), z celtyckim zdobieniem:
+       pergamin, szeryfowe nagłówki z cienką linią, zielone linki, plecionka i triquetra jako ozdobniki.
+       ===================================================================== */
+    .grimmoire-wrapper {
+        --kw-parch: #fdfaf0; --kw-paper: #fffdf7; --kw-ink: #2b2b2b; --kw-muted: #6b6255;
+        --kw-moss: #3e4a3d; --kw-green: #2d5a27; --kw-sage: #8a9a5b; --kw-gold: #9a7b2f;
+        --kw-line: #d8cfb4; --kw-line-soft: #ebe4cf; --kw-red: #9b2c2c; --kw-red-bg: #fbf0ee;
+        /* plecionka celtycka (dwie przeplatające się nici) i triquetra – rysowane w SVG */
+        --kw-knot: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='28' height='12' viewBox='0 0 28 12'%3E%3Cg fill='none' stroke-width='1.6' stroke-linecap='round'%3E%3Cpath d='M0 6C4.7 0 9.3 0 14 6S23.3 12 28 6' stroke='%239a7b2f'/%3E%3Cpath d='M0 6C4.7 12 9.3 12 14 6S23.3 0 28 6' stroke='%233e4a3d'/%3E%3C/g%3E%3C/svg%3E");
+        --kw-triquetra: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 90'%3E%3Cg fill='none' stroke='%239a7b2f' stroke-width='3.2'%3E%3Cpath d='M50 6A72 72 0 0 1 86 68A72 72 0 0 1 50 6Z'/%3E%3Cpath d='M86 68A72 72 0 0 1 14 68A72 72 0 0 1 86 68Z'/%3E%3Cpath d='M14 68A72 72 0 0 1 50 6A72 72 0 0 1 14 68Z'/%3E%3Ccircle cx='50' cy='48' r='22' stroke='%233e4a3d' stroke-width='2.4'/%3E%3C/g%3E%3C/svg%3E");
+
+        position: relative; padding: 0 0 30px 0; margin: -20px -20px 0 -20px;
+        background-color: var(--kw-parch); background-size: cover; background-position: center 30%;
+        background-repeat: no-repeat; color: var(--kw-ink); font-family: Georgia, 'Crimson Text', serif;
+        border-radius: 4px; overflow: hidden;
+    }
+    /* zdjęcie rośliny jako jasny baner u góry, łagodnie przechodzące w pergamin */
+    .grimmoire-overlay {
+        position: absolute; inset: 0; z-index: 1; pointer-events: none;
+        background: linear-gradient(to bottom, rgba(253,250,240,0.35) 0, rgba(253,250,240,0.82) 160px, var(--kw-parch) 340px, var(--kw-parch) 100%);
+    }
+    .grimmoire-container { position: relative; z-index: 2; max-width: 900px; margin: 0 auto; padding: 40px 24px 0 24px; }
+
+    /* NAGŁÓWEK KARTY */
+    .grimmoire-hero {
+        text-align: center; margin-bottom: 30px; padding: 28px 22px 22px 22px; position: relative;
+        background: rgba(255, 253, 247, 0.92); border: 1px solid var(--kw-line); border-radius: 6px;
+        box-shadow: 0 6px 24px rgba(62, 74, 61, 0.12);
+    }
+    .grimmoire-hero::before, .grimmoire-hero::after {
+        content: ''; position: absolute; left: 14px; right: 14px; height: 12px;
+        background: var(--kw-knot) repeat-x center / 28px 12px; opacity: 0.85;
+    }
+    .grimmoire-hero::before { top: 6px; }
+    .grimmoire-hero::after { bottom: 6px; }
+    .hero-title {
+        font-size: 3rem; margin: 6px 0 0 0; color: var(--kw-moss); font-family: 'Playfair Display', Georgia, serif;
+        font-weight: normal; letter-spacing: 0.5px; line-height: 1.15; overflow-wrap: anywhere;
+    }
+    .hero-subtitle { font-size: 1.3rem; color: var(--kw-muted); font-style: italic; margin: 6px 0 0 0; }
+    .hero-family { font-size: 1rem; font-style: normal; color: var(--kw-gold); }
+    .hero-divider {
+        width: 220px; height: 34px; margin: 14px auto;
+        background: var(--kw-triquetra) no-repeat center / 34px 30px;
+        position: relative;
+    }
+    .hero-divider::before, .hero-divider::after {
+        content: ''; position: absolute; top: 50%; width: 80px; height: 1px; background: var(--kw-line);
+    }
+    .hero-divider::before { left: 0; } .hero-divider::after { right: 0; }
+    .hero-desc { font-size: 1.12rem; line-height: 1.75; color: var(--kw-ink); max-width: 760px; margin: 0 auto; text-align: left; }
+    .compare-link { display: inline-block; margin-top: 14px; color: var(--kw-green); font-size: 0.95rem; text-decoration: underline; text-underline-offset: 3px; }
+    .compare-link:hover { color: var(--kw-gold); }
+
+    /* GALERIA ZDJĘĆ */
+    .photo-credits { margin: 12px auto 0; max-width: 700px; font-size: 0.8rem; color: var(--kw-muted); text-align: left; }
+    .photo-credits summary { cursor: pointer; text-align: center; }
+    .photo-credits ul { margin: 6px 0 0; padding-left: 18px; }
+    .photo-credits li { overflow-wrap: anywhere; }
+    .photo-credits a { color: var(--kw-green); }
+    .plant-gallery { display: flex; gap: 14px; justify-content: center; flex-wrap: wrap; margin-top: 24px; }
+    .gallery-thumb {
+        width: 120px; height: 120px; border-radius: 6px; border: 1px solid var(--kw-line); overflow: hidden; position: relative;
+        cursor: pointer; transition: transform 0.25s, box-shadow 0.25s, border-color 0.25s; background: var(--kw-paper);
+        box-shadow: 0 2px 8px rgba(0,0,0,0.08); padding: 4px;
+    }
+    .gallery-thumb img { width: 100%; height: 100%; object-fit: cover; border-radius: 4px; transition: transform 0.4s; }
+    .gallery-thumb:hover { transform: translateY(-4px); border-color: var(--kw-gold); box-shadow: 0 8px 20px rgba(62, 74, 61, 0.2); }
+    .gallery-thumb:hover img { transform: scale(1.05); }
+    .gallery-caption {
+        position: absolute; bottom: 4px; left: 4px; right: 4px; background: rgba(255, 253, 247, 0.92); color: var(--kw-moss);
+        text-align: center; font-size: 0.72rem; padding: 3px 0; text-transform: uppercase; letter-spacing: 1px; border-radius: 0 0 4px 4px;
+    }
+
+    /* LIGHTBOX */
+    .lightbox-overlay { position: fixed; inset: 0; background: rgba(30, 34, 28, 0.88); z-index: 9999; display: flex; justify-content: center; align-items: center; flex-direction: column; backdrop-filter: blur(6px); opacity: 0; pointer-events: none; transition: opacity 0.3s ease; cursor: zoom-out; }
+    .lightbox-overlay.active { opacity: 1; pointer-events: auto; }
+    .lightbox-content { position: relative; max-width: 90vw; max-height: 90vh; text-align: center; transform: scale(0.95); transition: transform 0.3s ease; }
+    .lightbox-overlay.active .lightbox-content { transform: scale(1); }
+    .lightbox-content img { max-width: 100%; max-height: 80vh; border: 6px solid #fffdf7; border-radius: 4px; box-shadow: 0 10px 40px rgba(0,0,0,0.4); }
+    .lightbox-caption-text { color: #fdfaf0; font-size: 1.1rem; font-family: Georgia, serif; margin-top: 12px; letter-spacing: 0.5px; }
+
+    /* ROZDZIAŁY (ZAKŁADKI) – jak sekcje artykułu encyklopedii */
+    .grimmoire-book { display: flex; flex-direction: column; gap: 12px; margin-bottom: 40px; }
+    .grimmoire-tab { background: var(--kw-paper); border: 1px solid var(--kw-line); border-radius: 6px; overflow: hidden; transition: box-shadow 0.25s, border-color 0.25s; }
+    .grimmoire-tab[open] { border-color: #c9bd97; box-shadow: 0 6px 20px rgba(62, 74, 61, 0.1); }
+    .grimmoire-tab > summary {
+        list-style: none; padding: 16px 22px; font-size: 1.45rem; color: var(--kw-moss); cursor: pointer;
+        display: flex; align-items: center; gap: 12px; font-family: 'Playfair Display', Georgia, serif; transition: background 0.2s;
+    }
+    .grimmoire-tab > summary::-webkit-details-marker { display: none; }
+    .grimmoire-tab > summary::after { content: '▾'; margin-left: auto; font-size: 1rem; color: var(--kw-gold); transition: transform 0.25s; }
+    .grimmoire-tab:not([open]) > summary::after { transform: rotate(-90deg); }
+    .grimmoire-tab > summary i { color: var(--kw-gold); font-size: 1.25rem; }
+    .grimmoire-tab:not([open]) > summary:hover { background: #f6f1e2; }
+    .grimmoire-tab[open] > summary { position: relative; padding-bottom: 20px; }
+    /* pod tytułem rozdziału: cienka linia jak w Wikipedii + pas plecionki */
+    .grimmoire-tab[open] > summary::before {
+        content: ''; position: absolute; left: 22px; right: 22px; bottom: 4px; height: 10px;
+        background: var(--kw-knot) repeat-x center / 24px 10px; opacity: 0.55;
+        border-top: 1px solid var(--kw-line);
+    }
+    .tab-content { padding: 18px 24px 24px 24px; color: var(--kw-ink); line-height: 1.7; font-size: 1.05rem; animation: slideDown 0.25s ease-out; display: flex; flex-direction: column; gap: 12px; }
+    @keyframes slideDown { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: translateY(0); } }
+
+    /* PODROZDZIAŁY */
+    .grimmoire-subtab { background: #fbf8ef; border: 1px solid var(--kw-line-soft); border-left: 3px solid var(--kw-sage); border-radius: 0 6px 6px 0; overflow: hidden; }
+    .grimmoire-subtab[open] { background: #fffdf8; border-left-color: var(--kw-gold); }
+    .grimmoire-subtab > summary {
+        list-style: none; padding: 12px 18px; font-size: 1.15rem; color: var(--kw-green); cursor: pointer;
+        display: flex; align-items: center; gap: 10px; font-family: Georgia, serif; transition: background 0.2s, color 0.2s;
+    }
+    .grimmoire-subtab > summary::-webkit-details-marker { display: none; }
+    .grimmoire-subtab:not([open]) > summary:hover { background: #f3eedd; color: var(--kw-moss); }
+    .grimmoire-subtab[open] > summary { border-bottom: 1px solid var(--kw-line-soft); color: var(--kw-moss); }
+    .grimmoire-subtab > summary i { color: var(--kw-sage); }
+    .subtab-content { padding: 16px 18px; animation: slideDown 0.25s ease-out; }
+
+    /* ZAGROŻENIA I OSTRZEŻENIA */
+    .danger-tab[open] { border-color: #d9a9a3; }
+    .danger-tab > summary, .danger-tab > summary i { color: var(--kw-red); }
+    .danger-subtab { border-left-color: var(--kw-red); }
+    .danger-subtab[open] { border-left-color: var(--kw-red); }
+    .danger-subtab > summary, .danger-subtab > summary i { color: var(--kw-red); }
+    .danger-subtab:not([open]) > summary:hover { background: var(--kw-red-bg); color: #7a1f1f; }
+    .danger-block { background: var(--kw-red-bg); border-left: 3px solid var(--kw-red); border-radius: 0 4px 4px 0; }
+    .danger-block p { margin: 0; color: #5c1d1d; }
+    .warning-box { background: var(--kw-red-bg); padding: 14px; border-radius: 4px; color: #5c1d1d; }
+
+    /* WNĘTRZA PODZAKŁADEK */
+    .sub-list { padding-left: 20px; margin-bottom: 0; }
+    .sub-list li { margin-bottom: 6px; }
+    .sub-list li::marker, .feature-list li::marker { color: var(--kw-gold); }
+    .sub-list strong { color: var(--kw-moss); }
+    .energy-quote { margin-top: 14px; padding: 10px 14px; border-left: 3px solid var(--kw-gold); background: #f8f3e3; font-style: italic; color: var(--kw-muted); border-radius: 0 4px 4px 0; }
+
+    /* SUROWCE */
+    .subtab-title-group { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; flex-wrap: wrap; }
+    .part-badge { background: #e7eddb; color: var(--kw-green); border: 1px solid #c4cfaa; padding: 1px 10px; font-size: 0.75rem; font-weight: bold; border-radius: 10px; text-transform: uppercase; margin-left: auto; font-family: Georgia, serif; letter-spacing: 0.5px; }
+    .part-desc { font-size: 0.97rem; color: var(--kw-muted); margin-bottom: 12px; margin-top: 0; font-style: italic; }
+    .chem-tags { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+    .chem-link { display: inline-block; line-height: 1.5; background: #f2f5ea; border: 1px solid #c4cfaa; color: var(--kw-green); padding: 4px 10px; font-size: 0.9rem; border-radius: 4px; text-decoration: none; transition: border-color 0.2s, box-shadow 0.2s; }
+    .chem-link i { font-size: 0.75rem; color: var(--kw-sage); }
+    .chem-link:hover { border-color: var(--kw-gold); box-shadow: 0 2px 8px rgba(154, 123, 47, 0.18); text-decoration: none; }
+    .part-warning { color: var(--kw-red); font-size: 0.93rem; margin-top: 14px; padding: 8px 12px; background: var(--kw-red-bg); border-radius: 4px; }
+    .part-time { margin-top: 12px; text-align: right; font-size: 0.93rem; color: var(--kw-green); }
+
+    /* KALENDARZ & GILDIE */
+    .task-item { border-bottom: 1px solid var(--kw-line-soft); padding-bottom: 12px; margin-bottom: 12px; }
+    .task-item:last-child { border: none; margin-bottom: 0; padding-bottom: 0; }
+    .task-head { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; color: var(--kw-moss); margin-bottom: 4px; }
+    .task-month { font-size: 0.8rem; background: #efe8d3; color: var(--kw-moss); padding: 2px 8px; border-radius: 4px; }
+    .task-desc { font-size: 0.97rem; margin-bottom: 8px; }
+    .task-meta span { display: inline-block; font-size: 0.87rem; color: var(--kw-muted); margin-right: 15px; }
+
+    .eco-list { list-style: none; padding: 0; margin-bottom: 0; }
+    .eco-list li { margin-bottom: 8px; display: flex; gap: 10px; align-items: flex-start; }
+    .eco-list li i { color: var(--kw-sage); margin-top: 4px; }
+
+    .guild-list { display: flex; flex-direction: column; gap: 10px; }
+    .guild-item { background: #fbf8ef; border: 1px solid var(--kw-line-soft); padding: 10px 14px; border-radius: 6px; }
+    .guild-link { color: var(--kw-green); font-weight: bold; text-decoration: none; font-family: Georgia, serif; font-size: 1.12rem; display: inline-flex; align-items: center; gap: 8px; }
+    .guild-link i { font-size: 1rem; color: var(--kw-sage); }
+    .guild-link:hover { color: var(--kw-gold); text-decoration: underline; }
+    .guild-role { color: var(--kw-muted); font-size: 0.95rem; margin: 4px 0 0 0; }
+
+    .trivia-list { list-style: none; padding: 0; margin: 0; }
+    .trivia-list li { margin-bottom: 12px; padding-left: 26px; position: relative; }
+    .trivia-list li i { position: absolute; left: 0; top: 4px; color: var(--kw-gold); }
+
+    /* ARCHIWUM KWIATOWNIKA */
+    .arch-dl { margin: 0; }
+    .arch-dl dt { color: var(--kw-moss); font-weight: bold; margin-top: 8px; }
+    .arch-dl dd { margin: 2px 0 0 12px; }
+    .arch-list { margin: 4px 0; padding-left: 18px; }
+    .arch-link, .arch-bib a { color: var(--kw-green); font-size: 0.88em; word-break: break-all; }
+    .arch-src { font-size: 0.88em; color: var(--kw-muted); }
+
+    /* WIEDZA Z SIECI WMONTOWANA W ROZDZIAŁY (blok "scalone") */
+    .merged-text .web-ref { font-size: 0.7em; }
+    .web-part-badge { background: #e8f0fa; border-color: #a9c3e4; color: #24548c; }
+    .orig-text { margin: 6px 0 0; font-size: 0.88em; color: var(--kw-muted); }
+    .orig-text summary { cursor: pointer; font-style: italic; }
+    .orig-text p { margin: 4px 0 0; padding-left: 10px; border-left: 2px solid var(--kw-line); overflow-wrap: anywhere; }
+
+    /* WIEDZA Z SIECI (Siedziba Kwiatownika) */
+    .web-note { font-size: 0.88em; color: var(--kw-muted); font-style: italic; margin-bottom: 10px; }
+    .web-facts { margin: 0; padding-left: 18px; }
+    .web-facts li { margin-bottom: 8px; overflow-wrap: anywhere; }
+    .web-part { color: var(--kw-muted); font-size: 0.9em; }
+    .web-src { color: var(--kw-green); font-size: 0.8em; margin-left: 4px; white-space: nowrap; }
+    .web-summary { margin: 0 0 10px; padding: 8px 12px; border-left: 3px solid var(--kw-gold); background: #f8f3e3; overflow-wrap: anywhere; border-radius: 0 4px 4px 0; }
+    .web-parts { font-size: 0.9em; color: var(--kw-muted); margin-bottom: 10px; line-height: 1.9; }
+    .web-chip { display: inline-block; padding: 0 8px; margin: 0 4px 2px 0; border: 1px solid #c4cfaa; background: #f2f5ea; border-radius: 10px; font-size: 0.8em; color: var(--kw-green); white-space: nowrap; }
+    /* przypisy [n] – jak w Wikipedii */
+    .web-ref { color: #2c5fa0; font-size: 0.75em; vertical-align: super; margin-left: 1px; text-decoration: none; }
+    .web-ref:hover { text-decoration: underline; }
+    .web-sources { padding-left: 24px; }
+    .web-sources li { margin-bottom: 4px; overflow-wrap: anywhere; }
+    .web-sources a { color: #2c5fa0; font-size: 0.9em; }
+    .web-lang { color: var(--kw-muted); font-size: 0.8em; }
+
+    /* LICZNIKI INFORMACJI przy rozdziałach i podrozdziałach (liczone w JS z tego, co jest wyświetlone) */
+    .kw-count {
+        margin-left: auto; flex: none; display: inline-flex; align-items: baseline; gap: 4px;
+        padding: 1px 10px; border-radius: 999px; background: #efe8d3; border: 1px solid var(--kw-line);
+        color: var(--kw-moss); font-family: Georgia, serif; font-size: 0.8rem; font-weight: bold; line-height: 1.6;
+        font-variant-numeric: tabular-nums; white-space: nowrap; letter-spacing: 0;
+    }
+    .kw-count-word { font-weight: normal; color: var(--kw-muted); font-size: 0.92em; }
+    .grimmoire-tab > summary .kw-count { font-size: 0.85rem; padding: 2px 12px; }
+    .grimmoire-tab > summary.kw-has-count::after { margin-left: 10px; }
+    .grimmoire-subtab[open] > summary .kw-count, .grimmoire-tab[open] > summary .kw-count { background: #f6eed2; border-color: #d9c690; }
+    .kw-count--src { background: transparent; border-style: dashed; color: var(--kw-muted); font-weight: normal; }
+    .danger-tab .kw-count, .danger-subtab .kw-count { background: var(--kw-red-bg); border-color: #e2bcb6; color: var(--kw-red); }
+    @media (max-width: 600px) {
+        .kw-count-word { display: none; }
+        .grimmoire-tab > summary .kw-count { font-size: 0.8rem; padding: 1px 9px; }
+        .kw-count { font-size: 0.75rem; padding: 0 8px; }
+    }
+
+    /* linki w treści */
+    .grimmoire-book a:not(.guild-link):not(.chem-link):not(.web-ref) { color: var(--kw-green); }
+
+    /* TELEFONY I TABLETY */
+    @media (max-width: 768px) {
+        .grimmoire-wrapper { margin: -20px -12px 0 -12px; }
+        .grimmoire-container { padding: 24px 12px 0 12px; }
+        .grimmoire-hero { padding: 24px 14px 20px 14px; }
+        .hero-title { font-size: 2.1rem; }
+        .hero-subtitle { font-size: 1.1rem; }
+        .hero-desc { font-size: 1.02rem; }
+        .grimmoire-tab > summary { font-size: 1.2rem; padding: 14px 16px; }
+        .grimmoire-tab[open] > summary::before { left: 16px; right: 16px; }
+        .tab-content { padding: 14px 14px 18px 14px; font-size: 1rem; }
+        .subtab-content { padding: 12px; }
+        .plant-gallery { gap: 8px; }
+        .gallery-thumb { width: 88px; height: 88px; padding: 3px; }
+        .gallery-caption { font-size: 0.62rem; letter-spacing: 0.5px; }
+        .part-badge { margin-left: 0; }
+    }
+    @media (max-width: 600px) { .web-summary { padding: 6px 8px; } .web-facts { padding-left: 14px; } }
+    @media (prefers-reduced-motion: reduce) { .tab-content, .subtab-content { animation: none; } }
+</style>
+
+<script>
+    function openLightbox(imageUrl, imageCaption) {
+        const overlay = document.getElementById('grimmoireLightbox');
+        const img = document.getElementById('lightboxImg');
+        const caption = document.getElementById('lightboxCaption');
+
+        img.src = imageUrl;
+        caption.innerText = imageCaption;
+        overlay.classList.add('active');
+    }
+
+    function closeLightbox() {
+        document.getElementById('grimmoireLightbox').classList.remove('active');
+    }
+
+    document.addEventListener('keydown', function(event) {
+        if (event.key === "Escape") closeLightbox();
+    });
+    /* LICZNIKI INFORMACJI: przy każdym rozdziale i podrozdziale liczba informacji, które w nim są.
+       Jednostka = pole/punkt listy, akapit, wartość z archiwum, substancja czynna, zadanie z kalendarza, gildia;
+       tekst z sieci wmontowany w rozdział liczy się po zdaniach z przypisami (data-n).
+       Rozdział sumuje swoje podrozdziały, więc liczby się zgadzają. Źródła/bibliografia mają osobną plakietkę
+       i nie wliczają się do informacji rozdziału. */
+    (function () {
+        const UNIT = 'li, p, dd, .chem-link, .task-item, .guild-item, .part-effects, .part-warning, .part-time';
+        const ATOM = '.task-item, .guild-item, .chem-link';
+        const SKIP = '.orig-text, .web-note, .web-parts, .web-summary, .arch-src, .kw-label, summary';
+
+        function odmiana(n, f1, f2, f5) {
+            if (n === 1) return f1;
+            const d = n % 10, s = n % 100;
+            return (d >= 2 && d <= 4 && (s < 12 || s > 14)) ? f2 : f5;
+        }
+        function waga(u) {
+            const merged = u.querySelectorAll('.merged-text[data-n]');
+            if (merged.length) return Array.from(merged).reduce((a, m) => a + (parseInt(m.dataset.n, 10) || 1), 0);
+            const label = u.querySelector(':scope > strong');
+            let t = u.textContent;
+            if (label && !u.matches('.part-time')) t = t.replace(label.textContent, '');
+            return t.trim() ? 1 : 0;
+        }
+        function policz(d) {
+            const content = Array.from(d.children).filter(c => c.tagName !== 'SUMMARY');
+            let n = 0;
+            content.forEach(box => {
+                const units = box.matches(UNIT) ? [box, ...box.querySelectorAll(UNIT)] : box.querySelectorAll(UNIT);
+                units.forEach(u => {
+                    if (u.closest(SKIP)) return;
+                    const src = u.closest('[data-kw-zrodla]');
+                    if (src && src !== d) return;                       // źródła nie są „informacją” rozdziału
+                    if (u.parentElement && u.parentElement.closest(ATOM)) return;   // środek zadania/gildii liczony raz
+                    if (!u.matches(ATOM) && Array.from(u.querySelectorAll(UNIT)).some(x => !x.closest(SKIP))) return; // tylko liście
+                    n += waga(u);
+                });
+            });
+            if (!n) {   // wartość z archiwum podana jako sam tekst (bez listy/akapitu)
+                const txt = content.map(c => c.matches('.orig-text') ? '' : c.textContent).join('').trim();
+                if (txt && !d.querySelector('details.grimmoire-subtab')) n = 1;
+            }
+            return n;
+        }
+        document.querySelectorAll('.grimmoire-book details.grimmoire-tab, .grimmoire-book details.grimmoire-subtab').forEach(d => {
+            const sum = d.querySelector(':scope > summary');
+            if (!sum || sum.querySelector('.kw-count')) return;
+            const n = policz(d);
+            if (!n) return;
+            const zrodla = d.hasAttribute('data-kw-zrodla');
+            const formy = (d.dataset.kwSlowa || (zrodla ? 'źródło|źródła|źródeł' : 'informacja|informacje|informacji')).split('|');
+            const slowo = odmiana(n, formy[0], formy[1], formy[2]);
+            const b = document.createElement('span');
+            b.className = 'kw-count' + (zrodla ? ' kw-count--src' : '');
+            b.title = n + ' ' + slowo;
+            b.setAttribute('aria-label', n + ' ' + slowo);
+            b.innerHTML = '<span class="kw-count-num"></span><span class="kw-count-word"></span>';
+            b.firstChild.textContent = n;
+            b.lastChild.textContent = slowo;
+            sum.appendChild(b);
+            sum.classList.add('kw-has-count');
+        });
+    })();
+</script>
+{% endblock %}
