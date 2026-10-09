@@ -4,6 +4,15 @@
       {% for j in busy[:6] %}<a href="/jobs/{{ j.id }}">#{{ j.id }} {{ j.kind }}</a>{% if j.status.value == 'queued' %} (czeka){% elif quiet.get(j.id, 0) >= 5 %} <span class="{{ 'ag-down' if quiet[j.id] * 2 >= stall else 'muted' }}" title="brak znaku zycia (nowy krok, log, zapytanie do LLM); po {{ stall }} min planista zatrzyma zadanie">(cisza {{ quiet[j.id] }} min)</span>{% endif %}{% if not loop.last %}, {% endif %}{% endfor %}{% if busy|length > 6 %} ...{% endif %}
     {% else %}<span class="ag-dot idle"></span><b>Kolejka stoi</b>{% if auto and enabled %} - planista zleci zadanie przy najblizszym sprawdzeniu (co {{ check_minutes }} min){% endif %}{% endif %}
   </span>
+  <form method="post" action="/agents/jobs-limit" class="ag-limit" hx-post="/agents/jobs-limit" hx-target="#ag-status" hx-swap="outerHTML">
+    <span>Zadania w tle:</span>
+    <span class="ag-seg" role="group" aria-label="ile zadan Siedziby naraz">
+      {% for n in range(0, limit_max + 1) %}<button name="value" value="{{ n }}" class="{{ 'sel' if n == job_limit else '' }}"
+        title="{{ 'wstrzymaj - dzialajace dokoncza prace, nowe poczekaja w kolejce' if n == 0 else 'najwyzej ' ~ n ~ ' naraz' }}"
+        {% if n == job_limit %}aria-pressed="true"{% endif %}>{{ n }}</button>{% endfor %}
+    </span>
+    <span class="muted">{% if job_limit == 0 %}<b class="ag-down">wstrzymane</b>{% else %}dziala {{ running_n }}/{{ job_limit }}{% endif %}{% if waiting_n %}, czeka {{ waiting_n }}{% endif %}</span>
+  </form>
   <span>Modele LLM: <b>{{ load.llm_jobs }}</b> zadan z LLM (limit agentow {{ load.limit }}){% if load.overloaded %} - <span class="ag-down">{{ load.powod }}</span>{% endif %}</span>
   <form method="post" action="/agents/auto">
     <input type="hidden" name="value" value="{{ 'off' if auto else 'on' }}">

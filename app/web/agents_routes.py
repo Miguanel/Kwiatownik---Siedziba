@@ -21,7 +21,9 @@ AGENT_INFO = {
     "wdrozeniowiec": f"Publikuje nowa wersje Kwiatownika: gdy Siedziba nazbiera co najmniej {settings.deploy_min_points} "
                      f"informacji albo {settings.deploy_min_recipes} przepisow (albo cokolwiek po {settings.deploy_max_hours} h), "
                      "robi commit danych Kwiatownika2 z wpisem kroniki i push - Render buduje strone sam. "
-                     f"Najczesciej co {settings.deploy_min_hours} h.",
+                     + ("Tryb reczny: pokazuje komunikat 'Commit gotowy' z licznikiem, commit robi przycisk (/commit)."
+                        if str(settings.deploy_mode).lower() not in ("auto", "automatyczny") else
+                        f"Najczesciej co {settings.deploy_min_hours} h."),
     "audytor": "Skanuje baze wiedzy Kwiatownika (pliki roslin, przepisy) i pisze raport oceny: kompletnosc, wiedza "
                "trudno dostepna, opowiesci, przepisy niekulinarne, zrodla. Metryki liczy kod, ocene dopisuje ekspert LLM. "
                "Konczy sie lista zalecen.",
@@ -30,7 +32,8 @@ AGENT_INFO = {
                      f"{settings.agents_reorder_days} dni.",
     "planista": f"Co {settings.agents_check_minutes} min sprawdza, czy Siedziba nad czyms pracuje. Zatrzymuje zadania "
                 f"zawieszone (bez znaku zycia od {settings.agents_stall_minutes} min), pilnuje obciazenia modeli LLM, "
-                "proponuje kolejne zadanie; w trybie automatycznym, gdy kolejka stoi, sam zleca JEDNO.",
+                "proponuje kolejne zadanie; w trybie automatycznym, gdy w tle dziala mniej zadan niz ustawiony limit "
+                "(0-6), doklada po jednym (bez powtorzen i bez przeciazania modeli LLM).",
 }
 RESULT_KEYS = ("plants", "facts", "verified", "applied", "rejected", "sources", "found", "new_sites", "recipes",
                "translated", "exported", "merged", "photos", "pages", "saved", "items")
@@ -85,6 +88,15 @@ def _deploy_ready() -> str | None:
         return str(exc)[:200]
 
 
+LIMIT_MAX = 6
+
+
+def _limit_info(state) -> dict:
+    runner = getattr(state, "jobs", None)
+    return {"job_limit": store.job_limit(state), "limit_max": LIMIT_MAX,
+            "running_n": len(getattr(runner, "limited", ()) or ()), "waiting_n": len(getattr(runner, "queue", ()) or ())}
+
+
 def _overview(request: Request) -> dict:
     sync_tasks()
     with Session(engine) as s:
@@ -116,6 +128,7 @@ def _overview(request: Request) -> dict:
             "check_minutes": settings.agents_check_minutes, "enabled": settings.agents_enabled,
             "quiet": watchdog.job_silence(busy), "stall": settings.agents_stall_minutes, "guard": guard,
             "load": watchdog.llm_load(request.app.state), "deploy_ready": _deploy_ready(),
+            **_limit_info(request.app.state),
             "msg": request.query_params.get("msg", "")}
 
 
@@ -128,6 +141,21 @@ async def agents_page(request: Request):
 async def agents_status(request: Request):
     """Pasek stanu (odswiezany co kilka sekund): kolejka, agenci w toku, liczniki zadan."""
     return templates.TemplateResponse(request, "agents_status.html", _overview(request))
+
+
+@router.post("/agents/jobs-limit")
+async def agents_jobs_limit(request: Request, value: int = Form(...)):
+    """Ile zadan Siedziby moze dzialac naraz w tle (0-6). Dziala od razu i zostaje po restarcie
+    (data/agents_settings.json). 0 = wstrzymane: dzialajace koncza prace, nowe czekaja w kolejce."""
+    n = max(0, min(LIMIT_MAX, value))
+    runner = getattr(request.app.state, "jobs", None)
+    if runner is not None and hasattr(runner, "set_limit"):
+        runner.set_limit(n)
+    store.set_runtime(max_jobs=n)
+    if request.headers.get("HX-Request"):
+        return templates.TemplateResponse(request, "agents_status.html", _overview(request))
+    msg = "Zadania w tle wstrzymane (limit 0)" if n == 0 else f"Zadania w tle: najwyzej {n} naraz"
+    return _redirect("/agents?msg=" + msg.replace(" ", "+"))
 
 
 @router.post("/agents/auto")

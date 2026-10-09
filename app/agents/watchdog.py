@@ -22,7 +22,7 @@ from app.worker import activity
 _REPORTED: dict[int, float] = {}   # tryb "report": kiedy ostatnio zgloszono zadanie (zglaszamy raz na okres ciszy)
 ZOMBIE_AFTER_S = 120          # tyle sekund po utworzeniu zadanie musi juz byc w kolejce w pamieci
 # zadania, ktore pytaja modele LLM (ich liczbe naraz ogranicza AGENTS_MAX_LLM_JOBS)
-LLM_JOBS = ("plant_research", "plant_apply", "plant_organize", "plant_merge", "translate", "enrich",
+LLM_JOBS = ("plant_research", "plant_apply", "plant_organize", "plant_merge", "plant_place", "translate", "enrich",
             "build_profile", "fb_ideas")
 
 

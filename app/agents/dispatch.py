@@ -59,9 +59,11 @@ async def run_dispatch(state, trigger: str = "reczny", job_id: int | None = None
                   "zalecen": len(tasks), "zlecone": [], "pominiete": [], "czekaja": []}
         say(f"Zalecenia czekajace na zlecenie: {len(tasks)} (audyt #{audit.id if audit else '-'}); "
             f"w kolejce Siedziby: {len(busy)}; limit zlecen: {limit}")
-        full = len(busy) >= settings.max_concurrent_jobs * 2
+        cap = store.job_limit(state)
+        full = cap == 0 or len(busy) >= cap * 2
         if full:
-            say("Kolejka pelna - nic nie zlecam (zalecenia czekaja na nastepny przebieg)")
+            say("Zadania w tle wstrzymane (limit 0) - nic nie zlecam" if cap == 0 else
+                "Kolejka pelna - nic nie zlecam (zalecenia czekaja na nastepny przebieg)")
         load = watchdog.llm_load(state)
         llm_running = load["llm_jobs"]
         report["llm"] = load

@@ -4,7 +4,9 @@
   zebrane wczesniej -> LLM wyciaga informacje z cytatami -> kontrola cytatow -> weryfikacja drugim modelem
   -> kopia pliku rosliny -> agregator (uklad sekcji) -> kontrola kopii -> zapis do Kwiatownika (z kopia zapasowa),
 - 'plant_organize': ponowne uporzadkowanie wiedzy juz zapisanej w plikach (bez nowego zbierania),
-- 'plant_merge'   : scalenie wiedzy z sieci z rozdzialami pliku rosliny (blok "scalone", Bielik -> inne modele).
+- 'plant_merge'   : scalenie wiedzy z sieci z rozdzialami pliku rosliny (blok "scalone", Bielik -> inne modele),
+- 'plant_place'   : rozmieszczenie punktow, ktore scalanie zostawilo poza tekstem, w konkretnych miejscach strony
+  (blok "rozmieszczenie": istniejace i nowe podrozdzialy z "Ukladu strony", app/knowledge/placement.py).
 Zbieranie skupia sie na LUKACH: podrozdzialy schematu bez tresci (app/knowledge/schema.py) -> zapytania
 w wielu jezykach, takze chinskim i japonskim (app/knowledge/gaps.py), z historia zapytan (PlantQuery).
 """
@@ -21,7 +23,7 @@ from sqlmodel import Session, col, func, select
 from app.config import settings
 from app.db import engine
 from app.knowledge import gaps as gapmod
-from app.knowledge import merge, organize, photos, plantfile, schema
+from app.knowledge import merge, organize, photos, placement, plantfile, schema
 from app.knowledge.extract import extract_facts
 from app.knowledge.registry import discover_new_plants, sync_kwiatownik
 from app.knowledge.sections import fingerprint, norm_text, similar
@@ -387,8 +389,43 @@ async def _merged(cand: dict, name: str, latin: str | None, llm, log) -> dict:
         raise
     except Exception as exc:                          # scalanie nie moze zatrzymac zapisu wiedzy
         log(f"  scalanie z rozdzialami: blad ({str(exc)[:120]}) - zostaje poprzednie")
+        return await _placed(cand, name, llm, log)
+    return await _placed(merge.with_merged(cand, sc), name, llm, log)
+
+
+def backfill_quotes(cand: dict) -> int:
+    """Dopisuje do wiedza.fakty fragmenty zrodel ("cytat") z bazy Siedziby - strona robi z nich link przewijajacy
+    do miejsca informacji na stronie zrodla i pokazuje je w dymku zrodla. Zwraca liczbe uzupelnionych."""
+    facts = [f for f in ((cand.get("wiedza") or {}).get("fakty") or []) if isinstance(f, dict) and not f.get("cytat")]
+    ids = {}
+    for f in facts:
+        fid = str(f.get("id") or "")
+        if fid.startswith("s") and fid[1:].isdigit():
+            ids[int(fid[1:])] = f
+    if not ids:
+        return 0
+    with Session(engine) as s:
+        rows = s.exec(select(PlantFact.id, PlantFact.quote).where(col(PlantFact.id).in_(list(ids)))).all()
+    n = 0
+    for fid, quote in rows:
+        q = plantfile.quote_snippet(quote)
+        if q:
+            ids[fid]["cytat"] = q
+            n += 1
+    return n
+
+
+async def _placed(cand: dict, name: str, llm, log, force: bool = False) -> dict:
+    """Rozmieszczenie punktow niewmontowanych w tekst rozdzialow (blok "rozmieszczenie")."""
+    try:
+        backfill_quotes(cand)
+        blk = await placement.build_placement(llm, cand, name, log=log, force=force)
+    except AllModelsFailedError:
+        raise
+    except Exception as exc:                          # rozmieszczenie nie moze zatrzymac zapisu wiedzy
+        log(f"  rozmieszczenie: blad ({str(exc)[:120]}) - zostaje poprzednie")
         return cand
-    return merge.with_merged(cand, sc)
+    return placement.with_placement(cand, blk)
 
 
 def web_section_counts(plant_id: str) -> dict[str, int]:
@@ -617,6 +654,62 @@ async def merge_plant(plant_id: str, log, llm=None) -> str:
     log(f"  scalono z rozdzialami: {n} podrozdzialow" + (f" (kopia zapasowa: {backup.name})" if backup else ""))
     _after_write(plant_id, cand)
     return "merged"
+
+
+async def place_plant(plant_id: str, log, llm=None, force: bool = False) -> str:
+    """Tylko rozmieszczenie wiedzy z sieci w rozdzialach i podrozdzialach strony (bez ponownego scalania)."""
+    plants_dir = Path(settings.kwiatownik_plants_dir)
+    original, crlf = plantfile.read_plant(plants_dir, plant_id)
+    if not original or not ((original.get("wiedza") or {}).get("sekcje")):
+        return "nothing"
+    with Session(engine) as s:
+        plant = s.get(Plant, plant_id)
+        name = plant.nazwa_pl if plant else (original.get("nazwa_pl") or plant_id)
+    cand = await _placed(copy.deepcopy(original), name, llm, log, force=force)
+    if cand == original:
+        log("  bez zmian")
+        return "nothing"
+    errors = plantfile.validate_candidate(original, cand, plant_id)
+    if errors:
+        return _rejected(plant_id, original, cand, errors, "rozmieszczenie wiedzy", log)
+    backup = plantfile.write_plant(plants_dir, plant_id, cand, crlf, Path(settings.backups_dir) / "plants",
+                                   "rozmieszczenie wiedzy")
+    blk = cand.get("rozmieszczenie") or {}
+    log(f"  rozmieszczono: {sum(len(w['punkty']) for w in blk.get('wstawki') or [])} informacji w "
+        f"{len(blk.get('wstawki') or [])} miejscach" + (f" (kopia zapasowa: {backup.name})" if backup else ""))
+    return "placed"
+
+
+async def run_plant_place(job_id: int, runner: JobRunner, llm=None, plant_ids: list[str] | None = None,
+                          force: bool = False) -> dict:
+    """Rozmieszczenie wiedzy z sieci we wszystkich (albo wskazanych) plikach roslin."""
+    log = lambda m: job_log(job_id, m)  # noqa: E731
+    ids = list(plant_ids) if plant_ids else organized_plant_ids()
+    out = {"placed": 0, "invalid": 0, "nothing": 0, "busy": 0}
+    log(f"Pliki do rozmieszczenia: {len(ids)}" + ("" if llm else " (bez LLM - same reguly)")
+        + (" - od nowa (takze bez zmian w punktach)" if force else ""))
+    for n, pid in enumerate(ids, 1):
+        if runner.should_stop(job_id):
+            log("Zatrzymano")
+            break
+        if pid in _BUSY:
+            log(f"[{n}/{len(ids)}] {pid} - opracowywana w innym zadaniu, pomijam")
+            out["busy"] += 1
+            continue
+        activity.set(job_id, f"rozmieszczanie {n}/{len(ids)}", pid)
+        log(f"[{n}/{len(ids)}] {pid}")
+        _BUSY.add(pid)
+        try:
+            out[await place_plant(pid, log, llm, force)] += 1
+        except AllModelsFailedError as exc:
+            log(f"Limity modeli wyczerpane - przerywam ({str(exc)[:120]})")
+            break
+        finally:
+            _BUSY.discard(pid)
+        _progress(job_id, n, len(ids))
+    log("Statystyki: " + ", ".join(f"{k}={v}" for k, v in out.items()))
+    _save_stats(job_id, out)
+    return out
 
 
 def unmerge_plant(plant_id: str) -> bool:

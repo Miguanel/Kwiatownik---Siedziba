@@ -15,6 +15,7 @@
   <form class="inline" method="post" action="/plants/{{ plant.id }}/apply"><button title="zapis zweryfikowanych informacji do pliku rosliny (kopia + kontrola)">Zapisz zweryfikowane do Kwiatownika</button></form>
   {% if has_file %}<form class="inline" method="post" action="/plants/{{ plant.id }}/organize"><button title="agregator: uklada wiedze z pliku w sekcje, laczy powtorzenia, numeruje zrodla">Uporzadkuj wiedze w pliku</button></form>{% endif %}
   {% if has_file %}<form class="inline" method="post" action="/plants/{{ plant.id }}/merge"><button title="wmontuj wiedze z sieci w istniejace rozdzialy i podrozdzialy strony (Bielik -> inne modele), ze zrodlami">Scal z rozdzialami</button></form>{% endif %}
+  {% if has_file %}<form class="inline" method="post" action="/plants/{{ plant.id }}/place"><button title="punkty, ktorych scalanie nie wplotlo w tekst, ustaw w konkretnych (takze nowych) podrozdzialach strony - Uklad strony">Rozmiesc w rozdzialach</button></form>{% endif %}
   {% if merged %}<form class="inline" method="post" action="/plants/{{ plant.id }}/unmerge" onsubmit="return confirm('Usunac scalenie? Strona wroci do recznych tekstow, wiedza z sieci zostanie w swojej zakladce.')"><button title="strona wraca do recznych tekstow (kopia zapasowa w data/backups)">Usun scalenie</button></form>{% endif %}
 </div>
 {% if msg %}<p class="box" style="display:block">{{ msg }}</p>{% endif %}
@@ -53,6 +54,23 @@
     {% if m.oryginal %}<details><summary class="muted">tekst Kwiatownika (oryginal)</summary>
       <blockquote>{% if m.oryginal is string %}{{ m.oryginal }}{% else %}{{ m.oryginal | join(" / ") }}{% endif %}</blockquote></details>
     {% else %}<p class="muted">nowy podrozdzial (w pliku byl pusty)</p>{% endif %}
+  </div>
+{% endfor %}
+</div>
+{% endif %}
+
+{% if placed %}
+<h2>Wiedza rozmieszczona w rozdzialach ({{ placed.wstawki | length }} miejsc)</h2>
+<p class="muted">Informacje, ktorych scalanie nie wplotlo w tekst: tak lezaly dawniej w zakladce "Wiedza z sieci", teraz stoja
+  w konkretnych miejscach strony ({{ placed.jak }}, {{ placed.zaktualizowano }}{% if placed.duplikaty %}; pominiete powtorzenia: {{ placed.duplikaty }}{% endif %}).
+  Miejsca i nowe podrozdzialy: <a href="/uklad">Uklad strony</a>.</p>
+<div class="merged-list">
+{% for w in placed.wstawki %}
+  <div class="merged">
+    <div class="merged-head"><b>{{ w.rozdzial }} &rarr; {{ w.tytul }}</b>
+      {% if w.nowy %}<span class="tag queued" title="podrozdzialu nie ma w szablonie - powstanie na stronie">nowy podrozdzial</span>{% else %}<span class="tag ready" title="lista z sieci pod tekstem istniejacego podrozdzialu">w istniejacym</span>{% endif %}
+      {% if w.od_agenta %}<span class="tag degraded">od agenta</span>{% endif %} <span class="muted">{{ w.miejsce }}</span></div>
+    <ul>{% for p in w.punkty %}<li>{% if p.czesc %}<span class="tag">{{ p.czesc }}</span> {% endif %}{{ p.tekst }}{% for z in p.linki %} <a class="ref" href="{{ z.url }}" target="_blank" rel="noopener nofollow" title="{{ z.nazwa }}">[{{ z.nr }}]</a>{% endfor %} <span class="muted">({{ p.sekcja }})</span></li>{% endfor %}</ul>
   </div>
 {% endfor %}
 </div>

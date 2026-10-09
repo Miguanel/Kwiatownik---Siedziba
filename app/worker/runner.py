@@ -19,22 +19,60 @@ class _NoLimit:
         return False
 
 
+MAX_LIMIT = 6   # najwiecej zadan naraz, jakie mozna ustawic w panelu (/agents)
+
+
 class JobRunner:
+    """Limit zadan naraz mozna zmieniac w trakcie pracy (set_limit, 0-6). 0 = wstrzymane: dzialajace koncza
+    swoja prace, nowe czekaja w kolejce. Zadania z bypass_queue (agenci, fanpage, pobieranie modelu) - poza limitem."""
+
     def __init__(self, max_concurrent: int = 3, on_status: StatusFn | None = None, on_log: LogFn | None = None):
-        self.max_concurrent = max(1, max_concurrent)
-        self._sem: asyncio.Semaphore | None = None
+        self.max_concurrent = max(0, min(MAX_LIMIT, int(max_concurrent)))
         self.on_status = on_status or (lambda j, s: None)
         self.on_log = on_log or (lambda j, m: None)
         self.tasks: dict[int, asyncio.Task] = {}
         self.stop_flags: set[int] = set()
         self.active: set[int] = set()
+        self.limited: set[int] = set()       # dzialajace zadania liczone do limitu
+        self.queue: list[int] = []           # czekajace na miejsce (kolejnosc zlecenia)
+        self._wake: asyncio.Event | None = None
         self.shutting_down = False
 
-    @property
-    def sem(self) -> asyncio.Semaphore:
-        if self._sem is None:
-            self._sem = asyncio.Semaphore(self.max_concurrent)
-        return self._sem
+    def set_limit(self, n: int) -> int:
+        """Nowy limit zadan naraz (0-6) - dziala od razu: przy wiekszym ruszaja czekajace zadania."""
+        self.max_concurrent = max(0, min(MAX_LIMIT, int(n)))
+        self._notify()
+        return self.max_concurrent
+
+    def _notify(self) -> None:
+        if self._wake is not None:
+            self._wake.set()
+            self._wake = None
+
+    def _may_start(self, job_id: int) -> bool:
+        if job_id in self.stop_flags:
+            return True                      # zatrzymane w kolejce - wychodzi od razu (status cancelled)
+        free = self.max_concurrent - len(self.limited)
+        return free > 0 and job_id in self.queue[:free]
+
+    async def _acquire(self, job_id: int) -> None:
+        self.queue.append(job_id)
+        try:
+            while not self._may_start(job_id):
+                if self._wake is None:
+                    self._wake = asyncio.Event()
+                await self._wake.wait()
+        finally:
+            if job_id in self.queue:
+                self.queue.remove(job_id)
+        if job_id not in self.stop_flags:
+            self.limited.add(job_id)
+        self._notify()                       # nastepny w kolejce sprawdzi, czy jest miejsce
+
+    def _release(self, job_id: int) -> None:
+        if job_id in self.limited:
+            self.limited.discard(job_id)
+            self._notify()
 
     def start(self, job_id: int, work: Callable[[], Awaitable[None]], bypass_queue: bool = False) -> None:
         """Dodaje zadanie do kolejki; ruszy, gdy zwolni sie miejsce (status 'queued' -> 'running').
@@ -42,7 +80,9 @@ class JobRunner:
         async def wrapper():
             snapshots.current_job.set(job_id)
             try:
-                async with (_NoLimit() if bypass_queue else self.sem):
+                if not bypass_queue:
+                    await self._acquire(job_id)
+                async with _NoLimit():
                     if job_id in self.stop_flags:
                         self.on_status(job_id, "cancelled")
                         return
@@ -70,6 +110,7 @@ class JobRunner:
                 self.on_log(job_id, f"BLAD: {type(exc).__name__}: {exc}")
                 self.on_status(job_id, "failed")
             finally:
+                self._release(job_id)
                 activity.clear(job_id)
                 self.active.discard(job_id)
                 self.tasks.pop(job_id, None)
@@ -84,6 +125,7 @@ class JobRunner:
         if task is None:
             return False
         self.stop_flags.add(job_id)
+        self._notify()                       # czekajace w kolejce (np. przy limicie 0) wyjda od razu
         if job_id in self.active:
             try:
                 loop = asyncio.get_running_loop()
@@ -101,6 +143,10 @@ class JobRunner:
     @property
     def waiting(self) -> int:
         return len(self.tasks) - len(self.active)
+
+    @property
+    def running_limited(self) -> int:
+        return len(self.limited)
 
     async def shutdown(self) -> None:
         self.shutting_down = True

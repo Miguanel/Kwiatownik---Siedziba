@@ -42,6 +42,8 @@ KINDS: dict[str, Kind] = {
     "zapis": Kind("Zapis zweryfikowanej wiedzy", "plant_apply"),
     "porzadkuj": Kind("Porzadkowanie wiedzy w plikach", "plant_organize"),
     "scal": Kind("Scalenie wiedzy z rozdzialami", "plant_merge", hint="wmontowanie wiedzy z sieci w rozdzialy strony"),
+    "rozmiesc": Kind("Rozmieszczenie wiedzy w rozdzialach", "plant_place",
+                     hint="punkty spoza tekstu rozdzialow -> konkretne (takze nowe) podrozdzialy strony"),
     "zdjecia": Kind("Zdjecia z Wikipedii", "plant_photos", hint="galeria roslin bez zdjec (bez LLM)"),
     # --- przepisy i zrodla
     "nowe_zrodla": Kind("Szukanie nowych stron", "discover", hint="nowe zagraniczne strony z przepisami ziolowymi w kraju"),
@@ -107,9 +109,10 @@ def execute(state, kind: str, p: dict) -> int:
         if not plants:
             return actions.start_plant_research(state, None, int(p.get("limit") or 3), slots=slots)
         return actions.start_plant_research(state, plants, len(plants), slots=slots)
-    if k.job in ("plant_apply", "plant_organize", "plant_merge", "plant_photos"):
+    if k.job in ("plant_apply", "plant_organize", "plant_merge", "plant_place", "plant_photos"):
         fn = {"plant_apply": actions.start_plant_apply, "plant_organize": actions.start_plant_organize,
-              "plant_merge": actions.start_plant_merge, "plant_photos": actions.start_plant_photos}[k.job]
+              "plant_merge": actions.start_plant_merge, "plant_place": actions.start_plant_place,
+              "plant_photos": actions.start_plant_photos}[k.job]
         return fn(state, plants or None)
     if kind == "nowe_zrodla":
         code = (p.get("kraj") or "").lower()

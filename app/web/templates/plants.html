@@ -32,6 +32,13 @@
       ze zrodlami; podobne informacje laczone. Modele: {{ merge_models.replace("ollama:", "").replace(",", " -> ") }} -> pozostale modele.
       {% if auto_merge %}Robi sie tez automatycznie po zapisie wiedzy.{% endif %}</span>
   </form>
+  <form class="box" method="post" action="/plants/place">
+    <button>Rozmiesc wiedze w rozdzialach</button>
+    <label class="muted"><input type="checkbox" name="force" value="1"> od nowa</label>
+    <span class="muted">informacje, ktorych scalanie nie wplotlo w tekst, trafiaja w konkretne miejsca strony: istniejace
+      podrozdzialy, czesci rosliny albo nowe podrozdzialy (Wystepowanie, Historia, Nazwy ludowe...). Robi sie tez po kazdym scaleniu.
+      Rozdzialy i podrozdzialy: <a href="/uklad">Uklad strony</a>.</span>
+  </form>
 </div>
 
 <details class="box cov-box" {% if missing %}open{% endif %}>

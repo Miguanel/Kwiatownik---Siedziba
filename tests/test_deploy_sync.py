@@ -51,6 +51,7 @@ def repo(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "deploy_min_recipes", 3)
     monkeypatch.setattr(settings, "deploy_min_hours", 6)
     monkeypatch.setattr(settings, "deploy_enabled", True)
+    monkeypatch.setattr(settings, "deploy_mode", "auto")         # testy trybu recznego ustawiaja go same
     monkeypatch.setattr(settings, "deploy_status_hours", 0)       # stan tylko przy publikacji (osobne testy nizej)
     monkeypatch.setattr(deploy, "push_url", lambda repo: str(remote))   # zamiast GitHuba lokalne repozytorium
     monkeypatch.setattr(settings, "backend_url", "")
@@ -79,7 +80,8 @@ def test_summary_counts_new_knowledge_recipes_and_validates(repo):
     s = deploy.summarize(w, files)
     assert s["informacje"] == 9 and s["nowe_rosliny"] == 1 and s["zdjecia"] == 2 and s["przepisy"] == 1
     assert s["przepisy_lista"] == [{"tytul": "Nalewka z bzu", "zrodlo": "amol.pl"}] and not s["bledy"]
-    assert s["rosliny"][0] == {"id": "lipa", "nazwa": "Lipa drobnolistna", "nowe": 7, "jezyki": ["zh"], "nowa": False}
+    assert s["rosliny"][0] == {"id": "lipa", "nazwa": "Lipa drobnolistna", "nowe": 7, "jezyki": ["zh"], "nowa": False,
+                            "rozmieszczone": 0, "rozdzialy": 0}
     (w / "data" / "plants" / "zepsuta.json").write_text("{zly json", encoding="utf-8")
     s2 = deploy.summarize(w, deploy.changed_files(w))
     go, why = deploy.decide(s2, None)
@@ -276,3 +278,33 @@ def test_site_and_agents_pages(repo, tmp_path, monkeypatch):
         assert r.status_code == 200 and "Wdrozeniowiec" in r.text and "Opublikuj teraz" in r.text
         rid = asyncio.run(deploy.run_deploy(dry_run=True))
         assert c.get(f"/agents/runs/{rid}").status_code == 200
+
+
+def test_manual_mode_counts_pending_and_commits_only_on_button(repo, monkeypatch):
+    from app.main import app
+    from fastapi.testclient import TestClient
+    monkeypatch.setattr(settings, "deploy_mode", "reczny")
+    w = repo.work
+    data = dict(LIPA, wiedza=wiedza(6), rozmieszczenie={"wstawki": [{"miejsce": "tajemna/kultura", "punkty": [
+        {"tekst": "Informacja 0", "zrodla": [1], "fakty": ["s1"]}]}]})
+    (w / "data" / "plants" / "lipa.json").write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    deploy.invalidate_pending()
+    st = deploy.pending()
+    assert st["gotowy"] and st["zmiany"]["rozmieszczone"] == 1 and st["zmiany"]["informacje"] == 6
+    assert st["licznik"] == 7 and "rozmieszczenie" in st["powod"]
+    started = []
+    monkeypatch.setattr("app.worker.actions.start_agent_deploy", lambda state, **kw: started.append(kw) or 1)
+    assert asyncio.run(deploy.maybe_start(None)) is None and not started       # recznie: nic samo nie startuje
+    assert sh(repo.remote, "rev-list", "--count", "main") == "1"
+    with TestClient(app) as c:
+        assert "Commit gotowy" in c.get("/commit/pasek?strona=banner").text
+        assert "commit gotowy" in c.get("/commit/pasek?strona=nav").text
+        assert "Zatwierdź commit i wyślij" in c.get("/commit").text
+        r = c.post("/commit", follow_redirects=False)
+        assert r.status_code == 303 and started == [{"trigger": "przycisk", "force": True}]
+    rid = asyncio.run(deploy.run_deploy(trigger="przycisk", force=True))
+    rep = store.report(store.last_run("wdrozeniowiec"))
+    assert rep["opublikowano"] and "recznie" in rep["powod"] and rid
+    log = json.loads((w / "data" / "changelog.json").read_text(encoding="utf-8"))
+    assert log["wpisy"][0]["liczby"]["rozmieszczone"] == 1 and "rozdziałów" in log["wpisy"][0]["opis"]
+    assert not deploy.pending()["gotowy"]

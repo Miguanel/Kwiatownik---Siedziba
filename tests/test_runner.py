@@ -121,3 +121,36 @@ def test_stop_forces_cancel_when_job_hangs():
 
     asyncio.run(main())
     assert statuses[1] == ["running", "cancelled"] and "Zatrzymano" in logs[-1]
+
+
+def test_limit_can_change_while_running_and_zero_pauses():
+    """Limit zadan naraz (panel /agents, 0-6): 0 wstrzymuje start nowych, podniesienie od razu je uruchamia."""
+    started, peak = [], {"now": 0, "max": 0}
+
+    def make(j):
+        async def work():
+            started.append(j)
+            peak["now"] += 1
+            peak["max"] = max(peak["max"], peak["now"])
+            await asyncio.sleep(0.03)
+            peak["now"] -= 1
+        return work
+
+    async def main():
+        r = JobRunner(0)
+        for j in range(1, 6):
+            r.start(j, make(j))
+        r.start(99, make(99), bypass_queue=True)       # poza limitem - rusza mimo 0
+        await asyncio.sleep(0.02)
+        assert started == [99] and r.queue == [1, 2, 3, 4, 5]
+        r.request_stop(5)                               # zatrzymane w kolejce wychodzi od razu, nawet przy 0
+        await asyncio.sleep(0.01)
+        assert 5 not in r.tasks
+        assert r.set_limit(9) == 6 and r.set_limit(-1) == 0
+        r.set_limit(2)
+        await asyncio.gather(*r.tasks.values())
+        assert sorted(started) == [1, 2, 3, 4, 99] and started[1:3] == [1, 2]    # kolejnosc zlecenia
+        assert peak["max"] <= 3                         # 2 z limitu + 1 poza limitem
+        assert r.running_limited == 0 and r.queue == []
+
+    asyncio.run(main())

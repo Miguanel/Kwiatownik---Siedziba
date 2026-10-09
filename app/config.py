@@ -148,6 +148,8 @@ class Settings(BaseSettings):
 
     # --- Wdrozeniowiec: publikacja nowych danych w repozytorium Kwiatownika2 (Render buduje strone sam) ---
     deploy_enabled: bool = True          # agent dziala, gdy repozytorium jest podpiete (DEPLOY_REPO_DIR) i jest token
+    deploy_mode: str = "reczny"          # reczny = Siedziba pokazuje "Commit gotowy" z licznikiem, commit+push po kliknieciu;
+                                         # auto = agent sam publikuje, gdy progi sa spelnione (jak dawniej)
     deploy_repo_dir: Path | None = None  # cale repozytorium Kwiatownika2 (w Dockerze /kwiatownik2)
     deploy_branch: str = "main"
     github_token: str = ""               # token GitHub z prawem zapisu do repozytorium Kwiatownika2 (contents: write)

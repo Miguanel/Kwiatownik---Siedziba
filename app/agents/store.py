@@ -40,6 +40,29 @@ def set_runtime(**values) -> dict:
     return cur
 
 
+def job_limit(state=None) -> int:
+    """Ile zadan Siedziby moze dzialac naraz w tle (0-6): limit kolejki (panel /agents), inaczej .env."""
+    runner = getattr(state, "jobs", None) if state is not None else None
+    if runner is not None and hasattr(runner, "max_concurrent"):
+        return int(runner.max_concurrent)
+    try:
+        return max(0, min(6, int(runtime().get("max_jobs", settings.max_concurrent_jobs))))
+    except (TypeError, ValueError):
+        return settings.max_concurrent_jobs
+
+
+def apply_job_limit(state) -> int | None:
+    """Po starcie: limit zapisany w panelu ma pierwszenstwo przed MAX_CONCURRENT_JOBS z .env."""
+    rt = runtime()
+    runner = getattr(state, "jobs", None)
+    if runner is None or "max_jobs" not in rt:
+        return None
+    try:
+        return runner.set_limit(int(rt["max_jobs"]))
+    except (TypeError, ValueError):
+        return None
+
+
 def now() -> datetime:
     return datetime.now(timezone.utc)
 

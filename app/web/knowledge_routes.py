@@ -71,7 +71,8 @@ def plants_page(request: Request, origin: str = "", q: str = "", msg: str | None
                                  .group_by(PlantFact.plant_id, PlantFact.status)).all():
             counts.setdefault(pid, {})[st] = n
         origins = dict(s.exec(select(Plant.origin, func.count()).group_by(Plant.origin)).all())
-        kinds = ["plants_sync", "plant_research", "plant_apply", "plant_organize", "plant_photos", "plant_merge"]
+        kinds = ["plants_sync", "plant_research", "plant_apply", "plant_organize", "plant_photos", "plant_merge",
+                 "plant_place"]
         jobs = s.exec(select(Job).where(col(Job.kind).in_(kinds))
                       .order_by(col(Job.id).desc()).limit(6)).all()
         running = any(j.status in (JobStatus.queued, JobStatus.running) for j in jobs)
@@ -138,11 +139,28 @@ def plant_page(pid: str, request: Request, status: str = "", msg: str | None = N
                          .order_by(col(PlantQuery.id).desc()).limit(20)).all()
     cov = schema.coverage(data, web)
     merged = _merged_view(data)
+    placed = _placed_view(data)
     return templates.TemplateResponse(request, "plant.html", {
         "plant": plant, "by_section": by_section, "counts": counts, "status": status, "titles": titles,
         "section_titles": SECTION_TITLES_PL, "has_file": has_file, "statuses": STATUSES, "layout": layout,
         "photos": _plant_photos(plant), "chapters": schema.chapters(cov), "cov": cov, "merged": merged,
-        "status_labels": STATUS_LABELS, "queries": queries, "msg": msg})
+        "status_labels": STATUS_LABELS, "queries": queries, "msg": msg, "placed": placed})
+
+
+def _placed_view(data: dict | None) -> dict | None:
+    """Blok "rozmieszczenie": wstawki w kolejnosci strony, ze zrodlami (podglad w Siedzibie)."""
+    blk = (data or {}).get("rozmieszczenie")
+    if not isinstance(blk, dict) or not blk.get("wstawki"):
+        return None
+    zr = {z.get("nr"): z for z in ((data.get("wiedza") or {}).get("zrodla") or []) if isinstance(z, dict)}
+    rows = []
+    for w in blk["wstawki"]:
+        pts = [{"tekst": p.get("tekst"), "czesc": p.get("czesc"), "sekcja": p.get("sekcja"),
+                "linki": [zr[n] for n in p.get("zrodla") or [] if n in zr and str(zr[n].get("url") or "").startswith("http")]}
+               for p in w.get("punkty") or []]
+        rows.append({**w, "punkty": pts})
+    return {"wstawki": rows, "jak": blk.get("jak"), "zaktualizowano": blk.get("zaktualizowano"),
+            "duplikaty": len(blk.get("duplikaty") or [])}
 
 
 def _merged_view(data: dict | None) -> list[dict]:
@@ -212,6 +230,17 @@ async def plants_merge(request: Request):
 @router.post("/plants/{pid}/merge")
 async def plant_merge_one(pid: str, request: Request):
     return _redirect(f"/jobs/{actions.start_plant_merge(request.app.state, [pid])}")
+
+
+@router.post("/plants/place")
+async def plants_place(request: Request, force: str = Form("")):
+    """Rozmieszczenie wiedzy z sieci w rozdzialach wszystkich roslin (Uklad strony)."""
+    return _redirect(f"/jobs/{actions.start_plant_place(request.app.state, force=bool(force))}")
+
+
+@router.post("/plants/{pid}/place")
+async def plant_place_one(pid: str, request: Request):
+    return _redirect(f"/jobs/{actions.start_plant_place(request.app.state, [pid], force=True)}")
 
 
 @router.post("/plants/{pid}/unmerge")

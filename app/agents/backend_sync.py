@@ -22,11 +22,12 @@ from app.worker import activity
 
 log = logging.getLogger(__name__)
 TZ = ZoneInfo(settings.timezone)
-EVENT_KINDS = ("plant_research", "plant_apply", "plant_merge", "plant_photos", "translate", "enrich", "export",
+EVENT_KINDS = ("plant_research", "plant_apply", "plant_merge", "plant_place", "plant_photos", "translate", "enrich", "export",
                "scan", "harvest")
 JOB_TEXT = {
     "plant_research": "zbiera wiedzę o roślinach", "plant_apply": "zapisuje zebraną wiedzę do Kwiatownika",
-    "plant_merge": "wplata wiedzę z sieci w rozdziały roślin", "plant_organize": "porządkuje wiedzę o roślinach",
+    "plant_merge": "wplata wiedzę z sieci w rozdziały roślin",
+    "plant_place": "rozkłada wiedzę z sieci po rozdziałach roślin", "plant_organize": "porządkuje wiedzę o roślinach",
     "plant_photos": "pobiera zdjęcia z Wikimedia Commons", "plants_sync": "porządkuje rejestr roślin",
     "scan": "przegląda zagraniczne strony z przepisami", "harvest": "pobiera przepisy z zagranicznej strony",
     "scan_pages": "czyta wybrane strony", "fetch_list": "czyta wybrane strony",
@@ -128,6 +129,9 @@ def _event_for_job(job: Job) -> dict | None:
         text, ev_kind = f"Nowe zdjęcia z Wikimedia Commons dla {st['applied']} roślin", "zdjecia"
     elif kind == "plant_merge" and st.get("merged"):
         text = f"Wiedza z sieci wpleciona w rozdziały" + (f": {plants_txt}" if plants_txt else f" {st['merged']} roślin")
+        ev_kind = "wiedza"
+    elif kind == "plant_place" and st.get("placed"):
+        text = f"Wiedza z sieci rozłożona po rozdziałach" + (f": {plants_txt}" if plants_txt else f" {st['placed']} roślin")
         ev_kind = "wiedza"
     elif kind == "translate" and st.get("translated"):
         text, ev_kind = f"Przetłumaczono {st['translated']} przepisów z zagranicznych stron", "przepisy"

@@ -18,7 +18,7 @@ import shutil
 from datetime import date, datetime
 from pathlib import Path
 
-from app.knowledge import merge, organize, photos
+from app.knowledge import merge, organize, photos, placement
 from app.knowledge.sections import SECTIONS, norm_part
 from app.worker import snapshots
 
@@ -48,7 +48,17 @@ def skeleton(pid: str, nazwa_pl: str, nazwa_lat: str | None, rodzina: str = "", 
 def fact_entry(fact) -> dict:
     """PlantFact (baza Siedziby) -> wpis w pliku rosliny."""
     return {"id": f"s{fact.id}", "sekcja": fact.section, "czesc": norm_part(fact.part), "tekst": fact.text,
-            "jezyk": fact.language, "zrodlo": {"nazwa": fact.source_name or fact.source_url, "url": fact.source_url}}
+            "jezyk": fact.language, "zrodlo": {"nazwa": fact.source_name or fact.source_url, "url": fact.source_url},
+            **({"cytat": quote_snippet(getattr(fact, "quote", None))} if quote_snippet(getattr(fact, "quote", None)) else {})}
+
+
+def quote_snippet(quote: str | None, limit: int = 240) -> str:
+    """Fragment zrodla (w jezyku oryginalu) - strona robi z niego link, ktory przewija do tego miejsca na stronie
+    zrodla (#:~:text=...), i pokazuje go w dymku zrodla."""
+    q = re.sub(r"\s+", " ", str(quote or "")).strip().strip('"\u201e\u201d\u00ab\u00bb')
+    if len(q) < 12 or re.search(r"<[a-z/!]", q, re.I):
+        return ""
+    return q[:limit]
 
 
 def build_candidate(original: dict | None, base: dict, facts: list, today: str | None = None) -> dict:
@@ -182,6 +192,7 @@ def validate_candidate(original: dict | None, cand: dict, pid: str) -> list[str]
             errors.append(f"{fid}: brak poprawnego adresu zrodla")
     errors += validate_photos(cand)
     errors += merge.validate_merged(cand)
+    errors += placement.validate_placement(cand)
     if original is not None and not photos_owned(original) and cand.get("url") != original.get("url"):
         errors.append("zmieniono reczna galerie zdjec")
     wiedza = cand.get("wiedza") or {}

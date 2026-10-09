@@ -8,11 +8,14 @@ from fastapi.staticfiles import StaticFiles
 
 from app.agents.loop import agents_loop
 from app.api.llm import router as llm_router
+from app.agents import store as agents_store
 from app.config import settings
 from app.db import init_db
 from app.llm.factory import build_router
 from app.web.agents_routes import router as agents_router
 from app.web.site_routes import router as site_router
+from app.web.layout_routes import router as layout_router
+from app.web.deploy_routes import router as deploy_router
 from app.web.discover_routes import router as discover_router
 from app.web.export_routes import router as export_router
 from app.web.routes import router as web_router
@@ -75,6 +78,7 @@ async def lifespan(app: FastAPI):
     if merged:
         log.warning("Polaczono %d duplikatow przepisow ze starszych skanow", merged)
     app.state.jobs = make_runner(settings.max_concurrent_jobs)  # kolejka zadan z limitem
+    _safe("limit zadan z panelu agentow", lambda: agents_store.apply_job_limit(app.state))
     app.state.llm = _safe("router LLM", build_router)  # router modeli (None = brak kluczy)
     tasks = []
     if app.state.llm:
@@ -112,6 +116,8 @@ app.include_router(knowledge_router)
 app.include_router(marketing_router)
 app.include_router(agents_router)
 app.include_router(site_router)
+app.include_router(layout_router)
+app.include_router(deploy_router)
 
 
 @app.get("/health")

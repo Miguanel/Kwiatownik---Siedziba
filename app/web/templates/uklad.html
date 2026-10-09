@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+  .uk-intro { max-width: 820px; }
+  .uk-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 14px; margin: 16px 0; }
+  .uk-ch { background: #fff; border-radius: 8px; padding: 12px 14px; border-top: 4px solid #2f5d3a; min-width: 0; }
+  .uk-ch.own { border-top-color: #b07d1f; }
+  .uk-ch h3 { margin: 0 0 8px; font-size: 1.05em; display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+  .uk-pl { border-top: 1px solid #eef0e8; padding: 7px 0; }
+  .uk-pl:first-of-type { border-top: 0; }
+  .uk-pl-head { display: flex; gap: 6px; align-items: baseline; flex-wrap: wrap; }
+  .uk-pl-head b { font-weight: 600; }
+  .uk-n { margin-left: auto; font-variant-numeric: tabular-nums; color: #2f5d3a; font-weight: 600; white-space: nowrap; }
+  .uk-meta { font-size: .82em; color: #6b7568; margin-top: 2px; overflow-wrap: anywhere; }
+  .uk-off { opacity: .5; }
+  .uk-pl form.inline button { font-size: .8em; padding: 2px 8px; }
+  .uk-forms { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 14px; }
+  .uk-form { background: #fff; border-radius: 8px; padding: 14px; display: flex; flex-direction: column; gap: 8px; }
+  .uk-form label { display: flex; flex-direction: column; gap: 3px; font-size: .9em; }
+  .uk-form input, .uk-form select, .uk-form textarea { width: 100%; box-sizing: border-box; font: inherit; }
+  .uk-sek { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 4px 10px; font-size: .85em; }
+  .uk-sek label { flex-direction: row; align-items: center; justify-content: space-between; gap: 6px; }
+  .uk-sek select { width: auto; padding: 2px 4px; }
+  .uk-edit summary { cursor: pointer; font-size: .82em; color: #2f5d3a; }
+  .uk-alert { background: #fff1c2; border-radius: 8px; padding: 10px 14px; margin: 10px 0; }
+</style>
+
+<h1>Uklad strony rosliny</h1>
+<p class="muted uk-intro">Rozdzialy i podrozdzialy strony rosliny w Kwiatowniku, do ktorych agent rozmieszcza wiedze z sieci:
+  informacje, ktorych scalanie nie wplotlo w tekst, trafiaja do podrozdzialu, ktory najlepiej pasuje (sekcja wiedzy, slowa kluczowe,
+  czesc rosliny, potem korekta modelu LLM). Gdy zaden nie pasuje, agent moze sam zalozyc podrozdzial - pojawi sie tu z oznaczeniem
+  "od agenta" do zatwierdzenia. Rozmieszczenie maja juz pliki {{ n_plants }} roslin.</p>
+{% if msg %}<p class="box" style="display:block">{{ msg }}</p>{% endif %}
+{% if pending %}<p class="uk-alert">Agent zalozyl {{ pending }} {{ 'nowy podrozdzial' if pending == 1 else 'nowe podrozdzialy' }} - sprawdz je ponizej (Zatwierdz / Usun).</p>{% endif %}
+
+<form class="box" method="post" action="/plants/place">
+  <input type="hidden" name="force" value="1">
+  <button>Rozmiesc ponownie wszystkie rosliny</button>
+  <span class="muted">po zmianach w ukladzie; zmienione pliki roslin wejda do najblizszego commita</span>
+</form>
+
+<div class="uk-grid">
+{% for ch in chapters %}
+  <section class="uk-ch {% if not ch.wbudowany %}own{% endif %}">
+    <h3><i class="ra {{ ch.ikona }}"></i> {{ ch.tytul }}
+      {% if not ch.wbudowany %}<span class="tag degraded">wlasny rozdzial, po: {{ ch.po }}</span>
+        <form class="inline" method="post" action="/uklad/usun/{{ ch.id }}" onsubmit="return confirm('Usunac rozdzial {{ ch.tytul }} razem z jego podrozdzialami?')"><button>Usun</button></form>
+      {% else %}<span class="muted" style="font-weight:normal;font-size:.8em">{{ ch.id }}</span>{% endif %}</h3>
+    {% for m in ch.miejsca %}
+    <div class="uk-pl {% if m.wylaczony %}uk-off{% endif %}">
+      <div class="uk-pl-head">
+        <i class="ra {{ m.ikona }}"></i> <b>{{ m.tytul }}</b>
+        {% if m.rodzaj == "szablon" %}<span class="tag ready" title="podrozdzial z szablonu Kwiatownika - informacje ida pod jego tekst">w szablonie</span>
+        {% elif m.rodzaj == "nowy" %}<span class="tag queued" title="podrozdzial tworzony na stronie, gdy sa dla niego informacje">nowy</span>
+        {% elif m.rodzaj == "czesci" %}<span class="tag ready">czesci rosliny</span>
+        {% elif m.rodzaj == "agent" %}<span class="tag degraded">od agenta{% if m.zatwierdzony %}, zatwierdzony{% endif %}</span>
+        {% else %}<span class="tag">wlasny</span>{% endif %}
+        <span class="uk-n" title="informacji w tym miejscu (wszystkie rosliny)">{{ per_part if m.rodzaj == "czesci" else per_place.get(m.id, 0) }}</span>
+      </div>
+      <div class="uk-meta">{{ m.opis }}{% if m.sekcje %} · sekcje: {% for k, v in m.sekcje.items() %}{{ sections.get(k, k) }} {{ v }}{{ ', ' if not loop.last }}{% endfor %}{% endif %}
+        {% if m.slowa %} · slowa: {{ m.slowa[:10] | join(', ') }}{% if m.slowa | length > 10 %}…{% endif %}{% endif %}</div>
+      {% if m.rodzaj == "nowy" %}
+        <form class="inline" method="post" action="/uklad/przelacz/{{ m.id }}"><input type="hidden" name="on" value="{{ '1' if m.wylaczony else '' }}"><button>{{ 'Wlacz' if m.wylaczony else 'Wylacz' }}</button></form>
+      {% elif m.rodzaj in ("wlasny", "agent") %}
+        {% if m.rodzaj == "agent" and not m.zatwierdzony %}<form class="inline" method="post" action="/uklad/zatwierdz/{{ m.id }}"><button>Zatwierdz</button></form>{% endif %}
+        <form class="inline" method="post" action="/uklad/usun/{{ m.id }}" onsubmit="return confirm('Usunac podrozdzial {{ m.tytul }}?')"><button>Usun</button></form>
+        <details class="uk-edit"><summary>edytuj</summary>
+          <form class="uk-form" method="post" action="/uklad/podrozdzial/{{ m.id }}/zmien">
+            <label>Tytul <input name="tytul" value="{{ m.tytul }}" maxlength="60" required></label>
+            <label>Ikona <select name="ikona">{% for i in icons %}<option value="{{ i }}" {% if i == m.ikona %}selected{% endif %}>{{ i[3:] }}</option>{% endfor %}</select></label>
+            <div class="uk-sek">{% for k, t in sections.items() %}<label>{{ t }} <select name="sek_{{ k }}"><option value="">-</option>{% for v in (1, 2, 3, 4) %}<option value="{{ v }}" {% if m.sekcje.get(k) == v %}selected{% endif %}>{{ v }}</option>{% endfor %}</select></label>{% endfor %}</div>
+            <label>Slowa kluczowe (po przecinku) <textarea name="slowa" rows="2">{{ m.slowa | join(', ') }}</textarea></label>
+            <label>Opis dla modelu <input name="opis" value="{{ m.opis }}" maxlength="200"></label>
+            {% if m.rodzaj == "agent" %}<label style="flex-direction:row;gap:6px"><input type="checkbox" name="zatwierdz" value="1" style="width:auto" {% if m.zatwierdzony %}checked{% endif %}> zatwierdzony</label>{% endif %}
+            <button>Zapisz</button>
+          </form>
+        </details>
+      {% endif %}
+    </div>
+    {% else %}
+    <p class="muted">Brak podrozdzialow - dodaj pierwszy ponizej.</p>
+    {% endfor %}
+  </section>
+{% endfor %}
+</div>
+
+<div class="uk-forms">
+  <form class="uk-form" method="post" action="/uklad/podrozdzial">
+    <h3 style="margin:0">Nowy podrozdzial</h3>
+    <label>Rozdzial <select name="rozdzial">{% for ch in chapters %}<option value="{{ ch.id }}">{{ ch.tytul }}</option>{% endfor %}</select></label>
+    <label>Tytul <input name="tytul" maxlength="60" required placeholder="np. Weterynaria ludowa"></label>
+    <label>Ikona <select name="ikona">{% for i in icons %}<option value="{{ i }}">{{ i[3:] }}</option>{% endfor %}</select></label>
+    <span class="muted" style="font-size:.85em">Sekcje wiedzy, ktore tu pasuja (waga 1-4; zwykle 2-3):</span>
+    <div class="uk-sek">{% for k, t in sections.items() %}<label>{{ t }} <select name="sek_{{ k }}"><option value="">-</option>{% for v in (1, 2, 3, 4) %}<option value="{{ v }}">{{ v }}</option>{% endfor %}</select></label>{% endfor %}</div>
+    <label>Slowa kluczowe (po przecinku, poczatki slow bez polskich znakow tez dzialaja) <textarea name="slowa" rows="2" placeholder="zwierz, bydl, weteryn, krow"></textarea></label>
+    <label>Opis dla modelu (co tu nalezy) <input name="opis" maxlength="200" placeholder="leczenie zwierzat gospodarskich ziolami"></label>
+    <button>Dodaj podrozdzial</button>
+  </form>
+  <form class="uk-form" method="post" action="/uklad/rozdzial">
+    <h3 style="margin:0">Nowy rozdzial</h3>
+    <label>Tytul <input name="tytul" maxlength="60" required placeholder="np. Obrzedy i rytualy"></label>
+    <label>Ikona <select name="ikona">{% for i in icons %}<option value="{{ i }}">{{ i[3:] }}</option>{% endfor %}</select></label>
+    <label>Na stronie po rozdziale <select name="po">{% for ch in chapters %}<option value="{{ ch.id }}" {% if ch.id == "tajemna" %}selected{% endif %}>{{ ch.tytul }}</option>{% endfor %}</select></label>
+    <p class="muted" style="margin:0;font-size:.85em">Rozdzial pojawi sie na stronie rosliny, gdy agent rozmiesci w jego podrozdzialach jakas informacje.
+      Kwiatownik nie wymaga zmian w szablonie. Plik ukladu: {{ file }}</p>
+    <button>Dodaj rozdzial</button>
+  </form>
+</div>
+{% endblock %}

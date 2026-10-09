@@ -14,6 +14,9 @@ Przy kazdej publikacji zapisuje tez data/siedziba_stan.json: nad czym Siedziba p
 i statystyki strony (z kopii licznikow backendu). Kwiatownik pokazuje go w papirusie od razu, bez pytania backendu
 (szybkie ladowanie na telefonie); swiezsze dane doklada w tle papirus.js, gdy backend odpowie. Bez nowych danych
 sam stan jest odswiezany najczesciej co DEPLOY_STATUS_HOURS (osobny, maly commit).
+Tryb DEPLOY_MODE=reczny (domyslny): agent niczego sam nie wypycha. Co pol minuty liczy, co czeka na commit (licznik
+w pasku Siedziby), a gdy progi sa spelnione albo jest nowe rozmieszczenie wiedzy w rozdzialach, pokazuje na kazdej
+stronie komunikat "Commit gotowy" - commit i push robi dopiero przycisk (/commit).
 Nie publikuje, gdy: repozytorium jest na innej galezi, trwa merge/rebase, git jest zajety (index.lock) albo plik
 JSON jest uszkodzony. Token GitHub nie trafia do logow ani do konfiguracji repozytorium.
 """
@@ -39,7 +42,9 @@ CHANGELOG = "data/changelog.json"
 STATUS_FILE = "data/siedziba_stan.json"
 CHANGELOG_KEEP = 200
 CHECK_EVERY_MIN = 30                      # automatyczne sprawdzenie (bez zapisu w historii) najczesciej co tyle
+PENDING_MAX_AGE_S = 60                    # licznik "czeka na commit" liczony najczesciej co tyle sekund
 _last_check = {"t": None}
+_pending: dict = {"t": None, "state": None, "ready_since": None}
 JEZYKI = {"zh": "chińskie", "ja": "japońskie", "uk": "ukraińskie", "ru": "rosyjskie", "de": "niemieckie",
           "fr": "francuskie", "en": "angielskie", "cs": "czeskie", "it": "włoskie", "es": "hiszpańskie"}
 
@@ -142,6 +147,19 @@ def _langs(data) -> set[str]:
     return {str(z.get("jezyk") or "")[:2].lower() for z in w.get("zrodla") or [] if isinstance(z, dict)} - {"", "pl"}
 
 
+def _placed(data) -> set[str]:
+    """Informacje rozmieszczone w rozdzialach (blok "rozmieszczenie")."""
+    blk = data.get("rozmieszczenie") if isinstance(data, dict) and isinstance(data.get("rozmieszczenie"), dict) else {}
+    return {f"{w.get('miejsce')}|{f}" for w in blk.get("wstawki") or [] if isinstance(w, dict)
+            for p in w.get("punkty") or [] if isinstance(p, dict) for f in p.get("fakty") or []}
+
+
+def _merged_slots(data) -> dict:
+    sc = data.get("scalone") if isinstance(data, dict) and isinstance(data.get("scalone"), dict) else {}
+    return {k: json.dumps(v.get("tresc"), ensure_ascii=False, sort_keys=True)
+            for k, v in (sc.get("pola") or {}).items() if isinstance(v, dict)}
+
+
 def _photos(data) -> int:
     zw = data.get("zdjecia_wiki") if isinstance(data, dict) and isinstance(data.get("zdjecia_wiki"), dict) else {}
     return len(zw.get("zdjecia") or [])
@@ -170,7 +188,7 @@ def summarize(repo: Path, files: list[tuple[str, str]]) -> dict:
     """Co nowego wzgledem HEAD + bledy plikow (uszkodzony JSON blokuje publikacje)."""
     errors: list[str] = []
     plants: list[dict] = []
-    new_plants = photos = points = 0
+    new_plants = photos = points = placed = slots = 0
     recipe_files_changed = False
     for status, path in files:
         full = repo / path
@@ -188,13 +206,18 @@ def summarize(repo: Path, files: list[tuple[str, str]]) -> dict:
             old = _head_json(repo, path)
             added = max(0, _points(data) - _points(old or {}))
             photos += max(0, _photos(data) - _photos(old or {}))
+            moved = len({k.split("|", 1)[1] for k in _placed(data) - _placed(old or {})})
+            old_slots, new_slots = _merged_slots(old or {}), _merged_slots(data)
+            changed_slots = sum(1 for k, v in new_slots.items() if old_slots.get(k) != v)
             if old is None:
                 new_plants += 1
-            if added or old is None:
+            if added or old is None or moved or changed_slots:
                 plants.append({"id": Path(path).stem, "nazwa": data.get("nazwa_pl") or Path(path).stem, "nowe": added,
                                "jezyki": sorted(_langs(data) - _langs(old or {})) or sorted(_langs(data))[:4],
-                               "nowa": old is None})
+                               "nowa": old is None, "rozmieszczone": moved, "rozdzialy": changed_slots})
                 points += added
+                placed += moved
+                slots += changed_slots
         elif path.startswith("data/przepisy/"):
             if not isinstance(data, (list, dict)):
                 errors.append(f"{path}: plik przepisow nie jest lista")
@@ -220,6 +243,7 @@ def summarize(repo: Path, files: list[tuple[str, str]]) -> dict:
                     new_recipes.append({"tytul": str(r.get("tytul") or k)[:120], "zrodlo": _domain(r)})
     plants.sort(key=lambda x: -x["nowe"])
     return {"informacje": points, "rosliny": plants, "nowe_rosliny": new_plants, "zdjecia": photos,
+            "rozmieszczone": placed, "rozdzialy": slots,
             "przepisy": len(new_recipes), "przepisy_lista": new_recipes[:5], "pliki": len(files), "bledy": errors}
 
 
@@ -233,16 +257,22 @@ def last_publication() -> datetime | None:
     return None
 
 
-def decide(summary: dict, last: datetime | None, now: datetime | None = None) -> tuple[bool, str]:
+def decide(summary: dict, last: datetime | None, now: datetime | None = None,
+           manual: bool = False) -> tuple[bool, str]:
+    """(publikowac?, powod). manual=True (tryb reczny): "gotowe do commita" bez limitu DEPLOY_MIN_HOURS -
+    o czestotliwosci decyduje czlowiek przyciskiem."""
     now = now or store.now()
     if summary["bledy"]:
         return False, "uszkodzone pliki: " + "; ".join(summary["bledy"][:3])
-    anything = summary["informacje"] or summary["przepisy"] or summary["zdjecia"] or summary["nowe_rosliny"]
+    layout = summary.get("rozmieszczone", 0) or summary.get("rozdzialy", 0)
+    anything = summary["informacje"] or summary["przepisy"] or summary["zdjecia"] or summary["nowe_rosliny"] or layout
     if not anything and not summary["pliki"]:
         return False, "brak nowych danych"
     hours = (now - last).total_seconds() / 3600 if last else None
-    if hours is not None and hours < settings.deploy_min_hours:
+    if not manual and hours is not None and hours < settings.deploy_min_hours:
         return False, f"ostatnia publikacja {hours:.1f} h temu (najczesciej co {settings.deploy_min_hours} h)"
+    if summary.get("rozmieszczone"):
+        return True, f"nowe rozmieszczenie wiedzy w rozdzialach ({summary['rozmieszczone']} informacji)"
     progress = (f"{summary['informacje']}/{settings.deploy_min_points} informacji, "
                 f"{summary['przepisy']}/{settings.deploy_min_recipes} przepisow")
     if summary["informacje"] >= settings.deploy_min_points or summary["przepisy"] >= settings.deploy_min_recipes:
@@ -265,6 +295,9 @@ def changelog_entry(summary: dict, when: datetime | None = None) -> dict:
         bits.append(f"nowa wiedza o {n_pl} {odmiana(n_pl, 'roślinie', 'roślinach', 'roślinach')}")
     if n_rc:
         bits.append(f"{n_rc} {odmiana(n_rc, 'nowy przepis', 'nowe przepisy', 'nowych przepisów')}")
+    n_mv = summary.get("rozmieszczone", 0)
+    if n_mv and not bits:
+        bits.append("wiedza z sieci rozłożona po rozdziałach")
     if summary["zdjecia"] and not bits:
         bits.append("nowe zdjęcia roślin")
     tytul = (" i ".join(bits) or "Porządki w danych Kwiatownika")
@@ -276,11 +309,14 @@ def changelog_entry(summary: dict, when: datetime | None = None) -> dict:
                     + (f" (źródła: {', '.join(JEZYKI.get(j, j) for j in langs[:5])})" if langs else "") + ".")
     if summary["nowe_rosliny"]:
         opis.append(f"Nowe rośliny w zielniku: {summary['nowe_rosliny']}.")
+    if n_mv:
+        opis.append(f"{n_mv} {odmiana(n_mv, 'informacja z sieci trafiła', 'informacje z sieci trafiły', 'informacji z sieci trafiło')}"
+                    " do właściwych rozdziałów i podrozdziałów stron roślin.")
     if summary["zdjecia"]:
         opis.append(f"Dodano {summary['zdjecia']} {odmiana(summary['zdjecia'], 'zdjęcie', 'zdjęcia', 'zdjęć')} z Wikimedia Commons.")
     return {"data": when.isoformat(timespec="seconds"), "tytul": tytul, "opis": " ".join(opis),
             "liczby": {"informacje": n_pt, "przepisy": n_rc, "rosliny": n_pl, "nowe_rosliny": summary["nowe_rosliny"],
-                       "zdjecia": summary["zdjecia"]},
+                       "zdjecia": summary["zdjecia"], "rozmieszczone": n_mv},
             "rosliny": [{"id": r["id"], "nazwa": r["nazwa"], "nowe": r["nowe"], "jezyki": r.get("jezyki") or []}
                         for r in summary["rosliny"][:12]],
             "przepisy": summary["przepisy_lista"]}
@@ -396,13 +432,14 @@ async def run_deploy(trigger: str = "reczny", job_id: int | None = None, logf=No
         last = last_publication()
         go, reason = decide(summary, last)
         if force and not summary["bledy"] and (files or summary["informacje"]):
-            go, reason = True, "publikacja na zadanie (przycisk)"
+            go, reason = True, "commit zatwierdzony recznie (przycisk)" if trigger == "przycisk" else "publikacja na zadanie (przycisk)"
         report.update(zmiany=summary, pliki=[p for _, p in files], ostatnia=last, powod=reason)
         say(f"Zmienione pliki danych: {len(files)}; nowe informacje: {summary['informacje']}, przepisy: "
-            f"{summary['przepisy']}, nowe rosliny: {summary['nowe_rosliny']}, zdjecia: {summary['zdjecia']}")
+            f"{summary['przepisy']}, nowe rosliny: {summary['nowe_rosliny']}, zdjecia: {summary['zdjecia']}, "
+            f"rozmieszczone w rozdzialach: {summary['rozmieszczone']}, scalone podrozdzialy: {summary['rozdzialy']}")
         for e in summary["bledy"]:
             say(f"BLAD: {e}")
-        if not go and not summary["bledy"] and await asyncio.to_thread(status_due, repo):
+        if not go and not summary["bledy"] and not manual_mode() and await asyncio.to_thread(status_due, repo):
             # nic do publikacji, ale stan Siedziby na stronie jest stary - maly commit samego stanu
             if dry_run:
                 say(f"Proba: {reason}; stan Siedziby na stronie do odswiezenia")
@@ -453,6 +490,8 @@ async def run_deploy(trigger: str = "reczny", job_id: int | None = None, logf=No
         store.finish_run(run_id, "failed", report, summary=f"Publikacja nieudana: {mask(str(exc))[:200]}")
         if not isinstance(exc, DeployError):
             raise
+    finally:
+        invalidate_pending()
     return run_id
 
 
@@ -477,10 +516,74 @@ def _check() -> bool:
     return status_due(repo)
 
 
+# ------------------------------------------------------------------ tryb reczny: licznik i "Commit gotowy"
+def manual_mode() -> bool:
+    return str(settings.deploy_mode or "").strip().lower() not in ("auto", "automatyczny")
+
+
+def invalidate_pending() -> None:
+    _pending["t"] = None
+
+
+def _deploy_running() -> bool:
+    with Session(engine) as s:
+        return bool(s.exec(select(Job).where(Job.kind == "agent_deploy",
+                                             col(Job.status).in_([JobStatus.queued, JobStatus.running]))).first())
+
+
+def compute_pending() -> dict:
+    """Co czeka na commit (licznik w pasku Siedziby) i czy commit jest gotowy. Bez zapisu w historii agenta."""
+    out = {"tryb": "reczny" if manual_mode() else "auto", "gotowy": False, "w_toku": False, "blokada": None,
+           "powod": "", "pliki": [], "zmiany": None, "licznik": 0, "sprawdzono": store.now()}
+    repo, why_not = readiness()
+    if why_not:
+        out["blokada"] = why_not
+        return out
+    files = changed_files(repo)
+    summary = summarize(repo, files)
+    go, reason = decide(summary, last_publication(), manual=manual_mode())
+    out.update(pliki=[p for _, p in files], zmiany=summary, powod=reason, gotowy=go,
+               licznik=summary["informacje"] + summary["przepisy"] + summary["zdjecia"] + summary["rozmieszczone"]
+               + summary["nowe_rosliny"] + summary["rozdzialy"],
+               progi={"informacje": settings.deploy_min_points, "przepisy": settings.deploy_min_recipes},
+               commit=changelog_entry(summary) if files else None)
+    return out
+
+
+def pending(refresh: bool = False) -> dict:
+    """compute_pending z pamieci (najwyzej PENDING_MAX_AGE_S sekund) + "gotowy od" + czy commit wlasnie trwa."""
+    now = store.now()
+    t = _pending["t"]
+    if refresh or t is None or (now - t).total_seconds() >= PENDING_MAX_AGE_S or _pending["state"] is None:
+        try:
+            st = compute_pending()
+        except Exception as exc:  # noqa: BLE001 - licznik nie moze wywrocic stron Siedziby
+            st = {"tryb": "reczny" if manual_mode() else "auto", "gotowy": False, "blokada": f"blad: {mask(str(exc))[:160]}",
+                  "pliki": [], "zmiany": None, "licznik": 0, "powod": "", "sprawdzono": now}
+        if st["gotowy"] and not _pending["ready_since"]:
+            _pending["ready_since"] = now
+        elif not st["gotowy"]:
+            _pending["ready_since"] = None
+        _pending.update(t=now, state=st)
+    st = dict(_pending["state"])
+    st["gotowy_od"] = _pending["ready_since"]
+    try:
+        st["w_toku"] = _deploy_running()
+    except Exception:  # noqa: BLE001
+        st["w_toku"] = False
+    return st
+
+
 async def maybe_start(state) -> int | None:
     """Wolane przez petle agentow: gdy sa nowe dane i warunki publikacji spelnione - uruchamia zadanie agent_deploy.
-    Samo sprawdzenie (git status, liczenie zmian) nie zapisuje nic w historii, zeby jej nie zasmiecac."""
-    if not settings.deploy_enabled or not should_check():
+    Samo sprawdzenie (git status, liczenie zmian) nie zapisuje nic w historii, zeby jej nie zasmiecac.
+    W trybie recznym tylko odswieza licznik i komunikat "Commit gotowy" - commit robi przycisk."""
+    if not settings.deploy_enabled:
+        return None
+    if manual_mode():
+        await asyncio.to_thread(pending, True)
+        return None
+    if not should_check():
         return None
     _last_check["t"] = store.now()
     with Session(engine) as s:

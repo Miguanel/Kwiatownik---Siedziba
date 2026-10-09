@@ -1,0 +1,25 @@
+{# Pasek recznego commita (htmx co 60 s): strona=nav -> licznik w nawigacji, strona=banner -> komunikat "Commit gotowy" #}
+{% set z = st.zmiany or {} %}
+{% if strona == "nav" %}
+  {% if not enabled %}{% elif st.blokada %}<span class="cm-chip cm-off" title="{{ st.blokada }}">commit: wstrzymany</span>
+  {% elif st.w_toku %}<span class="cm-chip cm-run">commit w toku…</span>
+  {% elif st.gotowy %}<span class="cm-chip cm-ready" title="{{ st.powod }}">✓ commit gotowy · {{ st.licznik }}</span>
+  {% else %}<span class="cm-chip" title="zmiany czekajace na commit: {{ st.powod }}">commit: {{ st.licznik }}{% if st.tryb == "reczny" and z %} · {{ z.informacje }}/{{ st.progi.informacje }} inf.{% endif %}</span>{% endif %}
+{% elif strona == "banner" and enabled and st.tryb == "reczny" and st.gotowy and not st.w_toku and not st.blokada %}
+  <div class="cm-banner" role="status">
+    <div class="cm-text"><b>Commit gotowy.</b>
+      {% set bits = [] %}
+      {% if z.informacje %}{% set _ = bits.append(z.informacje ~ " nowych informacji") %}{% endif %}
+      {% if z.rozmieszczone %}{% set _ = bits.append(z.rozmieszczone ~ " rozmieszczonych w rozdziałach") %}{% endif %}
+      {% if z.rozdzialy %}{% set _ = bits.append(z.rozdzialy ~ " scalonych podrozdziałów") %}{% endif %}
+      {% if z.przepisy %}{% set _ = bits.append(z.przepisy ~ " przepisów") %}{% endif %}
+      {% if z.nowe_rosliny %}{% set _ = bits.append(z.nowe_rosliny ~ " nowych roślin") %}{% endif %}
+      {% if z.zdjecia %}{% set _ = bits.append(z.zdjecia ~ " zdjęć") %}{% endif %}
+      {{ bits | join(", ") or (st.pliki | length ~ " zmienionych plików") }} · {{ st.pliki | length }} plików.
+      <span class="cm-why">{{ st.powod }}</span></div>
+    <div class="cm-actions">
+      <a href="/commit">Co wejdzie?</a>
+      <form method="post" action="/commit" onsubmit="return confirm('Zrobić commit i push danych Kwiatownika2? Render zbuduje nową wersję strony.')"><button>Zatwierdź commit</button></form>
+    </div>
+  </div>
+{% endif %}

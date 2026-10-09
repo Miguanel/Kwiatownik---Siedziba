@@ -18,7 +18,7 @@ from app.worker.discover import run_discover
 from app.worker.export import run_enrich, run_export, run_translate
 from app.worker.jobs import job_log
 from app.worker.knowledge import (run_plant_apply, run_plant_merge, run_plant_organize, run_plant_photos,
-                                  run_plant_research, run_plants_sync)
+                                  run_plant_place, run_plant_research, run_plants_sync)
 from app.worker.marketing import run_fb_ideas, run_fb_post, run_fb_review
 from app.worker.ollama_pull import run_ollama_pull
 from app.worker.scan import run_build_profile, run_fetch_list, run_harvest, run_scan, run_scan_pages
@@ -103,6 +103,14 @@ def start_plant_merge(state, plant_ids: list[str] | None = None, retry_of: int |
     return _create(state, None, "plant_merge", len(plant_ids) if plant_ids else None,
                    lambda jid, runner, llm: run_plant_merge(jid, runner, llm, plant_ids),
                    dedupe=not plant_ids, params={"plant_ids": plant_ids}, retry_of=retry_of)
+
+
+def start_plant_place(state, plant_ids: list[str] | None = None, force: bool = False,
+                      retry_of: int | None = None) -> int:
+    """Rozmieszczenie wiedzy z sieci w rozdzialach i podrozdzialach strony (Uklad strony)."""
+    return _create(state, None, "plant_place", len(plant_ids) if plant_ids else None,
+                   lambda jid, runner, llm: run_plant_place(jid, runner, llm, plant_ids, force),
+                   dedupe=not plant_ids, params={"plant_ids": plant_ids, "force": force}, retry_of=retry_of)
 
 
 def start_fetch_list(state, source_id: int, urls: list[str], retry_of: int | None = None) -> int:
@@ -245,6 +253,8 @@ def retry_job(state, job_id: int) -> int | None:
         new = start_plant_organize(state, p.get("plant_ids"), retry_of=job_id)
     elif kind == "plant_merge":
         new = start_plant_merge(state, p.get("plant_ids"), retry_of=job_id)
+    elif kind == "plant_place":
+        new = start_plant_place(state, p.get("plant_ids"), bool(p.get("force")), retry_of=job_id)
     elif kind == "harvest" and sid:
         new = start_harvest(state, sid, p.get("max_pages"), resume_from=job_id if has_frontier else None,
                             retry_of=job_id)

@@ -10,6 +10,14 @@
   .ag-card form { margin: 0; }
   .ag-bar { background: #fff; border-radius: 8px; padding: 10px 14px; display: flex; flex-wrap: wrap; gap: 8px 18px; align-items: center; margin-bottom: 14px; }
   .ag-bar form { margin: 0; display: flex; gap: 6px; align-items: center; }
+  .ag-limit { flex-wrap: wrap; }
+  .ag-seg { display: inline-flex; border: 1px solid #c9cfbf; border-radius: 8px; overflow: hidden; }
+  .ag-seg button { border: 0; border-right: 1px solid #c9cfbf; background: #fff; min-width: 34px; min-height: 32px;
+                   padding: 4px 8px; font-weight: 600; cursor: pointer; font-variant-numeric: tabular-nums; }
+  .ag-seg button:last-child { border-right: 0; }
+  .ag-seg button:hover { background: #eef0e8; }
+  .ag-seg button.sel { background: #2f5d3a; color: #fff; }
+  .ag-seg button:first-child.sel { background: #b0412e; }
   .ag-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: #b5b9ae; margin-right: 6px; }
   .ag-dot.on { background: #3b9b4f; box-shadow: 0 0 0 3px #d7ecd9; }
   .ag-dot.idle { background: #e0a43a; box-shadow: 0 0 0 3px #fff1c2; }

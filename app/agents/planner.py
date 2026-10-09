@@ -219,17 +219,27 @@ def run_planner(state, trigger: str = "auto", execute: bool | None = None, force
     execute = auto if execute is None else execute
     load = watchdog.llm_load(state)
     props = candidates(state, load=load)
+    cap = store.job_limit(state)
     with Session(engine) as s:
         busy = production_jobs(s)
         pause = paused_until(s)
+        active_keys = {params(t).get("klucz") for t in s.exec(select(AgentTask).where(
+            col(AgentTask.status).in_(["ordered", "running"]))).all()} - {None}
+    if busy:      # przy limicie > 1 planista doklada zadania - ale nie to samo, co juz dziala
+        props = [p for p in props if (p.params or {}).get("klucz", p.key) not in active_keys
+                 and p.key not in active_keys]
+        if load.get("llm_jobs", 0) >= settings.agents_max_llm_jobs or load.get("cloud_down"):
+            props = [p for p in props if not needs_llm(p.kind)]   # modele zajete - dokladamy tylko zadania bez LLM
     quiet = watchdog.job_silence(busy)
-    state_info = {"auto": auto, "pracuje": len(busy), "max_naraz": settings.max_concurrent_jobs,
+    state_info = {"auto": auto, "pracuje": len(busy), "max_naraz": cap,
                   "zadania": [f"#{j.id} {j.kind} ({j.status.value}"
                               + (f", cisza {quiet[j.id]} min" if quiet.get(j.id) else "") + ")" for j in busy[:8]]}
     ordered = None
     log_lines = []
-    if busy and not force:
-        decision = f"pracuje: Siedziba pracuje ({len(busy)} zadan w kolejce) - nic nie zlecam"
+    if cap == 0 and not force:
+        decision = "wstrzymane: zadania w tle wstrzymane (limit 0 w panelu agentow) - nic nie zlecam"
+    elif len(busy) >= cap and not force:
+        decision = f"pracuje: Siedziba pracuje ({len(busy)}/{cap} zadan naraz) - nic nie zlecam"
     elif not execute:
         decision = "propozycje: tryb automatyczny wylaczony - tylko propozycje" if trigger == "auto" else \
             "propozycje: sprawdzenie bez zlecania"
@@ -249,7 +259,8 @@ def run_planner(state, trigger: str = "auto", execute: bool | None = None, force
                     jid = s.get(AgentTask, tid).job_id
                 ordered = {"task": tid, "job": jid, "tytul": prop.title, "typ": prop.kind, "klucz": prop.key}
                 decision = (f"zlecono: kolejka stala - zlecono '{prop.title}' (zadanie #{jid})" if not busy else
-                            f"zlecono: zlecono recznie '{prop.title}' (zadanie #{jid})")
+                            f"zlecono: zlecono recznie '{prop.title}' (zadanie #{jid})" if force else
+                            f"zlecono: wolne miejsce ({len(busy)}/{cap}) - zlecono '{prop.title}' (zadanie #{jid})")
                 break
         report = {"stan": state_info, "propozycje": [asdict(p) for p in props[:12]], "decyzja": decision.split(": ", 1)[1],
                   "zlecono": ordered, "proby": log_lines, "straznik": events, "llm": load,

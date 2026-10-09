@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% block content %}
+{% set z = st.zmiany or {} %}
+<style>
+  .cm-cards .card small { display: block; color: #6b7568; font-size: .8em; }
+  .cm-prog { height: 8px; background: #e3e6dc; border-radius: 4px; overflow: hidden; margin-top: 6px; }
+  .cm-prog div { height: 100%; background: #2f5d3a; }
+  .cm-msg { background: #fff; border-radius: 8px; padding: 12px 14px; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .cm-files { columns: 2 260px; font-size: .85em; font-family: ui-monospace, monospace; padding-left: 18px; }
+  .cm-go { background: #fff; border-radius: 8px; padding: 14px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin: 14px 0; }
+  .cm-go button.big { background: #2f5d3a; color: #fff; border: 0; border-radius: 6px; padding: 10px 18px; font-weight: 600; cursor: pointer; }
+  .cm-go button.big:disabled { background: #9aa596; cursor: default; }
+</style>
+<h1>Commit danych Kwiatownika</h1>
+<p class="muted">Tryb: <b>{{ "ręczny" if st.tryb == "reczny" else "automatyczny" }}</b>{% if st.tryb == "reczny" %} - Siedziba zbiera zmiany
+  w plikach Kwiatownika2 (wiedza, rozmieszczenie w rozdziałach, przepisy, zdjęcia), liczy je i pokazuje komunikat „Commit gotowy”;
+  commit i push robi dopiero ten przycisk. Zmieniasz w .env: DEPLOY_MODE=auto.{% endif %}
+  Sprawdzono: {{ st.sprawdzono | dt("%H:%M:%S") }}{% if st.gotowy_od %}, gotowy od {{ st.gotowy_od | dt("%Y-%m-%d %H:%M") }}{% endif %}.</p>
+{% if msg %}<p class="box" style="display:block">{{ msg }}</p>{% endif %}
+{% if st.blokada %}<p class="box" style="display:block;background:#f6d5d5">Commit niemożliwy: {{ st.blokada }}</p>{% endif %}
+
+<div class="cards cm-cards">
+  <div class="card"><b>{{ z.informacje or 0 }}</b>nowe informacje<small>próg {{ min_points }}</small>
+    <div class="cm-prog"><div style="width: {{ [100, ((z.informacje or 0) * 100 / (min_points or 1)) | round] | min }}%"></div></div></div>
+  <div class="card"><b>{{ z.rozmieszczone or 0 }}</b>rozmieszczone w rozdziałach<small>nowy układ = commit gotowy</small></div>
+  <div class="card"><b>{{ z.rozdzialy or 0 }}</b>scalone podrozdziały</div>
+  <div class="card"><b>{{ z.przepisy or 0 }}</b>nowe przepisy<small>próg {{ min_recipes }}</small>
+    <div class="cm-prog"><div style="width: {{ [100, ((z.przepisy or 0) * 100 / (min_recipes or 1)) | round] | min }}%"></div></div></div>
+  <div class="card"><b>{{ z.nowe_rosliny or 0 }}</b>nowe rośliny</div>
+  <div class="card"><b>{{ z.zdjecia or 0 }}</b>zdjęcia</div>
+  <div class="card"><b>{{ st.pliki | length }}</b>pliki</div>
+</div>
+
+<div class="cm-go">
+  <form method="post" action="/commit" onsubmit="return confirm('Zrobić commit i push? Render zbuduje nową wersję strony.')">
+    <button class="big" {% if st.w_toku or st.blokada or not st.pliki %}disabled{% endif %}>{% if st.w_toku %}Commit w toku…{% else %}Zatwierdź commit i wyślij{% endif %}</button>
+  </form>
+  <span class="muted">{% if st.gotowy %}✓ {{ st.powod }}{% elif st.pliki %}Można commitować już teraz, choć progi nie są spełnione: {{ st.powod }}{% else %}{{ st.powod or "Nic nie czeka na commit." }}{% endif %}</span>
+  <form method="post" action="/commit/odswiez"><button>Przelicz</button></form>
+</div>
+
+{% if st.commit %}
+<h2>Treść commita i wpis kroniki (papirus na stronie głównej)</h2>
+<div class="cm-msg"><b>Siedziba: {{ st.commit.tytul }}</b>
+{{ st.commit.opis }}</div>
+{% endif %}
+
+{% if z.rosliny %}
+<h2>Rośliny ({{ z.rosliny | length }})</h2>
+<table>
+  <tr><th>roślina</th><th>nowe informacje</th><th>rozmieszczone</th><th>scalone podrozdziały</th><th>języki źródeł</th></tr>
+  {% for r in z.rosliny %}
+  <tr><td><a href="/plants/{{ r.id }}">{{ r.nazwa }}</a>{% if r.nowa %} <span class="tag queued">nowa</span>{% endif %}</td>
+    <td>{{ r.nowe }}</td><td>{{ r.rozmieszczone or 0 }}</td><td>{{ r.rozdzialy or 0 }}</td><td>{{ (r.jezyki or []) | join(", ") }}</td></tr>
+  {% endfor %}
+</table>
+{% endif %}
+
+{% if z.przepisy_lista %}
+<h2>Nowe przepisy (pierwsze {{ z.przepisy_lista | length }})</h2>
+<ul>{% for r in z.przepisy_lista %}<li>{{ r.tytul }}{% if r.zrodlo %} <span class="muted">({{ r.zrodlo }})</span>{% endif %}</li>{% endfor %}</ul>
+{% endif %}
+
+{% if z.bledy %}<h2>Błędy</h2><ul>{% for e in z.bledy %}<li>{{ e }}</li>{% endfor %}</ul>{% endif %}
+
+{% if st.pliki %}
+<h2>Pliki w commicie ({{ st.pliki | length }} + kronika i stan Siedziby)</h2>
+<ul class="cm-files">{% for p in st.pliki %}<li>{{ p }}</li>{% endfor %}</ul>
+{% endif %}
+{% endblock %}
