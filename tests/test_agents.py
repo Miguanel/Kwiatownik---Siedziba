@@ -58,8 +58,13 @@ class FakeLLM:
 
 
 class FakeRunner:
-    """Kolejka bez uruchamiania pracy - zadania zostaja 'queued' (jak w prawdziwej kolejce, ktora czeka)."""
-    max_concurrent = 3
+    """Kolejka bez uruchamiania pracy - zadania zostaja 'queued' (jak w prawdziwej kolejce, ktora czeka).
+    Limit 1 = planista zleca dopiero, gdy kolejka stoi (wyzszy limit sprawdza test_planner_fills_up_to_limit)."""
+    max_concurrent = 1
+
+    def set_limit(self, n):
+        self.max_concurrent = max(0, min(6, n))
+        return self.max_concurrent
 
     def __init__(self):
         self.started = []
@@ -204,6 +209,7 @@ def test_dispatch_orders_by_priority_with_limit_and_no_repeats(kw, monkeypatch):
     monkeypatch.setattr(settings, "agents_max_llm_jobs", 10)
     asyncio.run(audit.run_audit(None))
     state = _state()
+    state.jobs.set_limit(3)                              # kolejka pelna dopiero przy 2 x limit zadan
     rid = asyncio.run(dispatch.run_dispatch(state))
     with Session(engine) as s:
         ordered = s.exec(select(AgentTask).where(AgentTask.dispatch_run_id == rid)).all()
@@ -525,3 +531,59 @@ def test_planner_does_not_resume_jobs_stopped_by_hand(kw):
     failed = _job("plant_research", JobStatus.failed)
     props = [p for p in planner.candidates(_state()) if p.kind == "ponow"]
     assert [p.params["ids"] for p in props] == [[str(failed)]] and stopped
+
+
+def test_planner_fills_up_to_job_limit_and_zero_pauses(kw):
+    """Limit zadan w tle z panelu: planista doklada po jednym, az bedzie tyle zadan, ile limit; 0 = nic."""
+    state = _state()
+    state.jobs.set_limit(0)
+    planner.run_planner(state, "auto")
+    rep = store.report(store.last_run("planista"))
+    assert rep["zlecono"] is None and "wstrzymane" in rep["decyzja"] and rep["stan"]["max_naraz"] == 0
+    from app.agents import loop
+    assert loop._idle(state) is False                   # przy 0 petla nie dociska planisty
+    state.jobs.set_limit(3)
+    _job("plant_photos", JobStatus.running)             # jedno produkcyjne juz dziala
+    assert loop._idle(state) is True
+    planner.run_planner(state, "auto")
+    rep = store.report(store.last_run("planista"))
+    assert rep["zlecono"] and "wolne miejsce (1/3)" in rep["decyzja"]
+    keys = set()
+    for _ in range(4):
+        planner.run_planner(state, "auto")
+    with Session(engine) as s:
+        busy = tasks.production_jobs(s)
+        for t in s.exec(select(AgentTask).where(col_not_null())).all():
+            k = tasks.params(t).get("klucz")
+            assert k not in keys                         # ta sama propozycja nie jest zlecana dwa razy naraz
+            keys.add(k)
+    assert len(busy) <= 3 + 1                            # + audyt (nie liczy sie do produkcji) nie przekracza limitu
+    rep = store.report(store.last_run("planista"))
+    assert len(busy) < 3 or "pracuje" in rep["decyzja"]
+
+
+def test_jobs_limit_route_persists(kw):
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+    with TestClient(app) as client:
+        r = client.post("/agents/jobs-limit", data={"value": "5"}, headers={"HX-Request": "true"})
+        assert r.status_code == 200 and 'class="sel"' in r.text and "dziala 0/5" in r.text
+        assert app.state.jobs.max_concurrent == 5
+        r = client.post("/agents/jobs-limit", data={"value": "9"}, follow_redirects=False)
+        assert r.status_code == 303 and app.state.jobs.max_concurrent == 6
+        assert store.runtime()["max_jobs"] == 6
+        client.post("/agents/jobs-limit", data={"value": "0"}, follow_redirects=False)
+        assert "wstrzymane" in client.get("/agents/status").text
+    assert store.apply_job_limit(SimpleNamespace(jobs=FakeRunner())) == 0      # po restarcie wraca z pliku
+
+
+def test_dispatch_waits_when_jobs_paused(kw, monkeypatch):
+    monkeypatch.setattr(settings, "agents_max_llm_jobs", 10)
+    asyncio.run(audit.run_audit(None))
+    state = _state()
+    state.jobs.set_limit(0)
+    rid = asyncio.run(dispatch.run_dispatch(state))
+    with Session(engine) as s:
+        assert not s.exec(select(AgentTask).where(AgentTask.dispatch_run_id == rid)).all()
+    assert "wstrzymane" in (store.last_run("zleceniodawca").log or "")
