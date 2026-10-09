@@ -308,3 +308,25 @@ def test_manual_mode_counts_pending_and_commits_only_on_button(repo, monkeypatch
     log = json.loads((w / "data" / "changelog.json").read_text(encoding="utf-8"))
     assert log["wpisy"][0]["liczby"]["rozmieszczone"] == 1 and "rozdziałów" in log["wpisy"][0]["opis"]
     assert not deploy.pending()["gotowy"]
+
+
+def test_changelog_merges_publications_of_the_same_day():
+    """Dwie publikacje 9 pazdziernika -> jeden wpis kroniki (rosliny i liczby polaczone, godziny zapamietane)."""
+    rano = {"data": "2026-10-09T09:03:32+02:00", "liczby": {"informacje": 67, "rosliny": 2},
+            "rosliny": [{"id": "chmiel", "nazwa": "Chmiel", "nowe": 29, "jezyki": ["de"]},
+                        {"id": "rumianek", "nazwa": "Rumianek", "nowe": 5, "jezyki": ["ru"]}], "przepisy": []}
+    wczoraj = {"data": "2026-10-08T21:23:30+02:00", "liczby": {"informacje": 7}, "rosliny": [], "przepisy": []}
+    nowy = {"data": "2026-10-09T12:16:32+02:00", "liczby": {"informacje": 94, "rozmieszczone": 41},
+            "rosliny": [{"id": "rumianek", "nazwa": "Rumianek", "nowe": 41, "jezyki": ["ja", "zh"]}],
+            "przepisy": [{"tytul": "Napar"}]}
+    merged, rest = deploy.merge_day(nowy, [rano, wczoraj])
+    assert rest == [wczoraj]
+    assert merged["liczby"]["informacje"] == 161 and merged["liczby"]["rosliny"] == 2
+    assert merged["rosliny"][0] == {"id": "rumianek", "nazwa": "Rumianek", "nowe": 46, "jezyki": ["ja", "ru", "zh"]}
+    assert merged["aktualizacje"] == 2 and merged["godziny"] == ["09:03", "12:16"]
+    assert merged["tytul"].startswith("Nowa wiedza o 2 roślinach") and merged["przepisy"] == [{"tytul": "Napar"}]
+    # trzecia publikacja tego dnia dolacza do juz polaczonego wpisu
+    trzeci, _ = deploy.merge_day(dict(nowy, data="2026-10-09T18:00:00+02:00"), [merged, wczoraj])
+    assert trzeci["aktualizacje"] == 3 and trzeci["godziny"] == ["09:03", "12:16", "18:00"]
+    # inny dzien - bez laczenia
+    assert deploy.merge_day(dict(nowy, data="2026-10-10T08:00:00+02:00"), [merged])[1] == [merged]

@@ -322,6 +322,55 @@ def changelog_entry(summary: dict, when: datetime | None = None) -> dict:
             "przepisy": summary["przepisy_lista"]}
 
 
+def _day(iso: str) -> str | None:
+    try:
+        return datetime.fromisoformat(str(iso).replace("Z", "+00:00")).astimezone(TZ).date().isoformat()
+    except (TypeError, ValueError):
+        return None
+
+
+def summary_from_entries(entries: list[dict]) -> dict:
+    """Wpisy kroniki z jednego dnia -> jedno podsumowanie (format jak dla changelog_entry).
+    Ta sama roslina w kilku publikacjach: informacje sie sumuja, jezyki zrodel lacza."""
+    plants: dict[str, dict] = {}
+    recipes: list[dict] = []
+    total = {"informacje": 0, "przepisy": 0, "nowe_rosliny": 0, "zdjecia": 0, "rozmieszczone": 0}
+    for e in entries:
+        liczby = e.get("liczby") if isinstance(e.get("liczby"), dict) else {}
+        for k in total:
+            try:
+                total[k] += int(liczby.get(k) or 0)
+            except (TypeError, ValueError):
+                pass
+        for r in e.get("rosliny") or []:
+            if not isinstance(r, dict) or not r.get("id"):
+                continue
+            p = plants.setdefault(r["id"], {"id": r["id"], "nazwa": r.get("nazwa") or r["id"], "nowe": 0, "jezyki": []})
+            p["nowe"] += int(r.get("nowe") or 0)
+            p["jezyki"] = sorted(set(p["jezyki"]) | set(r.get("jezyki") or []))
+        for rc in e.get("przepisy") or []:
+            if isinstance(rc, dict) and rc.get("tytul") and all(x.get("tytul") != rc["tytul"] for x in recipes):
+                recipes.append(rc)
+    return {"rosliny": sorted(plants.values(), key=lambda r: -r["nowe"]), "informacje": total["informacje"],
+            "przepisy": total["przepisy"], "przepisy_lista": recipes, "nowe_rosliny": total["nowe_rosliny"],
+            "zdjecia": total["zdjecia"], "rozmieszczone": total["rozmieszczone"]}
+
+
+def merge_day(entry: dict, rows: list[dict]) -> tuple[dict, list[dict]]:
+    """Kilka publikacji tego samego dnia = jeden wpis kroniki (zamiast "Nowa wiedza o 3 roslinach" i "o 2
+    roslinach" jeden pod drugim). Nowy wpis laczy sie z najnowszym, jesli jest z tego samego dnia (czas lokalny)."""
+    day = _day(entry.get("data"))
+    same = [r for r in rows if isinstance(r, dict) and day and _day(r.get("data")) == day]
+    if not same:
+        return entry, rows
+    parts = [entry] + same
+    merged = changelog_entry(summary_from_entries(parts), datetime.fromisoformat(entry["data"]))
+    count = sum(int(p.get("aktualizacje") or 1) for p in parts)
+    times = sorted({t for p in parts for t in (p.get("godziny") or [str(p.get("data"))[11:16]]) if t})
+    merged.update(aktualizacje=count, godziny=times)
+    return merged, [r for r in rows if r not in same]
+
+
 def write_changelog(repo: Path, entry: dict) -> None:
     path = repo / CHANGELOG
     try:
@@ -329,6 +378,7 @@ def write_changelog(repo: Path, entry: dict) -> None:
     except (OSError, ValueError):
         data = {}
     rows = data.get("wpisy") if isinstance(data, dict) and isinstance(data.get("wpisy"), list) else []
+    entry, rows = merge_day(entry, rows)                  # ten sam dzien -> jeden wpis kroniki
     data = {"wersja": 1, "opis": "Kronika Siedziby Kwiatownika - pisze ja agent wdrozen (Siedziba).",
             "wpisy": ([entry] + rows)[:CHANGELOG_KEEP]}
     tmp = path.with_suffix(".tmp")
