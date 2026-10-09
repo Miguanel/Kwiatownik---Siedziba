@@ -587,3 +587,21 @@ def test_dispatch_waits_when_jobs_paused(kw, monkeypatch):
     with Session(engine) as s:
         assert not s.exec(select(AgentTask).where(AgentTask.dispatch_run_id == rid)).all()
     assert "wstrzymane" in (store.last_run("zleceniodawca").log or "")
+
+
+def test_planner_counts_retry_of_llm_job_as_llm(kw, monkeypatch):
+    """Ponowienie plant_research zajmuje modele - przy wyczerpanym limicie LLM planista go nie doklada."""
+    old = _job("plant_research", JobStatus.failed)
+    p = planner.Proposal("grupa:retry", "ponow", "Ponowienie", "", 59, "potok", {"ids": [str(old)]})
+    assert planner._uses_llm(p)
+    assert not planner._uses_llm(planner.Proposal("x", "ponow", "", "", 1, "potok", {"ids": [str(_job("plant_photos", JobStatus.failed))]}))
+
+
+def test_fill_orders_several_at_once(kw, monkeypatch):
+    monkeypatch.setattr(settings, "agents_max_llm_jobs", 10)
+    state = _state()
+    state.jobs.set_limit(3)
+    runs = planner.fill(state, "limit")
+    with Session(engine) as s:
+        busy = tasks.production_jobs(s)
+    assert 1 <= len(runs) <= 3 and len(busy) <= 3

@@ -7,6 +7,7 @@ from sqlmodel import Session, col, func, select
 
 from app.agents import store, watchdog
 from app.agents.audit import CRITERIA, FLAG_LABELS, plant_history
+from app.agents.planner import fill as planner_fill
 from app.agents.planner import run_planner
 from app.agents.tasks import KINDS, STATUS_LABELS, order, params, production_jobs, sync_tasks
 from app.config import settings
@@ -152,6 +153,11 @@ async def agents_jobs_limit(request: Request, value: int = Form(...)):
     if runner is not None and hasattr(runner, "set_limit"):
         runner.set_limit(n)
     store.set_runtime(max_jobs=n)
+    if n and store.runtime().get("auto", True) and settings.agents_enabled:
+        try:                                   # nie czekaj na petle (co minute) - doloz zadania od razu
+            planner_fill(request.app.state, "limit")
+        except Exception:  # noqa: BLE001 - panel ma dzialac nawet, gdy planista sie wywroci
+            pass
     if request.headers.get("HX-Request"):
         return templates.TemplateResponse(request, "agents_status.html", _overview(request))
     msg = "Zadania w tle wstrzymane (limit 0)" if n == 0 else f"Zadania w tle: najwyzej {n} naraz"

@@ -209,6 +209,35 @@ def _summary(report: dict) -> str:
     return "; ".join(bits) + " | " + report["decyzja"]
 
 
+def _uses_llm(p: Proposal) -> bool:
+    """Czy zlecenie zajmie modele LLM. Ponowienie zalezy od rodzaju ponawianego zadania (np. plant_research)."""
+    if needs_llm(p.kind):
+        return True
+    if p.kind == "ponow":
+        ids = [int(i) for i in (p.params or {}).get("ids", []) if str(i).isdigit()]
+        if ids:
+            with Session(engine) as s:
+                kinds = s.exec(select(Job.kind).where(col(Job.id).in_(ids))).all()
+            return any(watchdog.is_llm_job(k) for k in kinds)
+    return False
+
+
+def fill(state, trigger: str = "auto") -> list[int]:
+    """Dokladanie zadan do wolnych miejsc naraz (np. zaraz po podniesieniu limitu w panelu) - po jednym
+    przebiegu planisty na wolne miejsce, dopoki cos sie zleca."""
+    runs = []
+    for _ in range(store.job_limit(state)):
+        with Session(engine) as s:
+            if len(production_jobs(s)) >= store.job_limit(state):
+                break
+        rid = run_planner(state, trigger)
+        runs.append(rid)
+        with Session(engine) as s:
+            if not store.report(s.get(AgentRun, rid)).get("zlecono"):
+                break
+    return runs
+
+
 def run_planner(state, trigger: str = "auto", execute: bool | None = None, force: bool = False,
                 pick: str | None = None) -> int:
     """execute=None -> wg przelacznika "auto" z panelu. force=True: zlec mimo dzialajacych zadan (przycisk w panelu).
@@ -229,7 +258,7 @@ def run_planner(state, trigger: str = "auto", execute: bool | None = None, force
         props = [p for p in props if (p.params or {}).get("klucz", p.key) not in active_keys
                  and p.key not in active_keys]
         if load.get("llm_jobs", 0) >= settings.agents_max_llm_jobs or load.get("cloud_down"):
-            props = [p for p in props if not needs_llm(p.kind)]   # modele zajete - dokladamy tylko zadania bez LLM
+            props = [p for p in props if not _uses_llm(p)]   # modele zajete - dokladamy tylko zadania bez LLM
     quiet = watchdog.job_silence(busy)
     state_info = {"auto": auto, "pracuje": len(busy), "max_naraz": cap,
                   "zadania": [f"#{j.id} {j.kind} ({j.status.value}"
