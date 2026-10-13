@@ -181,6 +181,9 @@ class Settings(BaseSettings):
     nn_fallback_confidence: float = 0.6  # gdy LLM zawiedzie: odpowiedz sieci zamiast regul, jesli pewnosc >= tyle
     nn_retrain_min_new: int = 40         # propozycja ponownego treningu, gdy przybylo tyle nowych przykladow
     nn_retrain_growth: float = 0.15      # ...albo zbior urosl o tyle (15%)
+    nn_auto_train: bool = True           # automatyczny trening co NN_AUTO_TRAIN_HOURS (domyslne; zmiana w panelu /nn)
+    nn_auto_train_hours: int = 24
+    nn_auto_train_time: str = "03:30"    # przy interwale >= 24 h trening startuje w oknie 2 h od tej godziny (puste = kiedykolwiek)
 
     user_agent: str = "SiedzibaKwiatownika/0.1 (+https://kwiatownik.onrender.com)"
     request_delay_s: float = 2.0

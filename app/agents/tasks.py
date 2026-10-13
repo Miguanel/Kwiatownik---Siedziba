@@ -55,6 +55,10 @@ KINDS: dict[str, Kind] = {
     "eksport": Kind("Eksport przepisow do Kwiatownika", "export"),
     "ponow": Kind("Ponowienie przerwanego zadania", "retry"),
     "audyt": Kind("Audyt bazy wiedzy", "agent_audit", hint="nowy raport oceny bazy wiedzy Kwiatownika"),
+    "szukanie_przepisu": Kind("Szukanie przepisow do wzmianek", "leads_search", llm=True,
+                              hint="pelne przepisy (skladniki + kroki) dla wzmianek bez wykonania"),
+    "wzmianki": Kind("Wzmianki o przepisach w ciekawostkach", "leads_extract", llm=True,
+                     hint="LLM wypisuje przepisy wspomniane w artykulach bez pelnego wykonania"),
     "trening_sieci": Kind("Trening sieci neuronowych", "nn_train",
                           hint="nowa wersja malych sieci (rodzaj strony, typ przepisu, sekcja i czesc rosliny) - bez LLM"),
 }
@@ -133,6 +137,10 @@ def execute(state, kind: str, p: dict) -> int:
         return actions.start_enrich(state, p.get("limit"), ids or None)
     if kind == "eksport":
         return actions.start_export(state)
+    if kind == "szukanie_przepisu":
+        return actions.start_leads_search(state, ids or None, len(ids) or 5)
+    if kind == "wzmianki":
+        return actions.start_leads_extract(state, int(p.get("limit") or 20))
     if kind == "trening_sieci":
         return actions.start_nn_train(state, [str(i) for i in p.get("ids") or []] or None)
     if kind == "audyt":

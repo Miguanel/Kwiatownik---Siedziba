@@ -1,6 +1,8 @@
 """Panel /nn: co zrobily sieci neuronowe, ich wersje i metryki, tryby pracy, rozstrzyganie rozbieznosci."""
 import json
+import re
 import time
+from urllib.parse import quote
 
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -9,7 +11,7 @@ from sqlmodel import Session, col, func, select
 from app.config import settings
 from app.db import engine
 from app.models import NNModel, NNPrediction
-from app.nn import store
+from app.nn import schedule, store
 from app.nn.encoders import default_encoder_name, get_encoder
 from app.nn.status import overview, task_summary
 from app.nn.tasks import TASKS, label_name
@@ -94,7 +96,8 @@ def nn_page(request: Request, msg: str = ""):
     ctx = {"ov": overview(), "encoders": _encoders(), "default_encoder": default_encoder_name(),
            "running": _jobs_running(), "msg": msg, "tasks": TASKS, "modes": store.MODE_LABELS,
            "errors": brain.errors, "target": settings.nn_target_accuracy,
-           "job_limit": getattr(getattr(request.app.state, "jobs", None), "max_concurrent", 1)}
+           "job_limit": getattr(getattr(request.app.state, "jobs", None), "max_concurrent", 1),
+           "auto": schedule.auto_settings(), "auto_due": schedule.due()[1], "hours_choices": schedule.HOURS_CHOICES}
     ctx.update(_predictions())
     return templates.TemplateResponse(request, "nn.html", ctx)
 
@@ -116,6 +119,22 @@ async def nn_init(request: Request):
     from app.worker import actions
     jid = actions.start_nn_init(request.app.state)
     return RedirectResponse(f"/jobs/{jid}", status_code=303)
+
+
+@router.post("/nn/auto")
+async def nn_auto(request: Request, on: str = Form(""), hours: int = Form(24), time_: str = Form("", alias="time"),
+                  only_new: str = Form(""), now: str = Form("")):
+    """Ustawienia automatycznego treningu; "Sprawdz teraz" od razu uruchamia trening, jesli jest pora."""
+    hours = hours if hours in schedule.HOURS_CHOICES else 24
+    t = time_.strip()
+    if t and not re.fullmatch(r"([01]?\d|2[0-3]):[0-5]\d", t):
+        t = ""
+    schedule.save_auto(on=on == "1", hours=hours, time=t, only_new=only_new == "1")
+    msg = "Zapisano ustawienia automatycznego treningu."
+    if now == "1":
+        jid = schedule.run_if_due(request.app.state)
+        msg = f"Uruchomiono trening - zadanie #{jid}." if jid else f"Nie teraz: {schedule.due()[1]}."
+    return RedirectResponse("/nn?msg=" + quote(msg), status_code=303)
 
 
 @router.post("/nn/{task}/mode")

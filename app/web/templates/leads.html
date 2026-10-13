@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+{% block content %}
+{% include "agents_style.html" %}
+<style>
+  .ld-card { gap: 4px; }
+  .ld-card h3 { margin: 0; font-size: 1.05em; }
+  .ld-meta { font-size: .85em; color: #6b7568; }
+  .ld-known { margin: 2px 0; }
+  .ld-quote { font-size: .85em; color: #4d574a; border-left: 3px solid #d7ecd9; padding-left: 8px; margin: 4px 0; }
+  .ld-ingr { display: flex; flex-wrap: wrap; gap: 4px; }
+  .ld-log { font-size: .82em; max-height: 220px; overflow: auto; margin: 4px 0 0; padding-left: 16px; }
+  .ld-actions { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-top: auto; padding-top: 6px; }
+  .ld-actions form { margin: 0; }
+  .ld-bar form { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin: 0; }
+  .tag.s-szukam { background: #fff1c2; } .tag.s-znaleziony { background: #d7ecd9; }
+  .tag.s-nie_znaleziono { background: #f6d5d5; } .tag.s-odrzucony { background: #eee; color: #666; }
+</style>
+<h1>Przepisy do odnalezienia</h1>
+<p class="muted ag-intro">Wzmianki o przepisach: strona mowi o przepisie (np. „w Japonii z lisci dokudami robi sie herbate na tradzik”),
+  ale nie podaje skladnikow z krokami. Siedziba zapisuje taka wzmianke z tym, co wiadomo, i szuka pelnego przepisu
+  w innych miejscach internetu - w jezyku zrodla, po angielsku i po polsku (do {{ max_attempts }} prob). Odnaleziony
+  trafia do <a href="/items?kind=recipe">Zebranych</a> i przechodzi zwykla droge: tlumaczenie, filtr, zatwierdzenie, eksport.</p>
+{% if msg %}<div class="ag-msg">{{ msg }}</div>{% endif %}
+
+<div class="ag-tiles">
+  {% for k, lab in labels.items() %}
+  <a class="ag-tile" href="/wzmianki?status={{ k }}" style="text-decoration:none;color:inherit;{% if status == k %}outline:2px solid #2f5d3a{% endif %}">
+    <b>{{ counts.get(k, 0) }}</b>{{ lab }}</a>
+  {% endfor %}
+  <a class="ag-tile" href="/wzmianki?status=wszystkie" style="text-decoration:none;color:inherit;{% if status not in labels %}outline:2px solid #2f5d3a{% endif %}">
+    <b>{{ counts.values() | sum }}</b>wszystkie</a>
+</div>
+
+<div class="ag-bar ld-bar">
+  <form method="post" action="/wzmianki/szukaj">
+    <label>Szukaj pelnych przepisow dla <input name="limit" type="number" min="1" max="50" value="5" style="width:60px"> wzmianek</label>
+    <button {% if not counts.get('szukam') %}disabled{% endif %}>Szukaj</button>
+  </form>
+  <form method="post" action="/wzmianki/wyciagnij">
+    <label>Przejrzyj <input name="limit" type="number" min="1" max="200" value="20" style="width:60px"> ciekawostek pod katem wzmianek</label>
+    <button {% if not facts_left %}disabled{% endif %}>Przejrzyj</button>
+    <span class="muted">nieprzejrzanych: {{ facts_left }}</span>
+  </form>
+</div>
+
+<div class="ag-grid wide">
+  {% for r in rows %}{% set ex = extra[r.id] %}
+  <div class="ag-card ld-card">
+    <h3>{{ r.title }} <span class="tag s-{{ r.status }}">{{ labels.get(r.status, r.status) }}</span></h3>
+    <p class="ld-meta">{% if r.plant %}{{ r.plant }}{% if r.plant_latin %} (<i>{{ r.plant_latin }}</i>){% endif %} &middot; {% endif %}
+      {% if r.typ %}{{ r.typ }} &middot; {% endif %}{% if r.title_orig %}{{ r.title_orig }} &middot; {% endif %}
+      #{{ r.id }}, {{ r.created_at | dt("%Y-%m-%d") }}</p>
+    {% if r.known %}<p class="ld-known">{{ r.known }}</p>{% endif %}
+    {% if ex.ingredients %}<div class="ld-ingr">{% for x in ex.ingredients %}<span class="tag">{{ x }}</span>{% endfor %}</div>{% endif %}
+    {% if r.quote %}<p class="ld-quote">{{ r.quote }}</p>{% endif %}
+    <p class="ld-meta">wzmianka: <a href="{{ r.source_url }}" target="_blank" rel="noopener">{{ r.source_name or r.source_url }}</a>
+      {% if r.item_id %}(<a href="/items/{{ r.item_id }}">pozycja #{{ r.item_id }}</a>){% endif %}</p>
+    {% if r.found_item_id %}{% set it = found.get(r.found_item_id) %}
+      <p><span class="tag done">odnaleziony</span> <a href="/items/{{ r.found_item_id }}">{{ (it.title if it else '') or ('przepis #' ~ r.found_item_id) }}</a>
+        {% if it %}<span class="muted">({{ it.status.value }})</span>{% endif %}<br>
+        <a class="ld-meta" href="{{ r.found_url }}" target="_blank" rel="noopener">{{ r.found_url }}</a></p>
+    {% endif %}
+    {% if ex.log %}
+    <details><summary class="ld-meta">szukano {{ r.attempts }}&times;{% if r.last_search_at %}, ostatnio {{ r.last_search_at | dt("%m-%d %H:%M") }}{% endif %}</summary>
+      <ul class="ld-log">{% for h in ex.log %}<li>{% if h.q %}<b>{{ h.lang }}</b>: „{{ h.q }}” - {{ h.wyniki }} wynikow{% else %}<a href="{{ h.url }}" target="_blank" rel="noopener">{{ h.url[:70] }}</a> - {{ h.wynik }}{% endif %}</li>{% endfor %}</ul>
+    </details>
+    {% endif %}
+    <div class="ld-actions">
+      {% if r.status in ('szukam', 'nie_znaleziono') %}
+        <form method="post" action="/wzmianki/szukaj"><input type="hidden" name="ids" value="{{ r.id }}"><button>Szukaj teraz</button></form>
+      {% endif %}
+      {% if r.status != 'odrzucony' %}
+        <form method="post" action="/wzmianki/{{ r.id }}/status"><input type="hidden" name="status" value="odrzucony"><input type="hidden" name="back" value="{{ status }}"><button>Odrzuc</button></form>
+      {% endif %}
+      {% if r.status in ('odrzucony', 'nie_znaleziono') %}
+        <form method="post" action="/wzmianki/{{ r.id }}/status"><input type="hidden" name="status" value="szukam"><input type="hidden" name="back" value="{{ status }}"><button>Przywroc do szukania</button></form>
+      {% endif %}
+    </div>
+  </div>
+  {% else %}
+  <p class="box" style="display:block">Brak wzmianek w tym widoku. Pojawiaja sie przy tlumaczeniu przepisow (strony bez pelnego wykonania)
+    i po przejrzeniu ciekawostek przyciskiem wyzej.</p>
+  {% endfor %}
+</div>
+{% if total > per %}
+<div class="ag-pager">
+  {% if page > 1 %}<a href="/wzmianki?status={{ status }}&page={{ page - 1 }}">&larr; nowsze</a>{% endif %}
+  <span class="muted">strona {{ page }} z {{ (total + per - 1) // per }}</span>
+  {% if page * per < total %}<a href="/wzmianki?status={{ status }}&page={{ page + 1 }}">starsze &rarr;</a>{% endif %}
+</div>
+{% endif %}
+{% endblock %}

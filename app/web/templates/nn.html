@@ -37,6 +37,25 @@
   {% if running.nn_train %}<a href="/jobs/{{ running.nn_train }}">postep zadania #{{ running.nn_train }}</a>{% endif %}
 </div>
 
+<form class="ag-bar" method="post" action="/nn/auto">
+  <span><b>Automatyczny trening:</b></span>
+  <label><input type="checkbox" name="on" value="1" {% if auto.on %}checked{% endif %}> wlaczony</label>
+  <label>co <select name="hours">{% for h in hours_choices %}<option value="{{ h }}" {% if h == auto.hours %}selected{% endif %}>{{ h }} h{% if h == 168 %} (tydzien){% endif %}</option>{% endfor %}</select></label>
+  <label title="przy interwale 24 h i dluzszym: start w oknie 2 h od tej godziny (np. w nocy)">o godzinie <input name="time" value="{{ auto.time }}" placeholder="03:30" size="5"></label>
+  <label title="trenuje tylko sieci, dla ktorych przybylo przykladow od ostatniego treningu"><input type="checkbox" name="only_new" value="1" {% if auto.only_new %}checked{% endif %}> tylko gdy przybylo danych</label>
+  <button>Zapisz</button>
+  <button name="now" value="1" title="zapisz i od razu sprawdz, czy pora na trening">Zapisz i sprawdz teraz</button>
+  <span class="muted">{{ auto_due }}</span>
+</form>
+{% if auto.history %}
+<details style="margin:-6px 0 14px"><summary class="muted">Ostatnie automatyczne treningi ({{ auto.history | length }})</summary>
+  <div class="ag-tbl"><table>
+    {% for h in auto.history %}<tr><td class="nw muted">{{ h.at | replace('T', ' ') }}</td><td><a href="/jobs/{{ h.job }}">#{{ h.job }}</a></td>
+      <td>{{ h.tasks | join(', ') }}</td><td class="muted">{{ h.reason }}</td></tr>{% endfor %}
+  </table></div>
+</details>
+{% endif %}
+
 <div class="ag-grid wide">
   {% for t in ov.tasks %}{% set m = t.metrics %}{% set eff = m.effective or {} %}
   <div class="ag-card">

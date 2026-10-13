@@ -2,19 +2,19 @@
   "tasks": {
     "fact_section": {
       "mode": "cien",
-      "version": 2
+      "version": 4
     },
     "fact_part": {
       "mode": "cien",
-      "version": 2
+      "version": 4
     },
     "page_kind": {
       "mode": "cien",
-      "version": 3
+      "version": 5
     },
     "recipe_type": {
       "mode": "cien",
-      "version": 3
+      "version": 5
     }
   }
 }

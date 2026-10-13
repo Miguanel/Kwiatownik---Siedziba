@@ -2,6 +2,7 @@
 tlumaczenie na polski -> pominiecie kulinarnych -> sprawdzenie, czy przepis juz istnieje -> opracowanie
 (tradycyjne systemy) -> eksport."""
 import json
+from urllib.parse import urlparse
 from contextlib import nullcontext
 from datetime import datetime, timezone
 from pathlib import Path
@@ -97,9 +98,16 @@ async def translate_one(item_id: int, llm, plants: dict, kw_cands: list[Candidat
         with Session(engine) as s:
             item = s.get(Item, item_id)
             item.status, item.reason = ItemStatus.skipped, f"brak konkretnego przepisu: {exc}"[:300]
+            url = item.url
             s.add(item)
             s.commit()
         log(f"[pominiety] #{item_id} {meta['title'][:50]}: brak konkretnego przepisu")
+        if exc.leads:                                  # wzmianki o przepisach -> lista "Przepisy do odnalezienia"
+            from app.pipeline.leads import save_leads
+            new = save_leads(exc.leads, url, urlparse(url).netloc, meta.get("language"), item_id, None)
+            if new:
+                log(f"[wzmianka] #{item_id}: {len(new)} przepisow do odnalezienia: "
+                    + ", ".join(w["tytul"][:40] for w in exc.leads[:3]))
         return "no_recipe"
     except (LLMError, ValueError) as exc:
         with Session(engine) as s:

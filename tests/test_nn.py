@@ -436,3 +436,79 @@ def test_e5_download_resumes_after_broken_transfer_and_skips_404(tmp_path, monke
     assert (d / "tokenizer.json").exists() and "sentencepiece.bpe.model" not in got
     assert any(r and r.startswith("bytes=") for _, r in calls)          # wznowienie od miejsca przerwania
     assert not list((tmp_path / "tmp").glob("*.part"))                   # pliki tymczasowe posprzatane
+
+
+def test_auto_training_schedule(nn_env, monkeypatch):
+    from datetime import datetime, timedelta, timezone
+
+    from app.models import Job, JobStatus
+    from app.nn import schedule
+    from app.nn.train import train_task
+    import app.nn.schedule as sch
+    monkeypatch.setattr(sch, "engine", nn_env)
+    import app.nn.status as st
+    monkeypatch.setattr(settings, "timezone", "UTC")
+    with Session(nn_env) as s:
+        for r in _fact_rows():
+            s.add(r)
+        s.commit()
+    schedule.save_auto(on=False)
+    assert schedule.due()[0] == [] and "wylaczony" in schedule.due()[1]
+    schedule.save_auto(on=True, hours=24, time="", only_new=False)
+    tasks, why = schedule.due()
+    assert set(tasks) == {"fact_section", "fact_part"}                 # pierwszy trening: sieci z danymi
+    train_task("fact_section", "ngram")
+    now = datetime.now(timezone.utc)
+    assert schedule.due(now)[0] == [] and "nastepny po 24 h" in schedule.due(now)[1]
+    later = now + timedelta(hours=25)
+    schedule.save_auto(only_new=True)
+    st._cache.clear()
+    assert schedule.due(later)[0] == ["fact_part"]                      # tylko siec z nowymi danymi (bez wersji)
+    schedule.save_auto(time="03:30")                                    # okno godzinowe przy interwale 24 h
+    at_noon = (now + timedelta(days=2)).replace(hour=12, minute=0)
+    at_night = (now + timedelta(days=2)).replace(hour=4, minute=0)
+    assert "03:30" in schedule.due(at_noon)[1] and schedule.due(at_night)[0] == ["fact_part"]
+    with Session(nn_env) as s:
+        s.add(Job(kind="nn_train", status=JobStatus.queued))
+        s.commit()
+    assert "juz trwa" in schedule.due(at_night)[1]
+
+
+def test_auto_training_panel_settings(nn_env):
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+    from app.nn import schedule
+    with TestClient(app) as c:
+        r = c.post("/nn/auto", data={"on": "1", "hours": "48", "time": "02:15", "only_new": "1"}, follow_redirects=False)
+        assert r.status_code == 303
+        a = schedule.auto_settings()
+        assert a["on"] and a["hours"] == 48 and a["time"] == "02:15" and a["only_new"]
+        c.post("/nn/auto", data={"hours": "5", "time": "25:99"})
+        a = schedule.auto_settings()
+        assert not a["on"] and a["hours"] == 24 and a["time"] == ""
+        assert "Automatyczny trening" in c.get("/nn").text
+
+
+def test_auto_training_starts_job_from_event_loop(nn_env, monkeypatch):
+    import types
+
+    import app.nn.schedule as sch
+    from app.worker.jobs import make_runner
+    monkeypatch.setattr(sch, "engine", nn_env)
+    monkeypatch.setattr(sch, "due", lambda now=None: (["fact_section"], "test"))
+    import app.worker.actions as actions_mod
+    monkeypatch.setattr(actions_mod, "engine", nn_env)
+    started = {}
+
+    async def run():
+        state = types.SimpleNamespace(jobs=make_runner(0), llm=None)     # limit 0: zadanie tylko czeka w kolejce
+        started["jid"] = sch.run_if_due(state)
+        started["tasks"] = list(state.jobs.tasks)
+        for t in state.jobs.tasks.values():
+            t.cancel()
+
+    asyncio.run(run())
+    assert started["jid"] and started["jid"] in started["tasks"]
+    hist = sch.auto_settings()["history"]
+    assert hist[0]["job"] == started["jid"] and hist[0]["tasks"] == ["fact_section"]

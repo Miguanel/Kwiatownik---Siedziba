@@ -75,6 +75,7 @@ class Item(SQLModel, table=True):
     translated_by: str | None = None     # provider/model, ktory przetlumaczyl
     match_ref: str | None = None         # z czym sie pokrywa (plik Kwiatownika#id albo item #id)
     match_info: str | None = None        # jak ustalono (podobienstwo/llm) + wynik
+    leads_at: datetime | None = None     # kiedy ciekawostke przejrzano pod katem wzmianek o przepisach
     created_at: datetime = Field(default_factory=_now)
     updated_at: datetime = Field(default_factory=_now)
 
@@ -383,3 +384,30 @@ class NNPrediction(SQLModel, table=True):
     ms: float | None = None
     job_id: int | None = Field(default=None, index=True)
     created_at: datetime = Field(default_factory=_now, index=True)
+
+
+class RecipeLead(SQLModel, table=True):
+    """Wzmianka o przepisie bez pelnego wykonania (strona opisuje przepis, ale nie podaje skladnikow z krokami).
+    Siedziba szuka pelnego przepisu w innych miejscach internetu; znaleziony trafia do Zebranych jak kazdy inny."""
+    id: int | None = Field(default=None, primary_key=True)
+    title: str                                   # nazwa przepisu po polsku
+    title_orig: str | None = None                # nazwa w jezyku zrodla (do wyszukiwania)
+    plant: str | None = None                     # glowna roslina po polsku
+    plant_latin: str | None = None
+    typ: str | None = None                       # typ z listy Kwiatownika (jesli da sie ustalic)
+    known: str | None = None                     # co wiadomo z wzmianki (po polsku)
+    ingredients_json: str | None = None          # znane skladniki (bez ilosci)
+    quote: str | None = None                     # fragment zrodla
+    source_url: str
+    source_name: str | None = None
+    language: str | None = None
+    item_id: int | None = Field(default=None, index=True)   # strona, na ktorej znaleziono wzmianke
+    fingerprint: str = Field(index=True)
+    status: str = Field(default="szukam", index=True)       # szukam | znaleziony | nie_znaleziono | odrzucony
+    attempts: int = 0
+    last_search_at: datetime | None = None
+    found_item_id: int | None = None             # odnaleziony pelny przepis (Item)
+    found_url: str | None = None
+    search_log: str | None = None                # JSON: zapytania i sprawdzone strony z powodami
+    model: str | None = None
+    created_at: datetime = Field(default_factory=_now)

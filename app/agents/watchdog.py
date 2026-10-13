@@ -23,7 +23,7 @@ _REPORTED: dict[int, float] = {}   # tryb "report": kiedy ostatnio zgloszono zad
 ZOMBIE_AFTER_S = 120          # tyle sekund po utworzeniu zadanie musi juz byc w kolejce w pamieci
 # zadania, ktore pytaja modele LLM (ich liczbe naraz ogranicza AGENTS_MAX_LLM_JOBS)
 LLM_JOBS = ("plant_research", "plant_apply", "plant_organize", "plant_merge", "plant_place", "translate", "enrich",
-            "build_profile", "fb_ideas")
+            "build_profile", "fb_ideas", "leads_extract", "leads_search")
 
 
 def _ts(dt: datetime | None) -> float | None:

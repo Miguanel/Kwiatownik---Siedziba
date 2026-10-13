@@ -306,8 +306,37 @@ def build_groups(limit: int = 150) -> list[TaskGroup]:
                                 [TaskItem(str(j.id), f"#{j.id} {j.kind}" + (f" - {names.get(j.source_id, '')}" if j.source_id else ""),
                                           f"{j.status.value}, {j.progress or 0}/{j.total or '?'}", f"/jobs/{j.id}")
                                  for j in failed], len(failed), 5))
+    groups += _lead_groups(by_kind)
     groups += _nn_groups(by_kind)
     return sorted(groups, key=lambda g: (g.total == 0, g.priority))
+
+
+def _lead_groups(by_kind: dict) -> list[TaskGroup]:
+    """Wzmianki o przepisach: szukanie pelnych przepisow i przegladanie ciekawostek pod katem wzmianek."""
+    try:
+        from app.models import RecipeLead
+        from app.pipeline.leads import MAX_ATTEMPTS, facts_to_check
+        with Session(engine) as s:
+            base = select(RecipeLead).where(RecipeLead.status == "szukam", RecipeLead.attempts < MAX_ATTEMPTS)
+            total = s.exec(select(func.count()).select_from(base.subquery())).one()
+            rows = s.exec(base.order_by(RecipeLead.attempts, RecipeLead.id).limit(60)).all()
+        facts = facts_to_check(100000)
+    except Exception:  # noqa: BLE001 - brak tabeli przy pierwszym starcie
+        return []
+    busy = by_kind.get("leads_search")
+    search = TaskGroup("leads", "recipes", "Przepisy do odnalezienia",
+                       "Wzmianki o przepisach bez pelnego wykonania - Siedziba szuka skladnikow i krokow na innych "
+                       "stronach (jezyk zrodla, angielski, polski). Odnalezione trafiaja do Zebranych.",
+                       [("leads_search", "Szukaj")],
+                       [TaskItem(str(r.id), r.title, " - ".join(x for x in (r.plant, r.typ,
+                                 f"proba {r.attempts + 1}/{MAX_ATTEMPTS}") if x), "/wzmianki", busy) for r in rows],
+                       total, 54)
+    extract = TaskGroup("leads_extract", "recipes", "Ciekawostki do przejrzenia pod katem wzmianek",
+                        "Artykuly z ciekawostkami moga wspominac o przepisach (bez wykonania) - LLM je wypisze.",
+                        [("leads_extract", "Przejrzyj 20")],
+                        [TaskItem("all", f"{len(facts)} nieprzejrzanych ciekawostek", "", "/wzmianki",
+                                  by_kind.get("leads_extract"))] if facts else [], 1 if facts else 0, 64)
+    return [search, extract]
 
 
 def _nn_groups(by_kind: dict) -> list[TaskGroup]:
@@ -383,6 +412,12 @@ def run_task(state, group: str, action: str, ids: list[str]) -> str:
     if action == "discover":
         jobs = [actions.start_discover(state, code, DiscoveryConfig()) for code in ids if code in COUNTRIES]
         return f"Szukanie stron w {len(jobs)} krajach."
+    if action == "leads_search":
+        jid = actions.start_leads_search(state, int_ids or None)
+        return f"Szukanie pelnych przepisow dla {len(int_ids) or 5} wzmianek - zadanie #{jid}."
+    if action == "leads_extract":
+        jid = actions.start_leads_extract(state, 20)
+        return f"Przegladanie ciekawostek pod katem wzmianek - zadanie #{jid}."
     if action == "nn_train":
         jid = actions.start_nn_train(state, [str(i) for i in ids])
         return f"Trening {len(ids)} sieci - zadanie #{jid}."

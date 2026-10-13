@@ -25,6 +25,7 @@ from app.web.marketing_routes import router as marketing_router
 from app.web.monitor_routes import router as monitor_router
 from app.web.nn_routes import router as nn_router
 from app.web.encyclopedia_routes import router as encyclopedia_router
+from app.web.leads_routes import router as leads_router
 from app.web.tasks_routes import router as tasks_router
 from app.worker import actions
 from app.worker.discover import cleanup_discoveries
@@ -96,6 +97,8 @@ async def lifespan(app: FastAPI):
                 log.exception("Nie udalo sie wznowic zadania #%s", jid)
     tasks.append(asyncio.create_task(auto_scan_loop(app.state)))  # codzienny skan zrodel "auto"
     tasks.append(asyncio.create_task(agents_loop(app.state)))     # planista ciaglosci: Siedziba zawsze nad czyms pracuje
+    from app.nn.schedule import nn_schedule_loop
+    tasks.append(asyncio.create_task(nn_schedule_loop(app.state)))  # automatyczny trening sieci co jakis czas
     log.warning("Siedziba Kwiatownika gotowa: http://localhost:8000")
     yield
     for t in tasks:
@@ -122,6 +125,7 @@ app.include_router(layout_router)
 app.include_router(deploy_router)
 app.include_router(nn_router)
 app.include_router(encyclopedia_router)
+app.include_router(leads_router)
 
 
 @app.get("/health")

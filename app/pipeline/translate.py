@@ -12,7 +12,12 @@ from app.llm.base import InvalidOutputError
 
 
 class NoRecipeError(InvalidOutputError):
-    """Strona nie zawiera konkretnego przepisu - to nie blad modelu."""
+    """Strona nie zawiera konkretnego przepisu - to nie blad modelu.
+    leads: wzmianki o przepisach z tego tekstu (nazwa, roslina, co wiadomo) - do odnalezienia gdzie indziej."""
+
+    def __init__(self, msg: str = "", leads: list[dict] | None = None):
+        super().__init__(msg)
+        self.leads = leads or []
 
 
 class IncompleteRecipeError(NoRecipeError):
@@ -58,6 +63,15 @@ TRADITION = {"ua": "Tradycja ukraińska", "de": "Tradycja niemiecka", "at": "Tra
 LANG_COUNTRY = {"uk": "ua", "de": "de", "fr": "fr", "es": "es", "it": "it", "cs": "cz", "sk": "sk", "lt": "lt",
                 "hu": "hu", "ro": "ro", "bg": "bg", "hr": "hr", "sr": "rs", "pl": "pl"}
 
+LEAD_FORMAT = """"wzmianki": przepisy NIEKULINARNE z roslinami jako kluczowym skladnikiem (napar, nalewka, masc,
+barwnik, kosmetyk...), o ktorych tekst MOWI, ale nie podaje pelnego wykonania (brak skladnikow z ilosciami albo krokow),
+np. "w Japonii z lisci dokudami robi sie herbate na trądzik". Kazda wzmianka:
+{"tytul": "nazwa przepisu po polsku", "tytul_oryginalny": "nazwa w jezyku tekstu", "roslina": "po polsku",
+ "roslina_lacinska": "... lub null", "typ": "jeden z listy TYPY lub null",
+ "co_wiadomo": "1-3 zdania po polsku: co tekst mowi o tym przepisie (zastosowanie, region, tradycja)",
+ "znane_skladniki": ["..."], "cytat": "fragment oryginalu (max 250 znakow)"}.
+Bez wymyslania - tylko to, co jest w tekscie. Max 5 wzmianek; brak takich = pusta lista."""
+
 SYSTEM_PROMPT = """Jestes redaktorem polskiego serwisu "Kwiatownik" (ziololecznictwo: leki ziolowe, nalewki,
 barwienie wlosow i tkanin roslinami, naturalna kosmetyka). Tlumaczysz przepis z obcego jezyka na naturalny, poprawny jezyk polski i ukladasz go w JSON.
 ZASADY:
@@ -82,7 +96,8 @@ Zwroc TYLKO JSON:
  "dodatkowe_przepisy": [ ...kolejne ODREBNE przepisy z tego samego tekstu, w tym samym formacie (bez tego pola)... ]}
 Jesli tekst zawiera kilka roznych przepisow (np. artykul "5 naparow na kaszel"), pierwszy opisz w glownych polach,
 a pozostale w "dodatkowe_przepisy" (max 6). Jesli w tekscie NIE MA konkretnego przepisu (tylko lista linkow,
-ogolny artykul), zwroc {"brak_przepisu": true}."""
+ogolny artykul), zwroc {"brak_przepisu": true, "wzmianki": [...]}. """ + LEAD_FORMAT
+
 
 
 def slugify(text: str) -> str:
@@ -157,8 +172,15 @@ async def translate_recipe(llm, recipe: dict | None, raw_text: str | None, meta:
     except ValueError as exc:
         raise InvalidOutputError("LLM zwrocil niepoprawny JSON") from exc
     if data.get("brak_przepisu") is True:
-        raise NoRecipeError("w tekscie nie ma konkretnego przepisu (lista lub artykul ogolny)")
-    rec = normalize_record(data, meta, plants, taken_ids)
+        raise NoRecipeError("w tekscie nie ma konkretnego przepisu (lista lub artykul ogolny)",
+                            leads=clean_leads(data.get("wzmianki")))
+    try:
+        rec = normalize_record(data, meta, plants, taken_ids)
+    except IncompleteRecipeError as exc:
+        # tytul jest, ale brak skladnikow albo krokow: to wzmianka o przepisie - szukamy pelnego gdzie indziej
+        lead = lead_from_partial(data)
+        raise IncompleteRecipeError(str(exc), leads=clean_leads(data.get("wzmianki")) + ([lead] if lead else [])) \
+            from exc
     extras = []
     for i, extra in enumerate((data.get("dodatkowe_przepisy") or [])[:MAX_EXTRA_RECIPES], 2):
         if not isinstance(extra, dict):
@@ -176,3 +198,38 @@ async def translate_recipe(llm, recipe: dict | None, raw_text: str | None, meta:
     if extras:
         rec["_dodatkowe"] = extras      # odbiera export.translate_one (osobne przepisy z tego samego artykulu)
     return rec, f"{res.provider}/{res.model}"
+
+
+def clean_leads(raw) -> list[dict]:
+    """Wzmianki z odpowiedzi LLM -> lista slownikow z wymaganymi polami (tytul + cos o przepisie)."""
+    out = []
+    for w in (raw if isinstance(raw, list) else [])[:5]:
+        if not isinstance(w, dict):
+            continue
+        tytul = str(w.get("tytul") or "").strip()
+        if not tytul or len(tytul) > 150:
+            continue
+        typ = str(w.get("typ") or "").strip().lower() or None
+        if typ and typ not in TYPES and not TYPE_RE.match(typ):
+            typ = None
+        if typ == CULINARY_TYPE:
+            continue                                   # Kwiatownik zbiera przepisy niekulinarne
+        out.append({"tytul": tytul, "tytul_oryginalny": str(w.get("tytul_oryginalny") or "").strip() or None,
+                    "roslina": str(w.get("roslina") or "").strip() or None,
+                    "roslina_lacinska": str(w.get("roslina_lacinska") or "").strip() or None, "typ": typ,
+                    "co_wiadomo": str(w.get("co_wiadomo") or "").strip()[:800] or None,
+                    "znane_skladniki": [str(x).strip() for x in (w.get("znane_skladniki") or [])
+                                        if str(x).strip()][:20],
+                    "cytat": str(w.get("cytat") or "").strip()[:300] or None})
+    return out
+
+
+def lead_from_partial(data: dict) -> dict | None:
+    """Niepelny przepis (jest tytul, brak krokow lub skladnikow) jako wzmianka."""
+    tytul = str(data.get("tytul") or "").strip()
+    if not tytul or is_culinary_type(str(data.get("typ") or "").lower()):
+        return None
+    skl = [str(x.get("nazwa") if isinstance(x, dict) else x).strip() for x in data.get("skladniki") or []]
+    return {"tytul": tytul, "tytul_oryginalny": None, "roslina": data.get("roslina") or None, "roslina_lacinska": None,
+            "typ": data.get("typ") or None, "co_wiadomo": data.get("opis") or None,
+            "znane_skladniki": [x for x in skl if x][:20], "cytat": None}
