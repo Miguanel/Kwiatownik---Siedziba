@@ -168,3 +168,24 @@ def test_leads_panel(eng):
             assert s.get(RecipeLead, lid).status == "odrzucony"
         assert "Herbata z dokudami" in c.get("/wzmianki?status=odrzucony").text
         assert c.get("/tasks").status_code == 200
+
+
+def test_export_leads_for_kwiatownik(eng, tmp_path):
+    from app.pipeline import leads as lm
+    from app.pipeline.catalog import load_kwiatownik_recipes
+    ids = lm.save_leads([LEAD, dict(LEAD, tytul="Masc z nagietka", roslina="nagietek lekarski",
+                                    roslina_lacinska="Calendula officinalis", tytul_oryginalny=None)],
+                        "https://www.jp.example/a", None, "ja", None, "m")
+    with Session(eng) as s:
+        s.get(RecipeLead, ids[1]).status = "odrzucony"
+        s.commit()
+    plants = {"pstrolistka": "Pstrolistka sercowata (Houttuynia cordata)", "nagietek": "Nagietek lekarski (Calendula officinalis)"}
+    folder = tmp_path / "przepisy"
+    name, n = lm.export_leads(folder, plants)
+    assert n == 1 and name.startswith("siedziba_wzmianki_")
+    rec = json.loads((folder / name).read_text(encoding="utf-8"))[0]
+    assert rec["wzmianka"]["status"] == "szukamy" and rec["slug"] == "pstrolistka" and rec["sposob_przygotowania"] == []
+    assert rec["zrodla"][0]["nazwa"] == "jp.example" and rec["skladniki"] == [{"nazwa": "liscie pstrolistki"}]
+    assert lm.export_leads(folder, plants) == (None, 1)                  # bez zmian -> bez nowego pliku
+    (folder / "siedziba_przepisy_2026-10-01.json").write_text(json.dumps([{"id": "a", "tytul": "Napar"}]), "utf-8")
+    assert [r.title for r in load_kwiatownik_recipes(folder)] == ["Napar"]   # wzmianki nie sa "istniejacymi przepisami"

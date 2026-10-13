@@ -36,7 +36,7 @@ def load_kwiatownik_recipes(przepisy_dir: Path, exclude: set[str] | None = None)
     if not d.exists():
         log.warning("Brak katalogu przepisow Kwiatownika: %s", d)
         return out
-    skip = {store.series_of(x) for x in (exclude or set())}
+    skip = {store.series_of(x) for x in (exclude or set())} | {"siedziba_wzmianki"}   # wzmianki to nie przepisy
     for f in store.current_files(d):
         if store.parse_name(f.name)[0] in skip:
             continue
@@ -46,7 +46,7 @@ def load_kwiatownik_recipes(przepisy_dir: Path, exclude: set[str] | None = None)
             continue
         items = data.get("przepisy", [data]) if isinstance(data, dict) else data
         for r in items:
-            if isinstance(r, dict) and r.get("tytul"):
+            if isinstance(r, dict) and r.get("tytul") and not r.get("wzmianka"):
                 rid = r.get("id") or r.get("slug")
                 out.append(KwRecipe(f"{f.name}#{rid or r['tytul']}", r["tytul"], _names(r.get("skladniki")),
                                     r.get("typ"), rid))

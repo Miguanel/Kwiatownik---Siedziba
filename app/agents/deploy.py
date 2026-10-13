@@ -168,7 +168,7 @@ def _photos(data) -> int:
 def _recipe_rows(data) -> list[dict]:
     if isinstance(data, dict):
         data = data.get("przepisy") if isinstance(data.get("przepisy"), list) else [data]
-    return [r for r in data or [] if isinstance(r, dict)]
+    return [r for r in data or [] if isinstance(r, dict) and not r.get("wzmianka")]   # wzmianki to nie przepisy
 
 
 def _recipe_key(r: dict) -> str:

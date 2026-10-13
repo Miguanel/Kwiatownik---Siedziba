@@ -402,6 +402,14 @@ async def run_export(job_id: int, runner: JobRunner, llm, translate_first: int =
     if settings.export_require_approval:
         log("Eksportowane sa tylko przepisy zatwierdzone w panelu (EXPORT_REQUIRE_APPROVAL=true)")
     stats = {"exported": len(records), "sources": n_src}
+    if settings.export_leads:                           # wzmianki o przepisach (bez potwierdzonych krokow)
+        from app.pipeline.leads import export_leads
+        try:
+            name, n_leads = export_leads(folder, load_plants(settings.kwiatownik_plants_dir))
+            log(f"Wzmianki o przepisach: {n_leads}" + (f" - zapisano {name}" if name else " - bez zmian"))
+            stats["leads"] = n_leads
+        except Exception as exc:  # noqa: BLE001 - wzmianki nie blokuja eksportu przepisow
+            log(f"Wzmianki o przepisach: blad zapisu ({exc})")
     _save_stats(job_id, stats)
     return stats
 

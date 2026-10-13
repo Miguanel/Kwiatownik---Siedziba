@@ -78,7 +78,7 @@ def read_recipes(przepisy_dir: Path) -> list[dict]:
         rows = data if isinstance(data, list) else next((v for v in (data or {}).values() if isinstance(v, list)), []) \
             if isinstance(data, dict) else []
         for r in rows:
-            if not isinstance(r, dict):
+            if not isinstance(r, dict) or r.get("wzmianka"):          # wzmianki o przepisach - bez wykonania
                 continue
             key = str(r.get("id") or "") or norm_text(str(r.get("tytul") or ""))
             if not key or key in seen:

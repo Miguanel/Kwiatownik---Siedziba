@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     kwiatownik1_przepisy_dir: Path = BASE_DIR.parent / "Kwiatownik" / "static" / "data" / "przepisy"
     export_filename: str = "siedziba_przepisy.json"
     export_require_approval: bool = True     # eksportuj tylko przepisy zatwierdzone w panelu
+    export_leads: bool = True                # eksport wzmianek o przepisach (siedziba_wzmianki_<data>.json) - bez odrzuconych
     translate_batch: int = 20                # ile przepisow tlumaczyc w jednym zadaniu
     # Tlumaczenie maszynowe bez LLM (NLLB-200 w CTranslate2) dla przepisow z danymi strukturalnymi
     mt_engine: str = "nllb"                  # "nllb" albo "llm" (wszystko przez LLM, jak dawniej)

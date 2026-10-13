@@ -200,3 +200,67 @@ def leads_to_search(limit: int) -> list[int]:
                                                        RecipeLead.attempts < MAX_ATTEMPTS)
                            .order_by(RecipeLead.attempts, col(RecipeLead.last_search_at).is_not(None),
                                      RecipeLead.last_search_at, RecipeLead.id).limit(limit)).all())
+
+
+# ------------------------------------------------------------------ eksport do Kwiatownika (wzmianki jako przepisy)
+LEADS_SERIES = "siedziba_wzmianki"
+
+
+def lead_records(plants: dict[str, str]) -> list[dict]:
+    """Wzmianki do pokazania w Kwiatowniku: jeszcze nieodnalezione i nieodrzucone. Format przepisu Kwiatownika
+    z polem "wzmianka" (Kwiatownik2 pokazuje je jako "przepis znany ze wzmianki" - bez potwierdzonych krokow)."""
+    from app.pipeline.fast_translate import PlantIndex
+    from app.pipeline.translate import slugify
+    index = PlantIndex(plants)
+    with Session(engine) as s:
+        rows = s.exec(select(RecipeLead).where(col(RecipeLead.status).in_(["szukam", "nie_znaleziono"]))
+                      .order_by(RecipeLead.id)).all()
+    out = []
+    for r in rows:
+        ingr = json.loads(r.ingredients_json or "[]")
+        slug = index.match(r.plant or "", r.plant_latin or "") if (r.plant or r.plant_latin) else None
+        domain = urlparse(r.source_url).netloc.removeprefix("www.")
+        rec = {
+            "id": f"wzmianka_{slugify(r.title)}_{r.id}",
+            "tytul": r.title,
+            "typ": r.typ or "inne",
+            "roslina": r.plant,
+            "slug": slug,
+            "opis": r.known,
+            "skladniki": [{"nazwa": x} for x in ingr],
+            "sposob_przygotowania": [],
+            "tagi": ["wzmianka"],
+            "zrodla": [{"nazwa": r.source_name or domain, "url": r.source_url, "jezyk": r.language,
+                        "pobrano": r.created_at.strftime("%Y-%m-%d") if r.created_at else None}],
+            "wzmianka": {"status": "szukamy" if r.status == "szukam" else "nie_znaleziono",
+                         "tytul_oryginalny": r.title_orig, "roslina_lacinska": r.plant_latin, "cytat": r.quote,
+                         "jezyk": r.language, "proby": r.attempts,
+                         "dodano": r.created_at.strftime("%Y-%m-%d") if r.created_at else None},
+        }
+        out.append({k: v for k, v in rec.items() if v not in (None, "")})
+    return out
+
+
+def export_leads(folder, plants: dict[str, str]) -> tuple[str | None, int]:
+    """Zapisuje <folder>/siedziba_wzmianki_<data>.json, gdy zbior wzmianek sie zmienil. (nazwa pliku | None, liczba)."""
+    from pathlib import Path
+
+    from app.exporters import store
+    folder = Path(folder)
+    records = lead_records(plants)
+    prev = next((f for f in store.current_files(folder) if store.parse_name(f.name)[0] == LEADS_SERIES), None)
+    text = json.dumps(records, ensure_ascii=False, indent=2)
+    if prev is not None:
+        try:
+            if json.loads(prev.read_text(encoding="utf-8-sig")) == records:
+                return None, len(records)               # bez zmian - bez nowego pliku (i bez commita)
+        except (OSError, ValueError):
+            pass
+    elif not records:
+        return None, 0
+    target = folder / store.dated_name(LEADS_SERIES)
+    folder.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_suffix(".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    tmp.replace(target)
+    return target.name, len(records)
