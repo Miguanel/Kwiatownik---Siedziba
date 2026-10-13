@@ -72,15 +72,18 @@ async def run_nn_init(job_id: int, runner: JobRunner, llm=None) -> None:
     from app.nn.encoders import download_e5, get_encoder
     state = {"last": -1}
 
-    def progress(fname: str, done: int, total: int) -> None:
+    def progress(fname: str, done: int, total: int, note: str | None = None) -> None:
         mb, tmb = done // 1_000_000, total // 1_000_000
+        if note:
+            activity.set(job_id, "pobieram enkoder e5", f"{fname}: {note}")
+            return
         activity.set(job_id, "pobieram enkoder e5", f"{fname} {mb}/{tmb} MB" if total else f"{fname} {mb} MB")
         if mb - state["last"] >= 20:
             state["last"] = mb
             _progress(job_id, mb, tmb or mb)
 
     job_log(job_id, "Pobieram enkoder multilingual-e5-small (ONNX, ~120 MB) z Hugging Face")
-    got = await download_e5(progress)
+    got = await download_e5(progress, say=lambda m: job_log(job_id, m))
     for fname, src in got.items():
         job_log(job_id, f"{fname}: {src}")
     enc = get_encoder("e5")
