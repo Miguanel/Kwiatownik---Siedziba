@@ -2,7 +2,8 @@
 {% block content %}
 <h1>Rosliny - wiedza z sieci</h1>
 <p class="muted">Siedziba zbiera informacje o roslinach z Wikipedii ({{ wiki_langs }} wersji jezykowych z: {{ langs }})
-  i ze stron z innych krajow ({{ web_pages }} na rosline). Kazda informacja ma zrodlo (link) i cytat; najpierw sprawdza
+  i ze stron z innych krajow ({{ web_pages }} na rosline), a takze z <a href="/encyklopedie">zagranicznych encyklopedii
+  i baz</a> (Kotobank, Baidu Baike, Encyklopedia Kultury Koreanskiej, PFAF, Native American Ethnobotany...). Kazda informacja ma zrodlo (link) i cytat; najpierw sprawdza
   ja kod (czy cytat jest w zrodle, czy liczby sie zgadzaja), potem drugi model LLM. Zweryfikowane trafiaja
   {% if auto_apply %}<b>automatycznie</b>{% else %}po kliknieciu "Zapisz"{% endif %} do plikow roslin Kwiatownika
   (blok "wiedza", reczne pola bez zmian, kopia zapasowa w data/backups).</p>

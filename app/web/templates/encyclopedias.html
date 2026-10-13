@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block content %}
+{% include "agents_style.html" %}
+<style>
+  .enc-card { gap: 4px; }
+  .enc-card h3 { display: flex; gap: 6px; align-items: baseline; flex-wrap: wrap; }
+  .enc-card.off { opacity: .55; }
+  .enc-kpi { display: flex; gap: 14px; flex-wrap: wrap; font-size: .85em; color: #6b7568; }
+  .enc-kpi b { color: #1f2a1f; font-variant-numeric: tabular-nums; }
+  .enc-prev { font-size: .85em; color: #4d574a; max-width: 420px; }
+  .enc-test form { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; background: #fff; padding: 12px; border-radius: 8px; }
+  .enc-test select { max-width: 100%; }
+</style>
+<p class="muted"><a href="/plants">&larr; Rosliny</a></p>
+<h1>Encyklopedie i bazy zagraniczne</h1>
+<p class="muted ag-intro">Oprocz Wikipedii Siedziba siega przy zbieraniu wiedzy do zagranicznych encyklopedii i baz naukowych.
+  Szuka nazwy gatunku w jezyku zrodla (z Wikidata: japonska, chinska, koreanska) albo nazwy lacinskiej. W jednym przebiegu
+  bierze {{ per_run }} zrodla na rosline, rotacyjnie, z pierwszenstwem dla tych, ktore pasuja do brakow w zielniku
+  (np. medycyna Wschodu &rarr; zrodla chinskie i japonskie). Kazda informacja przechodzi te same kontrole co z Wikipedii:
+  cytat w zrodle, weryfikacja drugim modelem, link do zrodla.
+  {% if not enabled %}<br><b>Wylaczone w ustawieniach (KNOWLEDGE_ENCYCLOPEDIAS=false).</b>{% endif %}</p>
+{% if msg %}<div class="ag-msg">{{ msg }}</div>{% endif %}
+
+{% for country, encs in groups.items() %}
+<h2>{{ flags.get(country, '') }} {{ countries.get(country, country) }}</h2>
+<div class="ag-grid">
+  {% for e in encs %}{% set st = stats[e.key] %}
+  <div class="ag-card enc-card {{ '' if on[e.key] else 'off' }}">
+    <h3>{{ e.name }} <span class="tag">{{ e.kind }}</span></h3>
+    <p class="muted">{{ e.about }}</p>
+    <p class="muted" style="font-size:.85em"><a href="https://{{ e.domain }}" target="_blank" rel="noopener">{{ e.domain }}</a>
+      &middot; szuka po nazwie: {{ {'ja': 'japonskiej', 'zh': 'chinskiej', 'ko': 'koreanskiej', 'la': 'lacinskiej', 'en': 'angielskiej'}[e.name_lang] }}</p>
+    <div class="enc-kpi">
+      <span>zapytan <b>{{ st.asked }}</b></span><span>znalezione strony <b>{{ st.found }}</b></span>
+      <span>informacji <b>{{ st.facts }}</b></span><span>zweryfikowanych <b>{{ st.applied }}</b></span>
+      {% if st.last %}<span>ostatnio {{ st.last | dt("%m-%d %H:%M") }}</span>{% endif %}
+    </div>
+    <div class="ag-actions">
+      <form method="post" action="/encyklopedie/{{ e.key }}"><input type="hidden" name="on" value="{{ '0' if on[e.key] else '1' }}">
+        <button>{{ 'Wylacz' if on[e.key] else 'Wlacz' }}</button></form>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% endfor %}
+
+<h2>Sprawdz zrodla na roslinie</h2>
+<p class="muted">Proba znalezienia strony rosliny w kazdym zrodle - bez LLM i bez zapisu. Pokazuje, czy adres hasla dziala,
+  a jesli nie, dlaczego (brak nazwy w jezyku zrodla, blokada robots.txt, strona nie o tej roslinie...).</p>
+<div class="enc-test">
+  <form hx-post="/encyklopedie/test" hx-target="#enc-out" hx-indicator="#enc-spin">
+    <select name="plant_id" aria-label="roslina">{% for pid, pl, la in plants %}<option value="{{ pid }}">{{ pl or pid }}{% if la %} ({{ la }}){% endif %}</option>{% endfor %}</select>
+    <select name="key" aria-label="zrodlo"><option value="">wszystkie zrodla</option>{% for country, encs in groups.items() %}{% for e in encs %}<option value="{{ e.key }}">{{ flags.get(e.country, '') }} {{ e.name }}</option>{% endfor %}{% endfor %}</select>
+    <button>Sprawdz</button><span id="enc-spin" class="htmx-indicator">szukam (do minuty dla wszystkich zrodel)...</span>
+  </form>
+  <div id="enc-out" style="margin-top:10px"></div>
+</div>
+{% endblock %}

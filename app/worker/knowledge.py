@@ -269,6 +269,68 @@ async def _web_sources(plant: Plant, log, file_data: dict | None = None, slots: 
     return out
 
 
+def _recent_encyclopedias(plant_id: str) -> set[str]:
+    """Encyklopedie pytane o te rosline w ostatnich KNOWLEDGE_REQUERY_DAYS dniach (z wynikiem albo bez)."""
+    since = datetime.now(timezone.utc) - timedelta(days=settings.knowledge_requery_days)
+    with Session(engine) as s:
+        rows = s.exec(select(PlantQuery).where(PlantQuery.plant_id == plant_id,
+                                               col(PlantQuery.slot).startswith("enc:"))).all()
+    out = set()
+    for q in rows:
+        at = q.created_at if q.created_at.tzinfo else q.created_at.replace(tzinfo=timezone.utc)
+        if at >= since:
+            out.add(q.slot.split(":", 1)[1])
+    return out
+
+
+async def _encyclopedia_sources(plant: Plant, log, file_data: dict | None = None, job_id: int = 0) -> list[tuple]:
+    """Zagraniczne encyklopedie i bazy (Kotobank, Baidu Baike, Encyklopedia Kultury Koreanskiej, PFAF...):
+    kilka na przebieg, rotacyjnie - kolejne przebiegi siegaja po kolejne zrodla."""
+    if not settings.knowledge_encyclopedias or settings.knowledge_enc_max <= 0:
+        return []
+    from app.knowledge import encyclopedias as encmod
+    from app.scrapers.fetcher import Fetcher
+    from app.worker.discover import build_backends
+    names = _names(plant)
+    cov = coverage_for(plant.id, file_data)
+    gaps = gapmod.find_gaps(file_data, cov["sloty"])
+    topics = list(dict.fromkeys(g.topic for g in gaps)) or ["lecznicze", "folklor"]
+    _, used_urls = _recent_queries(plant.id)
+    recent = _recent_encyclopedias(plant.id)
+    used_domains = {urlparse(u).netloc for u in used_urls}
+    picks = [e for e in encmod.choose(names, topics, used_domains, settings.knowledge_enc_max + len(recent))
+             if e.key not in recent][:settings.knowledge_enc_max]
+    if not picks:
+        log("  encyklopedie: wszystkie dostepne byly pytane niedawno (albo brak nazw w ich jezykach)")
+        return []
+    fetcher = Fetcher(settings.user_agent, settings.request_delay_s,
+                      accept_language="ja,zh;q=0.9,ko;q=0.8,en;q=0.7,*;q=0.3")
+    backends = build_backends()
+    out: list[tuple] = []
+    try:
+        for enc in picks:
+            if job_id:
+                activity.set(job_id, f"{plant.nazwa_pl}: encyklopedia", enc.name)
+            f = await encmod.fetch(enc, names, fetcher, backends, used_urls, log)
+            with Session(engine) as s:
+                q = PlantQuery(plant_id=plant.id, slot=f"enc:{enc.key}", language=enc.lang,
+                               query=f"{encmod.plant_name(enc, names) or ''} @ {enc.domain}"[:300],
+                               results=1 if f.url else 0, used_url=f.url)
+                s.add(q)
+                s.commit()
+                qid = q.id
+            if not f.url:
+                log(f"  [{enc.country}] {enc.name}: brak ({f.reason[:120]})")
+                continue
+            topic = next((t for t in topics if t in enc.topics), None)
+            out.append((f.url, enc.name, enc.lang, f.text[:10000], gapmod.gaps_for_focus(gaps, topic) if gaps else None,
+                        qid))
+            log(f"  [{enc.country}] {enc.name}: {f.url} ({f.how})")
+    finally:
+        await fetcher.aclose()
+    return out
+
+
 async def research_plant(plant_id: str, llm, wiki: WikiClient, log, job_id: int = 0,
                          slots: list[str] | None = None) -> dict:
     """Zbiera informacje o jednej roslinie (bez zapisu do pliku). Zwraca statystyki."""
@@ -316,6 +378,8 @@ async def research_plant(plant_id: str, llm, wiki: WikiClient, log, job_id: int 
     with Session(engine) as s:
         plant = s.get(Plant, plant_id)
         s.expunge(plant)
+    if not slots:                                      # szukanie konkretnych podrozdzialow = tylko wyszukiwarka
+        sources += await _encyclopedia_sources(plant, log, file_data, job_id)
     sources += await _web_sources(plant, log, file_data, slots)
 
     for k, (url, name, lang, text, focus, qid) in enumerate(sources, 1):

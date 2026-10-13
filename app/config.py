@@ -97,6 +97,8 @@ class Settings(BaseSettings):
     knowledge_search_langs: str = "en,de,ru,uk,fr,zh,ja"
     knowledge_gap_slots: int = 4          # ile brakujacych podrozdzialow szukac na rosline w jednym przebiegu
     knowledge_requery_days: int = 45      # to samo zapytanie powtarzaj najwczesniej po tylu dniach
+    knowledge_encyclopedias: bool = True  # zagraniczne encyklopedie i bazy (Kotobank, Baidu Baike, PFAF...) - panel /encyklopedie
+    knowledge_enc_max: int = 3            # ile encyklopedii na rosline w jednym przebiegu (rotacyjnie)
     knowledge_asia_langs: str = "zh,ja"   # Wikipedie czytane zawsze (poza KNOWLEDGE_WIKI_LANGS), jesli artykul jest
     backups_dir: Path = BASE_DIR / "data" / "backups"
     # Podglad "przed/po" kazdego zapisu pliku JSON (zakladka "Na zywo"); puste = DATA_DIR/snapshots
