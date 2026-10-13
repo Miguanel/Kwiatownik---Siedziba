@@ -8,6 +8,8 @@
   gdzie w walidacji krzyzowej trafiala w co najmniej {{ (target * 100) | int }}% przypadkow;
   reszta idzie do LLM jak dawniej.</p>
 {% if msg %}<div class="ag-msg">{{ msg }}</div>{% endif %}
+{% if job_limit == 0 %}<p class="nn-warn">Limit zadan naraz jest ustawiony na 0 (panel <a href="/agents">Agenci</a>) - kolejka stoi,
+  wiec trening sieci czeka w kolejce. Ustaw limit na 1 lub wiecej, a trening ruszy od razu.</p>{% endif %}
 
 <div class="ag-tiles">
   <div class="ag-tile"><b>{{ ov.day }}</b>decyzji sieci (24 h)</div>

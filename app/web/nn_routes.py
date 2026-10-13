@@ -93,7 +93,8 @@ def nn_page(request: Request, msg: str = ""):
     from app.nn.runtime import brain
     ctx = {"ov": overview(), "encoders": _encoders(), "default_encoder": default_encoder_name(),
            "running": _jobs_running(), "msg": msg, "tasks": TASKS, "modes": store.MODE_LABELS,
-           "errors": brain.errors, "target": settings.nn_target_accuracy}
+           "errors": brain.errors, "target": settings.nn_target_accuracy,
+           "job_limit": getattr(getattr(request.app.state, "jobs", None), "max_concurrent", 1)}
     ctx.update(_predictions())
     return templates.TemplateResponse(request, "nn.html", ctx)
 

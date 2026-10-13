@@ -311,7 +311,7 @@ def _has_tokenizers() -> bool:
         return False
 
 
-async def _fetch(client, url: str, fname: str, progress, attempts: int = 5) -> tuple[Path | None, str]:
+async def _fetch(client, url: str, fname: str, progress, attempts: int = 3, say=None) -> tuple[Path | None, str]:
     """Pobiera jeden plik do katalogu tymczasowego KONTENERA (nie na dysk Windows podpiety do Dockera - tam duze
     zapisy potrafia konczyc sie OSError EIO). Przerwane pobieranie wznawia od miejsca przerwania (Range).
     Zwraca (plik tymczasowy, '') albo (None, powod)."""
@@ -324,11 +324,15 @@ async def _fetch(client, url: str, fname: str, progress, attempts: int = 5) -> t
     for attempt in range(attempts):
         done = tmp.stat().st_size if tmp.exists() else 0
         headers = {"User-Agent": settings.user_agent, **({"Range": f"bytes={done}-"} if done else {})}
+        if progress:
+            progress(fname, done, 0, f"lacze z {url.split('/resolve/')[0].rsplit('/', 2)[-2]}... (proba {attempt + 1})")
         try:
             async with client.stream("GET", url, headers=headers) as r:
                 if r.status_code == 416 and done:          # juz caly plik
                     return tmp, ""
                 if r.status_code not in (200, 206):
+                    if say:
+                        say(f"{fname}: {url} -> HTTP {r.status_code}, probuje nastepny adres")
                     return None, f"{url}: HTTP {r.status_code}"
                 if r.status_code == 200:
                     done = 0                                 # serwer nie wznawia - od poczatku
@@ -343,8 +347,11 @@ async def _fetch(client, url: str, fname: str, progress, attempts: int = 5) -> t
                 raise OSError(f"przerwane po {done // 1_000_000}/{total // 1_000_000} MB")
             return tmp, ""
         except (httpx.HTTPError, OSError) as exc:
-            last = f"{url}: {type(exc).__name__}: {exc}"
+            last = f"{url}: {type(exc).__name__}: {exc or 'brak odpowiedzi serwera'}"
             log.warning("Pobieranie %s - proba %d/%d nieudana (%s), wznawiam", fname, attempt + 1, attempts, exc)
+            if say:
+                say(f"{fname}: proba {attempt + 1}/{attempts} nieudana - {type(exc).__name__}: "
+                    f"{exc or 'brak odpowiedzi serwera'} (pobrano {done // 1_000_000} MB)")
             await asyncio.sleep(settings.nn_retry_wait_s * (attempt + 1))
     return None, last
 
@@ -369,15 +376,31 @@ def _install(tmp: Path, final: Path, attempts: int = 4) -> None:
             _time.sleep(2 * (attempt + 1))
 
 
-async def download_e5(progress=None, repo: str | None = None, alt: str | None = None) -> dict[str, str]:
-    """Pobiera pliki enkodera z Hugging Face do DATA_DIR/nn/encoder/. Zwraca {plik: adres, z ktorego pobrano}."""
+def free_mb(path: Path) -> int:
+    import shutil
+    p = Path(path)
+    while not p.exists() and p != p.parent:
+        p = p.parent
+    return shutil.disk_usage(p).free // 1_000_000
+
+
+async def download_e5(progress=None, repo: str | None = None, alt: str | None = None, say=None) -> dict[str, str]:
+    """Pobiera pliki enkodera z Hugging Face do DATA_DIR/nn/encoder/. Zwraca {plik: adres, z ktorego pobrano}.
+    progress(plik, pobrane_bajty, wszystkie_bajty, opis=None); say(tekst) - wpis do dziennika zadania."""
     import asyncio
+    import tempfile
 
     import httpx
     repo = "https://huggingface.co/" + (repo or settings.nn_e5_repo)
     alt = "https://huggingface.co/" + (alt or settings.nn_e5_alt_repo)
     dest = encoder_dir()
     dest.mkdir(parents=True, exist_ok=True)
+    tmp_free, dest_free = free_mb(Path(tempfile.gettempdir())), free_mb(dest)
+    if say:
+        say(f"Wolne miejsce: kontener (pliki tymczasowe) {tmp_free} MB, folder data {dest_free} MB")
+    if min(tmp_free, dest_free) < 400:
+        raise RuntimeError(f"Za malo miejsca na dysku (kontener {tmp_free} MB, folder data {dest_free} MB; "
+                           "potrzeba ok. 400 MB). Zwolnij miejsce na dysku z Dockerem i sprobuj ponownie.")
     for old in dest.glob("*.part"):                 # resztki z dawnych prob (zapis prosto na dysk Windows)
         try:
             old.unlink()
@@ -394,9 +417,11 @@ async def download_e5(progress=None, repo: str | None = None, alt: str | None = 
             last = ""
             for tpl in cands:
                 url = tpl.format(repo=repo, alt=alt)
-                tmp, last = await _fetch(client, url, fname, progress)
+                tmp, last = await _fetch(client, url, fname, progress, say=say)
                 if tmp is None:
                     continue
+                if say:
+                    say(f"{fname}: pobrano {tmp.stat().st_size // 1_000_000} MB, zapisuje do folderu data")
                 await asyncio.to_thread(_install, tmp, dest / fname)
                 got[fname] = url
                 break

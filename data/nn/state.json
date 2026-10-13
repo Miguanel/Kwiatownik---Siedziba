@@ -1,0 +1,16 @@
+{
+  "tasks": {
+    "fact_section": {
+      "mode": "wylaczona",
+      "version": null
+    },
+    "fact_part": {
+      "mode": "wylaczona",
+      "version": null
+    },
+    "page_kind": {
+      "mode": "cien",
+      "version": 1
+    }
+  }
+}
