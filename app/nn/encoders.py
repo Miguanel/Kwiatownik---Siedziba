@@ -311,15 +311,80 @@ def _has_tokenizers() -> bool:
         return False
 
 
+async def _fetch(client, url: str, fname: str, progress, attempts: int = 5) -> tuple[Path | None, str]:
+    """Pobiera jeden plik do katalogu tymczasowego KONTENERA (nie na dysk Windows podpiety do Dockera - tam duze
+    zapisy potrafia konczyc sie OSError EIO). Przerwane pobieranie wznawia od miejsca przerwania (Range).
+    Zwraca (plik tymczasowy, '') albo (None, powod)."""
+    import asyncio
+    import tempfile
+
+    import httpx
+    tmp = Path(tempfile.gettempdir()) / f"siedziba-nn-{text_key(url)[:10]}-{fname}.part"   # osobno dla kazdego adresu
+    last = ""
+    for attempt in range(attempts):
+        done = tmp.stat().st_size if tmp.exists() else 0
+        headers = {"User-Agent": settings.user_agent, **({"Range": f"bytes={done}-"} if done else {})}
+        try:
+            async with client.stream("GET", url, headers=headers) as r:
+                if r.status_code == 416 and done:          # juz caly plik
+                    return tmp, ""
+                if r.status_code not in (200, 206):
+                    return None, f"{url}: HTTP {r.status_code}"
+                if r.status_code == 200:
+                    done = 0                                 # serwer nie wznawia - od poczatku
+                total = done + int(r.headers.get("content-length") or 0)
+                with open(tmp, "ab" if done else "wb") as fh:
+                    async for chunk in r.aiter_bytes(1 << 20):
+                        fh.write(chunk)
+                        done += len(chunk)
+                        if progress:
+                            progress(fname, done, total)
+            if total and done < total:
+                raise OSError(f"przerwane po {done // 1_000_000}/{total // 1_000_000} MB")
+            return tmp, ""
+        except (httpx.HTTPError, OSError) as exc:
+            last = f"{url}: {type(exc).__name__}: {exc}"
+            log.warning("Pobieranie %s - proba %d/%d nieudana (%s), wznawiam", fname, attempt + 1, attempts, exc)
+            await asyncio.sleep(settings.nn_retry_wait_s * (attempt + 1))
+    return None, last
+
+
+def _install(tmp: Path, final: Path, attempts: int = 4) -> None:
+    """Kopia z katalogu tymczasowego do DATA_DIR/nn/encoder (z ponowieniem przy chwilowym bledzie dysku)."""
+    import shutil
+    import time as _time
+    part = final.with_name(final.name + ".kopiowanie")
+    for attempt in range(attempts):
+        try:
+            shutil.copyfile(tmp, part)
+            if part.stat().st_size != tmp.stat().st_size:
+                raise OSError("niepelna kopia")
+            part.replace(final)
+            tmp.unlink(missing_ok=True)
+            return
+        except OSError as exc:
+            if attempt == attempts - 1:
+                raise
+            log.warning("Zapis %s nieudany (%s) - ponawiam", final.name, exc)
+            _time.sleep(2 * (attempt + 1))
+
+
 async def download_e5(progress=None, repo: str | None = None, alt: str | None = None) -> dict[str, str]:
     """Pobiera pliki enkodera z Hugging Face do DATA_DIR/nn/encoder/. Zwraca {plik: adres, z ktorego pobrano}."""
+    import asyncio
+
     import httpx
     repo = "https://huggingface.co/" + (repo or settings.nn_e5_repo)
     alt = "https://huggingface.co/" + (alt or settings.nn_e5_alt_repo)
     dest = encoder_dir()
     dest.mkdir(parents=True, exist_ok=True)
+    for old in dest.glob("*.part"):                 # resztki z dawnych prob (zapis prosto na dysk Windows)
+        try:
+            old.unlink()
+        except OSError:
+            pass
     got: dict[str, str] = {}
-    async with httpx.AsyncClient(follow_redirects=True, timeout=httpx.Timeout(60, read=300)) as client:
+    async with httpx.AsyncClient(follow_redirects=True, timeout=httpx.Timeout(30, read=60)) as client:
         for fname, cands in E5_FILES.items():
             if (dest / fname).exists():
                 got[fname] = "juz bylo"
@@ -329,25 +394,12 @@ async def download_e5(progress=None, repo: str | None = None, alt: str | None = 
             last = ""
             for tpl in cands:
                 url = tpl.format(repo=repo, alt=alt)
-                try:
-                    async with client.stream("GET", url, headers={"User-Agent": settings.user_agent}) as r:
-                        if r.status_code != 200:
-                            last = f"{url}: HTTP {r.status_code}"
-                            continue
-                        total = int(r.headers.get("content-length") or 0)
-                        tmp = dest / (fname + ".part")
-                        done = 0
-                        with open(tmp, "wb") as fh:
-                            async for chunk in r.aiter_bytes(1 << 20):
-                                fh.write(chunk)
-                                done += len(chunk)
-                                if progress:
-                                    progress(fname, done, total)
-                        tmp.replace(dest / fname)
-                        got[fname] = url
-                        break
-                except httpx.HTTPError as exc:
-                    last = f"{url}: {exc}"
+                tmp, last = await _fetch(client, url, fname, progress)
+                if tmp is None:
+                    continue
+                await asyncio.to_thread(_install, tmp, dest / fname)
+                got[fname] = url
+                break
             if fname not in got and fname not in E5_OPTIONAL:
                 raise RuntimeError(f"Nie udalo sie pobrac {fname} ({last})")
     _ENCODERS.pop("e5", None)          # nowy plik = nowa sesja ONNX

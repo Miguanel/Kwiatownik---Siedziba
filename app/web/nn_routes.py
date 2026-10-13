@@ -104,14 +104,14 @@ def nn_predictions_partial(request: Request, task: str = "", decision: str = "",
 
 
 @router.post("/nn/train")
-def nn_train(request: Request, task: str = Form(""), encoder: str = Form("")):
+async def nn_train(request: Request, task: str = Form(""), encoder: str = Form("")):
     from app.worker import actions
     jid = actions.start_nn_train(request.app.state, [task] if task else None, encoder or None)
     return RedirectResponse(f"/jobs/{jid}", status_code=303)
 
 
 @router.post("/nn/init")
-def nn_init(request: Request):
+async def nn_init(request: Request):
     from app.worker import actions
     jid = actions.start_nn_init(request.app.state)
     return RedirectResponse(f"/jobs/{jid}", status_code=303)

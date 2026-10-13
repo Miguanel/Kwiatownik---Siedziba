@@ -173,6 +173,7 @@ class Settings(BaseSettings):
     nn_e5_repo: str = "Xenova/multilingual-e5-small"     # eksport ONNX enkodera (Hugging Face)
     nn_e5_alt_repo: str = "intfloat/multilingual-e5-small"
     nn_threads: int = 2                  # watki CPU enkodera e5
+    nn_retry_wait_s: float = 3.0         # przerwa przed wznowieniem przerwanego pobierania enkodera (x numer proby)
     nn_target_accuracy: float = 0.95     # siec decyduje sama tylko tam, gdzie w walidacji trafia co najmniej tak czesto
     nn_audit_rate: float = 0.05          # w trybie aktywnym tyle decyzji sieci i tak sprawdza LLM (kontrola losowa)
     nn_fallback_confidence: float = 0.6  # gdy LLM zawiedzie: odpowiedz sieci zamiast regul, jesli pewnosc >= tyle

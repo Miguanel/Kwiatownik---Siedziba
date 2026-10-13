@@ -353,6 +353,10 @@ def test_recipe_type_network_before_llm(nn_env, monkeypatch):
 
 
 # ------------------------------------------------------------------ zadanie w kolejce i panel
+def _job_status(eng, jid):
+    from app.models import Job
+    with Session(eng) as s:
+        return s.get(Job, jid).status.value
 def test_nn_train_job_and_panel(nn_env, monkeypatch):
     import app.worker.nn as wnn
     from app.models import Job
@@ -393,3 +397,42 @@ def test_nn_train_job_and_panel(nn_env, monkeypatch):
         assert c.get("/nn/decyzje?task=fact_section").status_code == 200
         r = c.get("/tasks")
         assert r.status_code == 200
+        # przycisk "Trenuj" musi faktycznie uruchomic zadanie (asyncio.create_task wymaga petli zdarzen)
+        r = c.post("/nn/train", data={"task": "fact_part", "encoder": "ngram"}, follow_redirects=False)
+        assert r.status_code == 303 and r.headers["location"].startswith("/jobs/")
+        new_id = int(r.headers["location"].rsplit("/", 1)[1])
+        assert new_id in app.state.jobs.tasks or _job_status(nn_env, new_id) != "queued"
+
+
+def test_e5_download_resumes_after_broken_transfer_and_skips_404(tmp_path, monkeypatch):
+    import httpx
+
+    from app.nn import encoders
+    monkeypatch.setattr(settings, "nn_dir", tmp_path / "nn")
+    monkeypatch.setattr(settings, "nn_retry_wait_s", 0.0)
+    monkeypatch.setattr("tempfile.tempdir", str(tmp_path / "tmp"))
+    (tmp_path / "tmp").mkdir()
+    body = bytes(range(256)) * 400
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append((request.url.path, request.headers.get("range")))
+        if request.url.path.endswith("model_quantized.onnx") and "Xenova" in request.url.path:
+            rng = request.headers.get("range")
+            if not rng:                                  # pierwsza proba: polowa pliku i zerwane polaczenie
+                return httpx.Response(200, headers={"content-length": str(len(body))}, content=body[:40000])
+            start = int(rng.split("=")[1].rstrip("-"))
+            return httpx.Response(206, content=body[start:])
+        if request.url.path.endswith("tokenizer.json"):
+            return httpx.Response(200, content=b"{}")
+        return httpx.Response(404)
+
+    real = httpx.AsyncClient
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: real(transport=httpx.MockTransport(handler), **kw))
+    monkeypatch.setattr(encoders, "_has_tokenizers", lambda: True)
+    got = asyncio.run(encoders.download_e5())
+    d = encoders.encoder_dir()
+    assert (d / "model.onnx").read_bytes() == body
+    assert (d / "tokenizer.json").exists() and "sentencepiece.bpe.model" not in got
+    assert any(r and r.startswith("bytes=") for _, r in calls)          # wznowienie od miejsca przerwania
+    assert not list((tmp_path / "tmp").glob("*.part"))                   # pliki tymczasowe posprzatane
