@@ -218,6 +218,30 @@ async def llm_classify(llm, rec: dict) -> tuple[str | None, bool | None]:
     return (typ if typ in TYPES else None), (zk if isinstance(zk, bool) else None)
 
 
+async def classify_type(llm, title: str, names: list[str], steps: list[str],
+                        ref: str) -> tuple[str | None, bool | None, str]:
+    """Typ przepisu, gdy reguly nie rozstrzygnely: siec neuronowa (gdy pewna i wlaczona) -> LLM -> siec jako zapas.
+    Zwraca (typ, ziola_kluczowe, jak ustalono)."""
+    nn = None
+    try:
+        from app.nn.runtime import brain
+        from app.nn.tasks import recipe_input
+        nn = brain.gate("recipe_type", recipe_input(title, names, steps), ref)
+    except Exception:  # noqa: BLE001 - siec nigdy nie zatrzymuje tlumaczenia
+        nn = None
+    if nn is not None and nn.use and nn.label in TYPES:
+        return nn.label, None, nn.method
+    typ, zk = await llm_classify(llm, {"tytul": title, "skladniki_txt": names, "kroki": steps})
+    if nn is not None:
+        from app.nn.runtime import brain
+        if typ:
+            brain.teach(nn, typ, "llm-klasyfikacja")
+        elif nn.fallback_ok and nn.label in TYPES:
+            brain.teach(nn, None, None, decision="zapas")
+            return nn.label, None, f"{nn.method} (zapas)"
+    return typ, zk, "llm-klasyfikacja" if typ else "brak"
+
+
 def iso_duration(v) -> str | None:
     """'PT1H30M' -> '1 godz. 30 min'; inne teksty bez zmian."""
     if not v:
@@ -269,8 +293,7 @@ async def fast_translate_recipe(mt, llm, recipe: dict, meta: dict, plants: dict[
     zk = None
     how = "reguly"
     if typ is None:
-        typ, zk = await llm_classify(llm, {"tytul": tr["title"][0], "skladniki_txt": names, "kroki": tr["steps"]})
-        how = "llm-klasyfikacja" if typ else "brak"
+        typ, zk, how = await classify_type(llm, tr["title"][0], names, tr["steps"], f"item:{meta.get('item_id')}")
     main = next((s["link_id"] for s in skl if s.get("link_id")), None) or index.match(tr["title"][0], recipe["title"])
     data = {"tytul": tr["title"][0], "opis": tr["description"][0] or None, "typ": typ or "inne",
             "metoda": method_for(typ), "roslina": (plants.get(main) or "").split(" (")[0] or None, "roslina_id": main,

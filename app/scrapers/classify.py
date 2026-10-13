@@ -183,6 +183,41 @@ they contain herbs or flowers.
 CULINARY_REASON = "przepis kulinarny - pominiety (Kwiatownik zbiera przepisy niekulinarne)"
 
 
+def _finish(kind: str, conf: float, method: str, title: str, reason: str, page: PageData,
+            recipe: float) -> Classification:
+    """Wspolne poprawki dla odpowiedzi LLM i sieci neuronowej."""
+    if kind == "recipe" and recipe == 0 and quantity_hits(page.text) == 0:
+        # "przepis", ale na stronie nie ma zadnych ilosci ani sekcji skladnikow:
+        # to lista/kategoria przepisow albo artykul ogolny - nie konkretny przepis
+        if len(page.links) >= 60 or len(page.list_items) >= 25:
+            return Classification("other", 0.7, method, title, "lista/kategoria przepisow (brak skladnikow i ilosci)")
+        kind, reason = "fact", "artykul bez konkretnych ilosci - zapisany jako ciekawostka"
+    return Classification(kind, round(min(max(conf, 0), 1), 2), method, title, str(reason)[:200])
+
+
+def _remember(page: PageData, title: str, label: str, origin: str, weight: float) -> None:
+    """Przyklad treningowy dla sieci "Rodzaj strony" (tekst pominietych stron nie trafia do bazy)."""
+    try:
+        from urllib.parse import urlparse
+
+        from app.nn.runtime import record_sample
+        from app.nn.tasks import page_input
+        record_sample("page_kind", page.url, page_input(page.url, title, page.text), label, origin, weight,
+                      urlparse(page.url).netloc.lower().removeprefix("www."))
+    except Exception as exc:  # noqa: BLE001 - zbieranie przykladow nigdy nie psuje skanu
+        log.debug("Przyklad treningowy pominiety: %s", exc)
+
+
+def _nn_gate(page: PageData, title: str):
+    try:
+        from app.nn.runtime import brain
+        from app.nn.tasks import page_input
+        return brain.gate("page_kind", page_input(page.url, title, page.text), page.url)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Siec 'Rodzaj strony' niedostepna: %s", exc)
+        return None
+
+
 async def classify(page: PageData, keywords: list[str], llm=None, skip_culinary: bool | None = None) -> Classification:
     if skip_culinary is None:
         from app.config import settings
@@ -193,17 +228,28 @@ async def classify(page: PageData, keywords: list[str], llm=None, skip_culinary:
         return Classification("other", 0.9, "heuristic", title, "karta produktu w sklepie")
     if node:
         if skip_culinary and is_culinary(page, node):
+            _remember(page, title, "other", "jsonld", 0.8)
             return Classification("other", 0.9, "jsonld", node.get("name") or title, CULINARY_REASON)
+        _remember(page, title, "recipe", "jsonld", 1.0)
         return Classification("recipe", 1.0, "jsonld", node.get("name") or title, "schema.org/Recipe")
 
     recipe, topic = heuristic_scores(page, keywords)
     if recipe >= 0.45 and skip_culinary and is_culinary(page):
+        _remember(page, title, "other", "heuristic", 0.5)
         return Classification("other", 0.8, "heuristic", title, CULINARY_REASON)
     if recipe >= 0.7:
+        _remember(page, title, "recipe", "heuristic", 0.5)
         return Classification("recipe", round(recipe, 2), "heuristic", title, "skladniki + kroki + ilosci")
     if len(page.text) < 300 or (topic == 0 and recipe < 0.3):
         return Classification("other", 0.8, "heuristic", title, "brak tresci lub tematu")
 
+    # strona niejednoznaczna dla regul: siec neuronowa (gdy pewna i wlaczona) albo LLM
+    nn = _nn_gate(page, title)
+    if nn is not None and nn.use:
+        from app.nn.tasks import label_name
+        _remember(page, title, nn.label, nn.method, 0.0)     # tekst do ewentualnej poprawki w panelu (nie do treningu)
+        return _finish(nn.label, nn.confidence, nn.method, title,
+                       f"siec neuronowa: {label_name(nn.label)} (pewnosc {nn.confidence:.2f})", page, recipe)
     if llm is not None:
         prompt = (f"URL: {page.url}\nTITLE: {title}\nHEADINGS: {' | '.join(page.headings[:15])}\n"
                   f"TEXT (beginning):\n{page.text[:2500]}")
@@ -213,19 +259,23 @@ async def classify(page: PageData, keywords: list[str], llm=None, skip_culinary:
             kind = data.get("type") if data.get("type") in ("recipe", "fact", "other") else "other"
             if kind == "other" and str(data.get("reason", "")).lower().startswith("culinary"):
                 data["reason"] = CULINARY_REASON
-            if kind == "recipe" and recipe == 0 and quantity_hits(page.text) == 0:
-                # LLM widzi "przepis", ale na stronie nie ma zadnych ilosci ani sekcji skladnikow:
-                # to lista/kategoria przepisow albo artykul ogolny - nie konkretny przepis
-                if len(page.links) >= 60 or len(page.list_items) >= 25:
-                    return Classification("other", 0.7, f"llm:{res.model}", data.get("title") or title,
-                                          "lista/kategoria przepisow (brak skladnikow i ilosci)")
-                kind, data["reason"] = "fact", "artykul bez konkretnych ilosci - zapisany jako ciekawostka"
-            conf = float(data.get("confidence") or 0.5)
-            return Classification(kind, round(min(max(conf, 0), 1), 2), f"llm:{res.model}",
-                                  data.get("title") or title, str(data.get("reason", ""))[:200])
-        except Exception as exc:  # LLM niedostepny -> spadamy do heurystyk
+            out = _finish(kind, float(data.get("confidence") or 0.5), f"llm:{res.model}",
+                          data.get("title") or title, str(data.get("reason", "")), page, recipe)
+            _remember(page, title, out.kind, f"llm:{res.model}", 1.0)
+            if nn is not None:
+                from app.nn.runtime import brain
+                brain.teach(nn, out.kind, f"{res.provider}/{res.model}")
+            return out
+        except Exception as exc:  # LLM niedostepny -> siec (gdy dosc pewna) albo heurystyki
             log.warning("Klasyfikacja LLM nieudana dla %s: %s", page.url, exc)
 
+    if nn is not None and nn.fallback_ok:
+        from app.nn.runtime import brain
+        from app.nn.tasks import label_name
+        brain.teach(nn, None, None, decision="zapas")
+        return _finish(nn.label, nn.confidence, nn.method, title,
+                       f"siec neuronowa (zapas, LLM niedostepny): {label_name(nn.label)} ({nn.confidence:.2f})",
+                       page, recipe)
     if recipe >= 0.45:
         return Classification("recipe", recipe, "heuristic", title, "prawdopodobny przepis")
     if topic >= 0.5 and len(page.text) > 1200:

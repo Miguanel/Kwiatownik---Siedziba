@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% from "nn_macros.html" import pct, curve_svg, reliability_svg, loss_svg, mode_switch %}
+{% block content %}
+{% include "agents_style.html" %}{% include "nn_style.html" %}
+<p class="muted"><a href="/nn">&larr; Sieci neuronowe</a></p>
+<h1>{{ spec.title }} <span class="tag">{{ spec.kind }}</span></h1>
+<p class="muted ag-intro">{{ spec.replaces }}</p>
+
+<div class="ag-bar">
+  <span><b>Tryb:</b></span>{{ mode_switch(task, sm.mode, "/nn/zadanie/" ~ task) }}
+  <span class="muted">{{ modes[sm.mode] }}</span>
+  <form method="post" action="/nn/train"><input type="hidden" name="task" value="{{ task }}"><button {% if running.nn_train %}disabled{% endif %}>Trenuj nowa wersje</button></form>
+</div>
+
+{% if shown %}{% set eff = m.effective or {} %}{% set thr = m.threshold or {} %}
+<h2>Wersja v{{ shown.version }} <span class="tag nn">{{ shown.encoder }}</span> <span class="tag {{ 'done' if shown.status == 'biezaca' else '' }}">{{ shown.status }}</span></h2>
+<p class="muted">{{ shown.created_at | dt }} &middot; {{ shown.n_train }} przykladow, {{ m.groups }} grup, walidacja krzyzowa {{ m.folds }}-krotna z grupami
+  &middot; trening {{ shown.seconds }} s{% if shown.job_id %} (<a href="/jobs/{{ shown.job_id }}">zadanie #{{ shown.job_id }}</a>){% endif %}
+  {% if shown.note %}<br>{{ shown.note }}{% endif %}</p>
+
+<div class="ag-tiles">
+  <div class="ag-tile"><b>{{ pct(m.accuracy, 1) }}</b>trafnosc (out-of-fold)</div>
+  <div class="ag-tile"><b>{{ "%.3f" | format(m.macro_f1 or 0) }}</b>macro-F1</div>
+  <div class="ag-tile"><b>{{ "%.3f" | format(m.ece or 0) }}</b>blad kalibracji ECE</div>
+  <div class="ag-tile"><b>{{ thr.threshold if thr.threshold is not none else '-' }}</b>prog pewnosci</div>
+  <div class="ag-tile"><b>{{ pct(eff.coverage) }}</b>siec decyduje sama</div>
+  <div class="ag-tile"><b>{{ pct(eff.accuracy, 1) }}</b>trafnosc tych decyzji<br><span class="muted" style="font-size:.8em">95% CI {{ pct((eff.ci or [none, none])[0], 1) }}-{{ pct((eff.ci or [none, none])[1], 1) }}</span></div>
+</div>
+
+<div class="ag-grid">
+  <div class="ag-card"><h3>Pokrycie i trafnosc</h3>{{ curve_svg(m.curve or [], target, thr) }}</div>
+  <div class="ag-card"><h3>Kalibracja pewnosci</h3>{{ reliability_svg(m.reliability or []) }}
+    <p class="muted nn-cap">temperatura T = {{ m.temperature }} (skalowanie Guo i in. 2017)</p></div>
+  <div class="ag-card"><h3>Uczenie modelu koncowego</h3>{{ loss_svg(m.fit or {}) }}</div>
+</div>
+
+<h2>Klasy</h2>
+<p class="muted">Siec przyznaje sama tylko klasy dopuszczone (precyzja ponad progiem &ge; cel - 5 pkt). Pozostale zawsze idzie do LLM.
+  {% if m.merged_rare %}Rzadkie klasy polaczone w "_inne": {{ m.merged_rare | dictsort | map('join', ' ') | join(', ') }}.{% endif %}</p>
+<div class="ag-tbl"><table>
+  <tr><th>klasa</th><th class="num">przyklady</th><th class="num">precyzja</th><th class="num">czulosc</th><th class="num">F1</th><th>sama?</th><th class="num">zgodnosc z LLM w potoku</th></tr>
+  {% for c in m.per_class or [] %}{% set on = online.get(c.label) %}
+  <tr><td>{{ nn_label(c.label) }}</td><td class="num">{{ c.support }}</td><td class="num">{{ pct(c.precision) }}</td>
+    <td class="num">{{ pct(c.recall) }}</td><td class="num">{{ "%.2f" | format(c.f1) }}</td>
+    <td>{% if c.label in (m.allowed or []) %}<span class="tag done">tak</span>{% else %}<span class="muted">LLM</span>{% endif %}</td>
+    <td class="num">{% if on %}{{ pct(on[0] / (on[0] + on[1]), 0) }} <span class="muted">(n={{ on[0] + on[1] }})</span>{% else %}-{% endif %}</td></tr>
+  {% endfor %}
+</table></div>
+
+{% if m.confusion and labels %}
+<h2>Macierz pomylek</h2>
+<p class="muted">wiersze: etykieta nauczyciela (LLM / czlowiek), kolumny: odpowiedz sieci; przewidywania spoza treningu</p>
+<div class="ag-tbl"><table class="nn-cm">
+  <tr><th></th>{% for l in labels %}<th class="rot">{{ nn_label(l) }}</th>{% endfor %}</tr>
+  {% for row in m.confusion %}{% set tot = row | sum %}{% set i = loop.index0 %}
+  <tr><th style="text-align:left">{{ nn_label(labels[i]) }}</th>
+    {% for v in row %}{% set a = (v / tot) if tot else 0 %}
+    <td style="background: rgba({{ '47,93,58' if loop.index0 == i else '176,65,46' }},{{ '%.2f' | format(a * 0.85) }});{% if a > 0.5 %}color:#fff{% endif %}">{{ v if v else '' }}</td>
+    {% endfor %}</tr>
+  {% endfor %}
+</table></div>
+{% endif %}
+
+{% if m.origins %}<p class="muted">Skad etykiety: {% for k, v in m.origins | dictsort %}{{ k }} {{ v }}{% if not loop.last %}, {% endif %}{% endfor %}</p>{% endif %}
+{% else %}
+<p class="box" style="display:block">Ta siec nie ma jeszcze wersji. Przyklady w bazie: {{ sm.examples }} (potrzeba min. {{ spec.min_total }}).</p>
+{% endif %}
+
+<h2>Wersje</h2>
+<div class="ag-tbl"><table>
+  <tr><th>wersja</th><th>enkoder</th><th>status</th><th class="num">przyklady</th><th class="num">trafnosc</th><th class="num">macro-F1</th><th class="num">decyduje sama</th><th>kiedy</th><th>decyzja</th><th></th></tr>
+  {% for x in versions %}{% set xm = vm[x.id] %}
+  <tr><td><a href="/nn/zadanie/{{ task }}?v={{ x.version }}">v{{ x.version }}</a></td><td>{{ x.encoder }}</td>
+    <td><span class="tag {{ 'done' if x.status == 'biezaca' else '' }}">{{ x.status }}</span></td>
+    <td class="num">{{ x.n_train }}</td><td class="num">{{ pct(xm.accuracy, 1) }}</td><td class="num">{{ "%.3f" | format(xm.macro_f1 or 0) }}</td>
+    <td class="num">{{ pct((xm.effective or {}).coverage) }}</td><td class="nw muted">{{ x.created_at | dt }}</td>
+    <td class="why">{{ x.note or '' }}</td>
+    <td>{% if x.status != 'biezaca' %}<form method="post" action="/nn/{{ task }}/version/{{ x.version }}"><button title="Uzywaj tej wersji">uzyj</button></form>{% endif %}</td></tr>
+  {% else %}<tr><td colspan="10" class="muted">brak</td></tr>{% endfor %}
+</table></div>
+
+<h2>Ostatnie decyzje tej sieci</h2>
+<div id="decyzje">{% include "nn_predictions.html" %}</div>
+{% endblock %}

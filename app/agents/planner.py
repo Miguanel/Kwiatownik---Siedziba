@@ -47,6 +47,7 @@ GROUPS: dict[str, tuple[str, int, float]] = {
     "build_profile": ("scraper", 1, 56), "rebuild_profile": ("scraper", 1, 55), "scan_new": ("skan", 1, 52),
     "plants_photos": ("zdjecia", 10, 50), "scan_stale": ("skan", 1, 40), "discover": ("nowe_zrodla", 1, 35),
     "translate_errors": ("tlumaczenie", 10, 30),
+    "nn_train": ("trening_sieci", 0, 57),
 }
 
 
@@ -136,6 +137,8 @@ def candidates(state, limit_items: int = 30, load: dict | None = None) -> list[P
             p = {"kraj": pick[0].id, "kraj_nazwa": str(pick[0].label or pick[0].id)}
         elif kind == "eksport":
             p = {"etykieta": pick[0].label}
+        elif kind == "trening_sieci":
+            p = {"ids": [i.id for i in free], "etykieta": ", ".join(str(i.label) for i in free[:4])}
         elif kind == "tlumaczenie" and g.key == "translate":
             p = {"limit": settings.translate_batch, "etykieta": f"{g.total} przepisow czeka"}
         else:

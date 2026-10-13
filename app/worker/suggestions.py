@@ -72,7 +72,7 @@ def _unmerged_plants() -> list[tuple[str, int]]:
 
 
 CATEGORIES = {"sources": "Zrodla i skany", "recipes": "Przepisy i eksport", "plants": "Wiedza o roslinach",
-              "discover": "Odkrywanie", "jobs": "Zadania"}
+              "discover": "Odkrywanie", "nn": "Sieci neuronowe", "jobs": "Zadania"}
 
 
 @dataclass
@@ -306,7 +306,37 @@ def build_groups(limit: int = 150) -> list[TaskGroup]:
                                 [TaskItem(str(j.id), f"#{j.id} {j.kind}" + (f" - {names.get(j.source_id, '')}" if j.source_id else ""),
                                           f"{j.status.value}, {j.progress or 0}/{j.total or '?'}", f"/jobs/{j.id}")
                                  for j in failed], len(failed), 5))
+    groups += _nn_groups(by_kind)
     return sorted(groups, key=lambda g: (g.total == 0, g.priority))
+
+
+def _nn_groups(by_kind: dict) -> list[TaskGroup]:
+    """Sieci neuronowe: trening, gdy przybylo danych, i rozbieznosci siec/LLM do rozstrzygniecia przez czlowieka."""
+    if not settings.nn_enabled:
+        return []
+    try:
+        from app.nn.status import conflicts, readiness
+        from app.nn.tasks import TASKS, label_name
+        ready = readiness()
+        rows, n_conf = conflicts(60)
+    except Exception:  # noqa: BLE001 - brak tabel / blad sieci nie psuje listy zadan
+        return []
+    busy = by_kind.get("nn_train")
+    train = TaskGroup("nn_train", "nn", "Trening sieci neuronowych",
+                      "Przybylo przykladow od LLM i z poprawek - nowa wersja sieci moze przejac wiecej pytan. "
+                      "Nowa wersja zastapi obecna tylko, jesli nie jest gorsza w walidacji krzyzowej.",
+                      [("nn_train", "Trenuj")],
+                      [TaskItem(r["task"], r["title"], (f"v{r['version']}, " if r["version"] else "pierwsza wersja, ")
+                                + f"{r['examples']} przykladow (+{max(r['new'], 0)})", f"/nn/zadanie/{r['task']}", busy)
+                       for r in ready], len(ready), 57)
+    conf = TaskGroup("nn_conflicts", "nn", "Rozbieznosci sieci i LLM",
+                     "Siec byla pewna, a LLM odpowiedzial inaczej. Rozstrzygniecie poprawia dane w bazie "
+                     "i trafia do treningu z najwyzsza waga.",
+                     [("nn_accept", "Siec ma racje"), ("nn_reject", "LLM ma racje")],
+                     [TaskItem(str(p.id), f"{TASKS[p.task].title if p.task in TASKS else p.task}: siec "
+                               f"'{label_name(p.label)}' ({p.confidence:.0%}) vs LLM '{label_name(p.teacher_label)}'",
+                               (p.preview or "")[:120], "/nn") for p in rows], n_conf, 33)
+    return [train, conf]
 
 
 def run_task(state, group: str, action: str, ids: list[str]) -> str:
@@ -353,6 +383,13 @@ def run_task(state, group: str, action: str, ids: list[str]) -> str:
     if action == "discover":
         jobs = [actions.start_discover(state, code, DiscoveryConfig()) for code in ids if code in COUNTRIES]
         return f"Szukanie stron w {len(jobs)} krajach."
+    if action == "nn_train":
+        jid = actions.start_nn_train(state, [str(i) for i in ids])
+        return f"Trening {len(ids)} sieci - zadanie #{jid}."
+    if action in ("nn_accept", "nn_reject"):
+        from app.nn.hooks import resolve
+        msgs = [resolve(i, "nn" if action == "nn_accept" else "llm") for i in int_ids]
+        return f"Rozstrzygnieto {len(msgs)} rozbieznosci (zapisane do treningu)."
     if action == "retry":
         jobs = [j for j in (actions.retry_job(state, i) for i in int_ids) if j]
         return f"Ponowiono {len(jobs)} zadan."

@@ -129,17 +129,24 @@ def _store_facts(plant_id: str, facts, src_url: str, src_name: str, lang: str, m
         existing = s.exec(select(PlantFact.fingerprint, PlantFact.text).where(PlantFact.plant_id == plant_id)).all()
         prints = {fp for fp, _ in existing}
         texts = [t for _, t in existing]
+        new_rows = []
         for f in facts:
             fp = fingerprint(plant_id, f.text)
             if fp in prints or any(similar(f.text, t) >= 0.6 for t in texts):
                 continue
-            s.add(PlantFact(plant_id=plant_id, section=f.section, part=f.part, text=f.text, quote=f.quote,
+            row = PlantFact(plant_id=plant_id, section=f.section, part=f.part, text=f.text, quote=f.quote,
                             source_url=src_url, source_name=src_name, language=lang, fingerprint=fp,
-                            extracted_by=model))
+                            extracted_by=model)
+            s.add(row)
+            new_rows.append(row)
             prints.add(fp)
             texts.append(f.text)
             added += 1
         s.commit()
+        ids = [r.id for r in new_rows]
+    if ids:
+        from app.nn.hooks import review_facts
+        review_facts(ids, model)        # siec sprawdza sekcje i czesc rosliny (tryb ustawiany w /nn)
     return added
 
 

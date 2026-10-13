@@ -1,0 +1,50 @@
+{% from "nn_macros.html" import pct %}
+<form class="ag-filters" hx-get="/nn/decyzje" hx-target="#decyzje" hx-trigger="change">
+  <select name="task" aria-label="siec">
+    <option value="">wszystkie sieci</option>
+    {% for k in ["page_kind", "recipe_type", "fact_section", "fact_part"] %}<option value="{{ k }}" {% if f_task == k %}selected{% endif %}>{{ k }}</option>{% endfor %}
+  </select>
+  <select name="decision" aria-label="decyzja">
+    <option value="">wszystkie decyzje</option>
+    <option value="rozbieznosc" {% if f_decision == 'rozbieznosc' %}selected{% endif %}>rozbieznosc z LLM</option>
+    {% for k, lab in nn_decisions.items() %}<option value="{{ k }}" title="{{ lab }}" {% if f_decision == k %}selected{% endif %}>{{ k }}</option>{% endfor %}
+  </select>
+  <span class="muted">{{ total }} decyzji</span>
+</form>
+<div class="ag-tbl">
+<table>
+  <tr><th>kiedy</th><th>siec</th><th>czego dotyczy</th><th>odpowiedz sieci</th><th>decyzja</th><th>LLM</th><th></th><th></th></tr>
+  {% for p in preds %}{% set link = links[p.id] %}
+  <tr id="nn-p{{ p.id }}">
+    <td class="nw muted">{{ p.created_at | dt("%m-%d %H:%M") }}{% if p.job_id %}<br><a href="/jobs/{{ p.job_id }}">#{{ p.job_id }}</a>{% endif %}</td>
+    <td class="nw"><a href="/nn/zadanie/{{ p.task }}">{{ p.task }}</a> <span class="muted">v{{ p.version }}</span></td>
+    <td><div class="nn-prev" title="{{ p.preview }}">
+      {% if link %}<a href="{{ link }}" {% if link.startswith('http') %}target="_blank" rel="noopener"{% endif %}>{{ (p.preview or p.ref)[:110] }}</a>
+      {% elif plants.get(p.ref) %}<a href="/plants/{{ plants[p.ref] }}">{{ plants[p.ref] }}</a>: {{ (p.preview or '')[:100] }}
+      {% else %}{{ (p.preview or p.ref)[:110] }}{% endif %}</div></td>
+    <td class="nw"><b>{{ nn_label(p.label) }}</b> <span class="muted">{{ pct(p.confidence) }}</span>
+      {% set top = tops[p.id] %}{% if top | length > 1 %}<br><span class="muted" style="font-size:.85em">{% for lab, pr in top[1:] %}{{ nn_label(lab) }} {{ pct(pr) }}{% if not loop.last %}, {% endif %}{% endfor %}</span>{% endif %}</td>
+    <td class="nw"><span class="tag d-{{ p.decision }}" title="{{ nn_decisions.get(p.decision, '') }}">{{ p.decision }}</span>
+      {% if p.ms %}<br><span class="muted" style="font-size:.85em">{{ p.ms }} ms</span>{% endif %}</td>
+    <td class="nw">{% if p.teacher_label %}{{ nn_label(p.teacher_label) }}{% if p.teacher %}<br><span class="muted" style="font-size:.8em">{{ p.teacher[:40] }}</span>{% endif %}{% else %}<span class="muted">-</span>{% endif %}</td>
+    <td>{% if p.agree is true %}<span class="nn-ok" title="zgodna z LLM">&#10003;</span>{% elif p.agree is false %}<span class="nn-bad" title="inna niz LLM">&#10007;</span>{% endif %}
+      {% if p.human_label %}<br><span class="tag done" title="rozstrzygniete w panelu">{{ nn_label(p.human_label) }}</span>{% endif %}</td>
+    <td class="nn-actions nw">
+      {% if p.agree is false and not p.human_label %}
+        <form hx-post="/nn/rozstrzygnij/{{ p.id }}" hx-target="#nn-p{{ p.id }}" hx-swap="innerHTML"><input type="hidden" name="choice" value="nn"><button title="Zapisz odpowiedz sieci jako poprawna">siec ma racje</button></form>
+        <form hx-post="/nn/rozstrzygnij/{{ p.id }}" hx-target="#nn-p{{ p.id }}" hx-swap="innerHTML"><input type="hidden" name="choice" value="llm"><button title="Zapisz odpowiedz LLM jako poprawna">LLM ma racje</button></form>
+      {% endif %}
+    </td>
+  </tr>
+  {% else %}
+  <tr><td colspan="8" class="muted">Brak decyzji - siec jest wylaczona albo jeszcze nie pracowala. Ustaw tryb "cien", zeby zaczela odpowiadac rownolegle z LLM.</td></tr>
+  {% endfor %}
+</table>
+</div>
+{% if total > per %}
+<div class="ag-pager">
+  {% if page > 1 %}<button hx-get="/nn/decyzje?task={{ f_task }}&decision={{ f_decision }}&page={{ page - 1 }}" hx-target="#decyzje">&larr; nowsze</button>{% endif %}
+  <span class="muted">strona {{ page }} z {{ ((total + per - 1) // per) }}</span>
+  {% if page * per < total %}<button hx-get="/nn/decyzje?task={{ f_task }}&decision={{ f_decision }}&page={{ page + 1 }}" hx-target="#decyzje">starsze &rarr;</button>{% endif %}
+</div>
+{% endif %}

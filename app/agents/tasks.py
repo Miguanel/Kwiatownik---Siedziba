@@ -55,12 +55,14 @@ KINDS: dict[str, Kind] = {
     "eksport": Kind("Eksport przepisow do Kwiatownika", "export"),
     "ponow": Kind("Ponowienie przerwanego zadania", "retry"),
     "audyt": Kind("Audyt bazy wiedzy", "agent_audit", hint="nowy raport oceny bazy wiedzy Kwiatownika"),
+    "trening_sieci": Kind("Trening sieci neuronowych", "nn_train",
+                          hint="nowa wersja malych sieci (rodzaj strony, typ przepisu, sekcja i czesc rosliny) - bez LLM"),
 }
 # rodzaje, ktore moze zaproponowac ekspert LLM w audycie (dotycza roslin)
 EXPERT_KINDS = ("opowiesci", "wschod", "barwienie", "kosmetyka", "lecznicze", "bezpieczenstwo", "luki", "scal", "zdjecia")
 PLANT_KINDS = {k for k, v in KINDS.items() if v.job.startswith("plant")}
 ACTIVE = [JobStatus.queued, JobStatus.running]
-NOT_PRODUCTION = ("agent_", "fb_", "ollama_pull")      # zadania, ktore nie licza sie jako "Siedziba pracuje"
+NOT_PRODUCTION = ("agent_", "fb_", "ollama_pull", "nn_init")      # zadania, ktore nie licza sie jako "Siedziba pracuje"
 STATUS_LABELS = {"proposed": "zaproponowane", "ordered": "zlecone", "running": "w toku", "done": "wykonane",
                  "failed": "nieudane", "skipped": "pominiete", "expired": "zastapione"}
 
@@ -131,6 +133,8 @@ def execute(state, kind: str, p: dict) -> int:
         return actions.start_enrich(state, p.get("limit"), ids or None)
     if kind == "eksport":
         return actions.start_export(state)
+    if kind == "trening_sieci":
+        return actions.start_nn_train(state, [str(i) for i in p.get("ids") or []] or None)
     if kind == "audyt":
         return actions.start_agent_audit(state, trigger=p.get("trigger") or "planista")
     if kind == "ponow":

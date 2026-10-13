@@ -69,7 +69,7 @@ def check(state, act: bool = True, now: float | None = None) -> list[dict]:
     with Session(engine) as s:
         rows = s.exec(select(Job).where(col(Job.status).in_([JobStatus.queued, JobStatus.running]))).all()
     for job in rows:
-        if job.kind.startswith("ollama_pull"):     # pobieranie modelu: dlugie i bez krokow - nie ruszamy
+        if job.kind.startswith(("ollama_pull", "nn_init")):   # pobieranie modelu: dlugie i bez krokow - nie ruszamy
             continue
         age = now - (_ts(job.created_at) or now)
         if job.id not in runner.tasks:

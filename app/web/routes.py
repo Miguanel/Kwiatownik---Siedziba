@@ -297,6 +297,8 @@ def item_set(iid: int, status: str = Form(""), kind: str = Form(""), duplicate_o
     if status:
         item.status = ItemStatus(status)
     if kind:
+        if item.kind != ItemKind(kind):
+            _teach_page_kind(item, kind)
         item.kind = ItemKind(kind)
     if duplicate_of == "none":
         item.duplicate_of = None
@@ -311,6 +313,27 @@ def item_set(iid: int, status: str = Form(""), kind: str = Form(""), duplicate_o
     session.add(item)
     session.commit()
     return _redirect(f"/items/{iid}")
+
+
+def _teach_page_kind(item: Item, kind: str) -> None:
+    """Reczna zmiana rodzaju strony = poprawka czlowieka dla sieci "Rodzaj strony" (najwyzsza waga w treningu)."""
+    from urllib.parse import urlparse
+
+    from app.nn.runtime import record_sample
+    from app.nn.tasks import HUMAN_WEIGHT, page_input
+    from app.models import NNSample
+    from sqlmodel import Session as _S
+    from app.db import engine as _engine
+    text = item.raw_text
+    if not text:
+        with _S(_engine) as s:
+            smp = s.exec(select(NNSample).where(NNSample.task == "page_kind", NNSample.ref == item.url)).first()
+            text = smp.text if smp else None
+    else:
+        text = page_input(item.url, item.title, text)
+    if text:
+        record_sample("page_kind", item.url, text, kind, "czlowiek", HUMAN_WEIGHT,
+                      urlparse(item.url).netloc.lower().removeprefix("www."))
 
 
 def _404():

@@ -329,3 +329,57 @@ class SiteStat(SQLModel, table=True):
     kind: str = Field(primary_key=True)         # plant_view, plantid_click, plant_section, ...
     key: str = Field(default="", primary_key=True)
     n: int = 0
+
+
+# ------------------------------------------------------------------ sieci neuronowe (app/nn, panel /nn)
+class NNSample(SQLModel, table=True):
+    """Przyklad treningowy zapisany w chwili decyzji (tekst strony + etykieta nauczyciela) albo poprawka czlowieka.
+    Strony pominiete nie zachowuja tekstu w Item, wiec bez tej tabeli nie daloby sie uczyc rozpoznawania stron."""
+    id: int | None = Field(default=None, primary_key=True)
+    task: str = Field(index=True)              # page_kind | recipe_type | fact_section | fact_part
+    ref: str = Field(index=True)               # url strony, "item:<id>", "fact:<id>"
+    text: str
+    label: str
+    origin: str                                # llm:<model> | jsonld | heuristic | czlowiek
+    weight: float = 1.0
+    group: str | None = None                   # grupa do walidacji (domena, zrodlo, roslina)
+    created_at: datetime = Field(default_factory=_now)
+
+
+class NNModel(SQLModel, table=True):
+    """Wersja wytrenowanej sieci (artefakty w DATA_DIR/nn/models/<zadanie>/v<N>/)."""
+    id: int | None = Field(default=None, primary_key=True)
+    task: str = Field(index=True)
+    version: int
+    encoder: str                               # e5 | ngram
+    status: str = "kandydat"                   # biezaca (uzywana) | kandydat | odrzucona | wycofana
+    n_train: int = 0
+    labels_json: str = "[]"
+    metrics_json: str | None = None            # walidacja krzyzowa (out-of-fold), prog, krzywa, macierz pomylek
+    threshold: float = 1.01
+    allowed_json: str = "[]"                   # klasy, ktore siec moze przyznawac sama
+    note: str | None = None                    # decyzja mistrz/pretendent
+    job_id: int | None = None
+    seconds: float | None = None
+    created_at: datetime = Field(default_factory=_now)
+
+
+class NNPrediction(SQLModel, table=True):
+    """Kazda decyzja sieci w potoku - podglad "co zrobily sieci" w panelu /nn i w zakladce Na zywo."""
+    id: int | None = Field(default=None, primary_key=True)
+    task: str = Field(index=True)
+    version: int
+    ref: str = Field(index=True)
+    preview: str | None = None                 # poczatek tekstu wejsciowego
+    label: str
+    confidence: float
+    top_json: str | None = None                # 3 najbardziej prawdopodobne etykiety
+    mode: str                                  # cien | aktywna
+    decision: str = Field(index=True)          # przyjeta | do_llm | cien | kontrola | zapas | konflikt | uzupelnienie | zgodna
+    teacher_label: str | None = None           # odpowiedz LLM (gdy byl pytany)
+    teacher: str | None = None
+    agree: bool | None = None
+    human_label: str | None = None             # rozstrzygniecie w panelu
+    ms: float | None = None
+    job_id: int | None = Field(default=None, index=True)
+    created_at: datetime = Field(default_factory=_now, index=True)

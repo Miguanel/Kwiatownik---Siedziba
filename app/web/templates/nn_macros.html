@@ -1,0 +1,60 @@
+{# Wykresy SVG panelu sieci (bez bibliotek) #}
+
+{% macro curve_svg(curve, target, chosen) -%}
+{# krzywa pokrycie -> trafnosc: ile przypadkow siec rozstrzyga sama i jak trafnie #}
+<svg viewBox="0 0 300 170" role="img" aria-label="Krzywa pokrycie-trafnosc" class="nn-svg">
+  {% for g in [0, 0.25, 0.5, 0.75, 1] %}
+    <line class="grid" x1="30" x2="290" y1="{{ 150 - g * 140 }}" y2="{{ 150 - g * 140 }}"/>
+    <text x="26" y="{{ 154 - g * 140 }}" text-anchor="end">{{ (g * 100) | int }}%</text>
+    <text x="{{ 30 + g * 260 }}" y="166" text-anchor="middle">{{ (g * 100) | int }}%</text>
+  {% endfor %}
+  <line class="target" x1="30" x2="290" y1="{{ 150 - target * 140 }}" y2="{{ 150 - target * 140 }}"/>
+  <polyline class="line" points="{% for p in curve if p.trafnosc is not none %}{{ 30 + p.pokrycie * 260 }},{{ 150 - p.trafnosc * 140 }} {% endfor %}"/>
+  {% for p in curve if p.trafnosc is not none %}<circle cx="{{ 30 + p.pokrycie * 260 }}" cy="{{ 150 - p.trafnosc * 140 }}" r="2"><title>prog {{ p.prog }}: pokrycie {{ (p.pokrycie * 100) | round(1) }}%, trafnosc {{ (p.trafnosc * 100) | round(1) }}% (n={{ p.n }})</title></circle>{% endfor %}
+  {% if chosen and chosen.accuracy %}<circle class="chosen" cx="{{ 30 + chosen.coverage * 260 }}" cy="{{ 150 - chosen.accuracy * 140 }}" r="5"><title>wybrany prog {{ chosen.threshold }}</title></circle>{% endif %}
+</svg>
+<p class="muted nn-cap">os pozioma: czesc przypadkow, ktora siec rozstrzyga sama; pionowa: trafnosc tych decyzji;
+  linia przerywana = cel {{ (target * 100) | int }}%, duza kropka = wybrany prog</p>
+{%- endmacro %}
+
+{% macro reliability_svg(rel) -%}
+<svg viewBox="0 0 300 170" role="img" aria-label="Wykres kalibracji" class="nn-svg">
+  {% for g in [0, 0.25, 0.5, 0.75, 1] %}
+    <line class="grid" x1="30" x2="290" y1="{{ 150 - g * 140 }}" y2="{{ 150 - g * 140 }}"/>
+    <text x="26" y="{{ 154 - g * 140 }}" text-anchor="end">{{ (g * 100) | int }}%</text>
+    <text x="{{ 30 + g * 260 }}" y="166" text-anchor="middle">{{ (g * 100) | int }}%</text>
+  {% endfor %}
+  <line class="target" x1="30" y1="150" x2="290" y2="10"/>
+  {% for b in rel %}
+    <rect class="bar" x="{{ 30 + b.od * 260 + 2 }}" width="{{ (b.do - b.od) * 260 - 4 }}" y="{{ 150 - b.trafnosc * 140 }}" height="{{ b.trafnosc * 140 }}"><title>pewnosc {{ b.od }}-{{ b.do }}: srednio {{ (b.pewnosc * 100) | round(1) }}%, trafnosc {{ (b.trafnosc * 100) | round(1) }}% (n={{ b.n }})</title></rect>
+  {% endfor %}
+</svg>
+<p class="muted nn-cap">slupki = rzeczywista trafnosc w przedziale pewnosci; przekatna = idealna kalibracja</p>
+{%- endmacro %}
+
+{% macro loss_svg(fit) -%}
+{% set tl = fit.train_loss or [] %}{% set vl = fit.val_loss or [] %}
+{% set mx = ((tl + vl) | max) if (tl + vl) else 1 %}{% set n = [tl | length, 2] | max %}
+<svg viewBox="0 0 300 120" role="img" aria-label="Krzywe uczenia" class="nn-svg">
+  <line class="grid" x1="30" x2="290" y1="110" y2="110"/><line class="grid" x1="30" x2="290" y1="10" y2="10"/>
+  <text x="26" y="14" text-anchor="end">{{ mx | round(2) }}</text><text x="26" y="113" text-anchor="end">0</text>
+  <polyline class="line" points="{% for x in tl %}{{ 30 + loop.index0 / (n - 1) * 260 }},{{ 110 - x / mx * 100 }} {% endfor %}"/>
+  <polyline class="line2" points="{% for x in vl %}{{ 30 + loop.index0 / (n - 1) * 260 }},{{ 110 - x / mx * 100 }} {% endfor %}"/>
+  {% if fit.best_epoch %}<line class="target" x1="{{ 30 + (fit.best_epoch - 1) / (n - 1) * 260 }}" x2="{{ 30 + (fit.best_epoch - 1) / (n - 1) * 260 }}" y1="10" y2="110"/>{% endif %}
+</svg>
+<p class="muted nn-cap"><span class="nn-key l1"></span>strata treningowa <span class="nn-key l2"></span>walidacyjna;
+  pionowa linia = epoka z najlepszymi wagami ({{ fit.best_epoch }} z {{ fit.epochs }})</p>
+{%- endmacro %}
+
+{% macro pct(x, digits=0) -%}{% if x is none %}-{% else %}{{ "%.*f" | format(digits, x * 100) }}%{% endif %}{%- endmacro %}
+
+{% macro mode_switch(task, mode, back) -%}
+<form method="post" action="/nn/{{ task }}/mode" class="nn-mode">
+  <input type="hidden" name="back" value="{{ back }}">
+  <span class="ag-seg" role="group" aria-label="Tryb pracy sieci">
+    {% for m, lab in [("wylaczona", "wylaczona"), ("cien", "cien"), ("aktywna", "aktywna")] %}
+      <button name="mode" value="{{ m }}" class="{{ 'sel' if mode == m else '' }} m-{{ m }}" title="{{ lab }}">{{ lab }}</button>
+    {% endfor %}
+  </span>
+</form>
+{%- endmacro %}

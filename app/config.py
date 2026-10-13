@@ -111,6 +111,10 @@ class Settings(BaseSettings):
     # VPN per kraj: "ua=http://vpn-ua:8888,de=http://vpn-de:8888" (proxy HTTP kontenerow gluetun)
     country_proxies: str = ""
 
+    @property
+    def nn_root(self) -> Path:
+        return Path(self.nn_dir) if self.nn_dir else Path(self.data_dir) / "nn"
+
     def proxy_for(self, country: str | None) -> str | None:
         if not country:
             return None
@@ -161,6 +165,19 @@ class Settings(BaseSettings):
                                          # najczesciej co tyle godzin, takze bez nowych danych (0 = tylko przy publikacji)
     deploy_git_name: str = "Siedziba Kwiatownika"
     deploy_git_email: str = "siedziba-kwiatownika@users.noreply.github.com"
+
+    # --- Sieci neuronowe (/nn): male wlasne modele przejmujace czesc pracy LLM (destylacja z odpowiedzi LLM) ---
+    nn_enabled: bool = True              # glowny wylacznik (tryby poszczegolnych zadan ustawia sie w panelu /nn)
+    nn_dir: Path | None = None           # modele, enkoder, pamiec osadzen, stan trybow; puste = DATA_DIR/nn
+    nn_encoder: str = "auto"             # auto (e5 gdy pobrany, inaczej n-gramy) | e5 | ngram
+    nn_e5_repo: str = "Xenova/multilingual-e5-small"     # eksport ONNX enkodera (Hugging Face)
+    nn_e5_alt_repo: str = "intfloat/multilingual-e5-small"
+    nn_threads: int = 2                  # watki CPU enkodera e5
+    nn_target_accuracy: float = 0.95     # siec decyduje sama tylko tam, gdzie w walidacji trafia co najmniej tak czesto
+    nn_audit_rate: float = 0.05          # w trybie aktywnym tyle decyzji sieci i tak sprawdza LLM (kontrola losowa)
+    nn_fallback_confidence: float = 0.6  # gdy LLM zawiedzie: odpowiedz sieci zamiast regul, jesli pewnosc >= tyle
+    nn_retrain_min_new: int = 40         # propozycja ponownego treningu, gdy przybylo tyle nowych przykladow
+    nn_retrain_growth: float = 0.15      # ...albo zbior urosl o tyle (15%)
 
     user_agent: str = "SiedzibaKwiatownika/0.1 (+https://kwiatownik.onrender.com)"
     request_delay_s: float = 2.0

@@ -20,6 +20,7 @@ from app.worker.jobs import job_log
 from app.worker.knowledge import (run_plant_apply, run_plant_merge, run_plant_organize, run_plant_photos,
                                   run_plant_place, run_plant_research, run_plants_sync)
 from app.worker.marketing import run_fb_ideas, run_fb_post, run_fb_review
+from app.worker.nn import run_nn_init, run_nn_train
 from app.worker.ollama_pull import run_ollama_pull
 from app.worker.scan import run_build_profile, run_fetch_list, run_harvest, run_scan, run_scan_pages
 
@@ -217,6 +218,22 @@ def start_agent_deploy(state, trigger: str = "reczny", force: bool = False, dry_
                    bypass_queue=True)
 
 
+def start_nn_train(state, tasks: list[str] | None = None, encoder: str | None = None,
+                   retry_of: int | None = None) -> int:
+    """Trening sieci neuronowych (walidacja krzyzowa + mistrz/pretendent). Bez LLM - liczy procesor."""
+    from app.nn.tasks import TASKS
+    tasks = [t for t in (tasks or list(TASKS)) if t in TASKS]
+    return _create(state, None, "nn_train", len(tasks),
+                   work_factory=lambda jid, runner, llm: run_nn_train(jid, runner, llm, tasks, encoder),
+                   params={"tasks": tasks, "encoder": encoder}, retry_of=retry_of)
+
+
+def start_nn_init(state, retry_of: int | None = None) -> int:
+    """Pobranie enkodera e5 (ONNX) do DATA_DIR/nn/encoder - poza kolejka, jak pobieranie modeli Ollamy."""
+    return _create(state, None, "nn_init", None, work_factory=lambda jid, runner, llm: run_nn_init(jid, runner, llm),
+                   params={}, retry_of=retry_of, bypass_queue=True)
+
+
 def scan_all(state, only_auto: bool = False) -> list[int]:
     with Session(engine) as s:
         stmt = select(Source.id).where(Source.active == True)  # noqa: E712
@@ -293,6 +310,10 @@ def retry_job(state, job_id: int) -> int | None:
                                  retry_of=job_id)
     elif kind == "export":
         new = start_export(state, p.get("translate_first", 0), retry_of=job_id)
+    elif kind == "nn_train":
+        new = start_nn_train(state, p.get("tasks"), p.get("encoder"), retry_of=job_id)
+    elif kind == "nn_init":
+        new = start_nn_init(state, retry_of=job_id)
     else:
         return None
     job_log(job_id, f"Ponowiono jako zadanie #{new}")

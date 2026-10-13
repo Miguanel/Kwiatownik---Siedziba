@@ -4,7 +4,7 @@
 <h1>{{ item.title or item.url }}</h1>
 <p><span class="tag {{ item.kind.value }}">{{ item.kind.value }}</span> status: <b>{{ item.status.value }}</b>
   &middot; pewnosc {{ "%.2f" % item.confidence if item.confidence is not none else "-" }}
-  &middot; metoda {{ item.method or "-" }} &middot; wzorzec <code>{{ item.pattern or "-" }}</code>
+  &middot; metoda {% if (item.method or "").startswith("nn:") %}<a href="/nn/zadanie/page_kind" class="tag nn" title="rozpoznala siec neuronowa">{{ item.method }}</a>{% else %}{{ item.method or "-" }}{% endif %} &middot; wzorzec <code>{{ item.pattern or "-" }}</code>
   &middot; jezyk {{ item.language or "?" }}</p>
 <p><a href="{{ item.url }}" target="_blank">{{ item.url }}</a>{% if src %} &middot; <a href="/sources/{{ src.id }}">{{ src.name }}</a>{% endif %}</p>
 {% if item.reason %}<p class="muted">Uzasadnienie: {{ item.reason }}</p>{% endif %}
@@ -51,7 +51,7 @@
 <h2>Po polsku (tak trafi do Kwiatownika){% if item.translated_by %} <span class="muted">- {{ item.translated_by }}</span>{% endif %}</h2>
 <div style="background:#fff;padding:12px;border-radius:8px">
   <h3 style="margin-top:0">{{ polish.tytul }}</h3>
-  <p class="muted">typ: {{ polish.typ }}{% if polish.roslina %} &middot; roslina: {{ polish.roslina }}{% endif %}{% if polish.slug %} (<code>{{ polish.slug }}</code>){% endif %}
+  <p class="muted">typ: {{ polish.typ }}{% set how = (polish.siedziba or {}).typ_ustalono if polish.siedziba is mapping else none %}{% if how %} <span class="{{ 'tag nn' if how.startswith('nn:') else 'muted' }}" title="jak ustalono typ">({{ how }})</span>{% endif %}{% if polish.roslina %} &middot; roslina: {{ polish.roslina }}{% endif %}{% if polish.slug %} (<code>{{ polish.slug }}</code>){% endif %}
     {% if polish.porcje %} &middot; porcje: {{ polish.porcje }}{% endif %}{% if polish.czas_przygotowania %} &middot; czas: {{ polish.czas_przygotowania }}{% endif %}</p>
   {% if polish.opis %}<p>{{ polish.opis }}</p>{% endif %}
   <b>Skladniki</b><ul>{% for s in polish.skladniki %}<li>{{ s.nazwa }}{% if s.ilosc %} - {{ s.ilosc }}{% endif %}{% if s.link_id %} <code>{{ s.link_id }}</code>{% endif %}</li>{% endfor %}</ul>

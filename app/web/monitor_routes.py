@@ -60,8 +60,11 @@ def _ctx(request: Request) -> dict:
     router_ = getattr(request.app.state, "llm", None)
     llm_inflight = dict(router_.inflight) if router_ else {}
     llm_recent = [dict(r, ago=round(time.time() - r["ts"])) for r in list(router_.recent)[::-1][:10]] if router_ else []
+    from app.nn.runtime import brain
+    nn_recent = [dict(r, ago=round(time.time() - r["ts"])) for r in list(brain.recent)[::-1][:10]]
     runner = request.app.state.jobs
     return {
+        "nn_recent": nn_recent,
         "cards": cards, "queued": queued, "names": names, "feed": feed[:30],
         "finished": [{"job": j, "name": names.get(j.source_id, ""),
                       "took": _fmt_s((_utc(j.finished_at) - _utc(j.started_at or j.created_at)).total_seconds())}

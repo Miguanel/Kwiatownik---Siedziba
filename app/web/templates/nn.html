@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+{% from "nn_macros.html" import pct, mode_switch %}
+{% block content %}
+{% include "agents_style.html" %}{% include "nn_style.html" %}
+<h1>Sieci neuronowe</h1>
+<p class="muted ag-intro">Male wlasne modele, ktore ucza sie z odpowiedzi LLM zapisanych w bazie (destylacja) i przejmuja
+  powtarzalne pytania: rodzaj strony, typ przepisu, kontrola sekcji i czesci rosliny. Siec decyduje sama tylko tam,
+  gdzie w walidacji krzyzowej trafiala w co najmniej {{ (target * 100) | int }}% przypadkow;
+  reszta idzie do LLM jak dawniej.</p>
+{% if msg %}<div class="ag-msg">{{ msg }}</div>{% endif %}
+
+<div class="ag-tiles">
+  <div class="ag-tile"><b>{{ ov.day }}</b>decyzji sieci (24 h)</div>
+  <div class="ag-tile"><b>{{ ov.day_saved }}</b>bez pytania LLM (24 h)</div>
+  <div class="ag-tile"><b>{{ ov.saved }}</b>bez LLM ({{ ov.days }} dni)</div>
+  <div class="ag-tile"><b {% if ov.conflicts %}class="nn-bad"{% endif %}>{{ ov.conflicts }}</b>rozbieznosci do rozstrzygniecia</div>
+  <div class="ag-tile"><b>{{ ov.avg_ms if ov.avg_ms is not none else '-' }}</b>ms na decyzje (srednio)</div>
+</div>
+
+<div class="ag-bar">
+  <span><b>Enkoder tekstu:</b>
+    {% for e in encoders %}
+      {% if e.name == 'e5' %}
+        <span class="tag {{ 'done' if e.present else 'queued' }}">e5 {{ 'jest' if e.present else 'brak' }}</span>
+      {% else %}<span class="tag done">n-gramy</span>{% endif %}
+    {% endfor %}
+    <span class="muted">uzywany przy treningu: <b>{{ default_encoder }}</b></span></span>
+  {% set e5 = encoders[0] %}
+  {% if not e5.present %}
+    <form method="post" action="/nn/init"><button {% if running.nn_init %}disabled{% endif %}
+      title="multilingual-e5-small (ONNX int8, ~120 MB) z Hugging Face">{{ 'Pobieram...' if running.nn_init else 'Pobierz enkoder e5' }}</button></form>
+    {% if not e5.onnxruntime %}<span class="muted">brak onnxruntime - przebuduj obraz (docker compose up -d --build)</span>{% endif %}
+  {% endif %}
+  <form method="post" action="/nn/train"><button {% if running.nn_train %}disabled{% endif %}>{{ 'Trening w toku...' if running.nn_train else 'Trenuj wszystkie sieci' }}</button></form>
+  {% if running.nn_train %}<a href="/jobs/{{ running.nn_train }}">postep zadania #{{ running.nn_train }}</a>{% endif %}
+</div>
+
+<div class="ag-grid wide">
+  {% for t in ov.tasks %}{% set m = t.metrics %}{% set eff = m.effective or {} %}
+  <div class="ag-card">
+    <h2><a href="/nn/zadanie/{{ t.key }}">{{ t.spec.title }}</a>
+      <span class="tag">{{ t.spec.kind }}</span>
+      {% if t.model %}<span class="tag nn">v{{ t.model.version }} {{ t.model.encoder }}</span>{% endif %}</h2>
+    <p class="muted">{{ t.spec.replaces }}</p>
+    {{ mode_switch(t.key, t.mode, "/nn") }}
+    {% if errors.get(t.key) %}<p class="nn-warn">Siec niedostepna: {{ errors[t.key] }}</p>{% endif %}
+    {% if t.model %}
+      <div class="nn-kpi">
+        <div><b>{{ pct(m.accuracy, 1) }}</b>trafnosc (walidacja)</div>
+        <div><b>{{ "%.2f" | format(m.macro_f1 or 0) }}</b>macro-F1</div>
+        <div><b>{{ pct(eff.coverage) }}</b>decyduje sama</div>
+        <div><b>{{ pct(eff.accuracy, 1) }}</b>trafnosc tych decyzji</div>
+      </div>
+      <div class="nn-kpi">
+        <div><b>{{ t.total }}</b>decyzji (7 dni)</div>
+        {% if t.spec.kind == 'kontrola' %}
+        <div><b>{{ t.decisions.get('uzupelnienie', 0) }}</b>uzupelnionych</div>
+        <div><b>{{ pct(t.agreement, 1) }}</b>zgodnosc z LLM{% if t.agree + t.disagree %} (n={{ t.agree + t.disagree }}){% endif %}</div>
+        <div><b>{{ t.decisions.get('konflikt', 0) }}</b>rozbieznosci (pewna siec)</div>
+        {% else %}
+        <div><b>{{ t.saved }}</b>bez LLM</div>
+        <div><b>{{ pct(t.agreement, 1) }}</b>zgodnosc z LLM{% if t.agree + t.disagree %} (n={{ t.agree + t.disagree }}){% endif %}</div>
+        <div><b>{{ pct(t.audit, 1) }}</b>kontrola losowa{% if t.audit_n %} (n={{ t.audit_n }}){% endif %}</div>
+        {% endif %}
+      </div>
+      {% if t.ready_active %}<p class="nn-ready">W cieniu zgodnosc {{ pct(t.agreement, 1) }} na {{ t.agree + t.disagree }} przypadkach - mozna wlaczyc tryb aktywny.</p>{% endif %}
+      {% if (m.threshold or {}).threshold and m.threshold.threshold > 1 %}<p class="nn-warn">Za malo pewnych przypadkow w walidacji - siec pracuje tylko w cieniu, az dostanie wiecej danych.</p>{% endif %}
+      {% if t.conflicts %}<p class="nn-warn"><a href="#decyzje" hx-get="/nn/decyzje?task={{ t.key }}&decision=konflikt" hx-target="#decyzje">{{ t.conflicts }} rozbieznosci do rozstrzygniecia</a></p>{% endif %}
+    {% else %}
+      <p class="muted">Jeszcze nie wytrenowana.</p>
+    {% endif %}
+    <p class="muted">Przyklady: {{ t.examples }}{% if t.model %} (przy treningu {{ t.model.n_train }}, nowych {{ t.new if t.new > 0 else 0 }}){% endif %}
+      {% if t.retrain %}<span class="tag ready">warto trenowac</span>{% endif %}</p>
+    <div class="ag-actions">
+      <form method="post" action="/nn/train"><input type="hidden" name="task" value="{{ t.key }}"><button {% if running.nn_train %}disabled{% endif %}>Trenuj</button></form>
+      <a href="/nn/zadanie/{{ t.key }}">Wersje i metryki &rarr;</a>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+
+<h2>Sprawdz siec na wlasnym tekscie</h2>
+<div class="nn-test">
+  <form hx-post="/nn/test" hx-target="#nn-test-out" hx-indicator="#nn-spin">
+    <textarea name="text" rows="4">Napar z kwiatów rumianku: 2 łyżki suszu zalać szklanką wrzątku, parzyć 10 minut pod przykryciem, pić po posiłku.</textarea>
+    <div class="row">
+      <label>siec <select name="task">{% for k, sp in tasks.items() %}<option value="{{ k }}" {% if k == 'recipe_type' %}selected{% endif %}>{{ sp.title }}</option>{% endfor %}</select></label>
+      <button type="submit">Zapytaj siec</button><span id="nn-spin" class="htmx-indicator">licze...</span>
+    </div>
+  </form>
+  <div id="nn-test-out" style="margin-top:8px"></div>
+</div>
+
+<h2 id="decyzje-h">Co zrobily sieci</h2>
+<div id="decyzje">{% include "nn_predictions.html" %}</div>
+{% endblock %}

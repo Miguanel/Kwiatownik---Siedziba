@@ -1,0 +1,45 @@
+<style>
+  .nn-svg { width: 100%; height: auto; display: block; overflow: visible; }
+  .nn-svg text { font-size: 9px; fill: #6b7568; }
+  .nn-svg .grid { stroke: #e3e6dc; stroke-width: 1; }
+  .nn-svg .target { stroke: #b5651d; stroke-width: 1.2; stroke-dasharray: 4 3; fill: none; }
+  .nn-svg .line { fill: none; stroke: #2f5d3a; stroke-width: 2; }
+  .nn-svg .line2 { fill: none; stroke: #6a8fc7; stroke-width: 2; }
+  .nn-svg circle { fill: #2f5d3a; }
+  .nn-svg circle.chosen { fill: #f2c94c; stroke: #2f5d3a; stroke-width: 2; }
+  .nn-svg .bar { fill: #9fc7a6; }
+  .nn-cap { font-size: .8em; margin: 2px 0 0; }
+  .nn-key { display: inline-block; width: 14px; height: 3px; vertical-align: middle; margin: 0 4px 0 8px; }
+  .nn-key.l1 { background: #2f5d3a; } .nn-key.l2 { background: #6a8fc7; }
+  .nn-kpi { display: grid; grid-template-columns: repeat(auto-fit, minmax(92px, 1fr)); gap: 6px 10px; margin: 4px 0; }
+  .nn-kpi div { font-size: .82em; color: #6b7568; }
+  .nn-kpi b { display: block; font-size: 1.25em; color: #1f2a1f; font-variant-numeric: tabular-nums; }
+  .nn-mode { margin: 2px 0; }
+  .nn-mode .ag-seg button { min-width: 0; font-weight: 600; font-size: .88em; }
+  .nn-mode .ag-seg button.sel.m-cien { background: #6a5aa8; }
+  .nn-mode .ag-seg button.sel.m-aktywna { background: #2f5d3a; }
+  .tag.nn { background: #e6e0f5; color: #3d2f78; }
+  .tag.d-przyjeta, .tag.d-uzupelnienie { background: #d7ecd9; }
+  .tag.d-do_llm, .tag.d-zapas { background: #fff1c2; }
+  .tag.d-cien, .tag.d-kontrola { background: #e6e0f5; }
+  .tag.d-konflikt { background: #f6d5d5; }
+  .tag.d-zgodna { background: #e3e6dc; } .tag.d-niepewna { background: #eee; color: #666; }
+  .nn-ok { color: #2f7d3a; font-weight: 700; } .nn-bad { color: #b0412e; font-weight: 700; }
+  .nn-prev { color: #4d574a; font-size: .88em; min-width: 220px; max-width: 380px; overflow: hidden;
+             display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; }
+  .ag-filters select { max-width: 100%; min-width: 0; }
+  .nn-cm td { text-align: center; font-variant-numeric: tabular-nums; min-width: 2.2em; padding: 4px; }
+  .nn-cm th { font-size: .78em; font-weight: 600; padding: 4px; }
+  .nn-cm th.rot { writing-mode: vertical-rl; transform: rotate(180deg); white-space: nowrap; vertical-align: bottom; }
+  .nn-ready { background: #d7ecd9; border-radius: 6px; padding: 6px 10px; font-size: .9em; }
+  .nn-warn { background: #fff1c2; border-radius: 6px; padding: 6px 10px; font-size: .9em; }
+  .nn-actions form { display: inline; margin: 0; }
+  .nn-actions button { padding: 3px 8px; font-size: .85em; }
+  .nn-test textarea { width: 100%; box-sizing: border-box; }
+  .nn-test form { display: flex; flex-direction: column; gap: 8px; background: #fff; padding: 12px; border-radius: 8px; }
+  .nn-test .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  @media (max-width: 760px) {
+    .nn-prev { min-width: 180px; max-width: 240px; }
+    .nn-mode .ag-seg { width: 100%; } .nn-mode .ag-seg button { flex: 1; }
+  }
+</style>

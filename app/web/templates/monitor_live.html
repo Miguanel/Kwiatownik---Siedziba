@@ -46,6 +46,14 @@
         <td>{% if r.ok %}<span class="tag done">{{ r.s }} s</span>{% else %}<span class="tag failed">{{ r.error }}</span>{% endif %}</td></tr>
       {% endfor %}
     </table>
+
+    <h2>Sieci neuronowe</h2>
+    <table>
+      {% for r in nn_recent %}<tr><td class="muted">{{ r.ago }} s temu</td><td><a href="/nn/zadanie/{{ r.task }}">{{ r.task }}</a> <span class="muted">v{{ r.version }}</span></td>
+        <td>{{ r.label }} <span class="muted">{{ (r.conf * 100) | round | int }}%</span></td>
+        <td><span class="tag {{ 'done' if r.decision in ('przyjeta', 'uzupelnienie', 'zgodna') else ('failed' if r.decision == 'konflikt' else 'queued') }}">{{ r.decision }}</span> <span class="muted">{{ r.ms }} ms</span></td></tr>
+      {% else %}<tr><td class="muted">brak decyzji od startu - <a href="/nn">panel sieci</a></td></tr>{% endfor %}
+    </table>
   </div>
   <div>
     <h2>Dziennik na zywo</h2>

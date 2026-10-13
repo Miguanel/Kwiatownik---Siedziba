@@ -23,6 +23,7 @@ from app.web.scrapers_routes import router as scrapers_router
 from app.web.knowledge_routes import router as knowledge_router
 from app.web.marketing_routes import router as marketing_router
 from app.web.monitor_routes import router as monitor_router
+from app.web.nn_routes import router as nn_router
 from app.web.tasks_routes import router as tasks_router
 from app.worker import actions
 from app.worker.discover import cleanup_discoveries
@@ -118,6 +119,7 @@ app.include_router(agents_router)
 app.include_router(site_router)
 app.include_router(layout_router)
 app.include_router(deploy_router)
+app.include_router(nn_router)
 
 
 @app.get("/health")
