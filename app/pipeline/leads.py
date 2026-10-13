@@ -237,6 +237,9 @@ def lead_records(plants: dict[str, str]) -> list[dict]:
                          "jezyk": r.language, "proby": r.attempts,
                          "dodano": r.created_at.strftime("%Y-%m-%d") if r.created_at else None},
         }
+        for sub in (rec["wzmianka"], rec["zrodla"][0]):
+            for k in [k for k, v in sub.items() if v in (None, "")]:
+                del sub[k]
         out.append({k: v for k, v in rec.items() if v not in (None, "")})
     return out
 

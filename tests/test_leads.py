@@ -186,6 +186,7 @@ def test_export_leads_for_kwiatownik(eng, tmp_path):
     rec = json.loads((folder / name).read_text(encoding="utf-8"))[0]
     assert rec["wzmianka"]["status"] == "szukamy" and rec["slug"] == "pstrolistka" and rec["sposob_przygotowania"] == []
     assert rec["zrodla"][0]["nazwa"] == "jp.example" and rec["skladniki"] == [{"nazwa": "liscie pstrolistki"}]
+    assert None not in rec["wzmianka"].values() and None not in rec["zrodla"][0].values()
     assert lm.export_leads(folder, plants) == (None, 1)                  # bez zmian -> bez nowego pliku
     (folder / "siedziba_przepisy_2026-10-01.json").write_text(json.dumps([{"id": "a", "tytul": "Napar"}]), "utf-8")
     assert [r.title for r in load_kwiatownik_recipes(folder)] == ["Napar"]   # wzmianki nie sa "istniejacymi przepisami"
