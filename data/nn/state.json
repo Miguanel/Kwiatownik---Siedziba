@@ -11,6 +11,10 @@
     "page_kind": {
       "mode": "cien",
       "version": 1
+    },
+    "recipe_type": {
+      "mode": "cien",
+      "version": 1
     }
   }
 }
