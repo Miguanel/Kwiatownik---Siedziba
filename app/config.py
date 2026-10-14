@@ -50,6 +50,9 @@ class Settings(BaseSettings):
     llm_max_models_per_provider: int = 5  # ile najlepszych modeli od kazdego providera trafia na liste
     llm_max_attempts: int = 0             # ile prob w jednym zapytaniu (0 = wszystkie modele z listy)
     llm_max_wait_s: int = 90              # gdy wszystkie modele maja limit: ile max czekac na jego odnowienie
+    knowledge_fact_pages: int = 3        # ile stron z ciekawostkami (juz pobranych skanerem) dolaczyc do zbierania wiedzy
+    verify_batch: int = 24                # ile informacji weryfikuje jedno zapytanie do LLM (bylo 12)
+    llm_cache_days: float = 14            # pamiec odpowiedzi LLM (data/llm_cache.db) - ponowienie zadania nie pyta 2x; 0 = wyl.
     llm_demote_after: int = 3             # po ilu chwilowych bledach z rzedu model spada na koniec
 
     # Limity (per model) i wspolbieznosc (per provider)
@@ -139,6 +142,7 @@ class Settings(BaseSettings):
     agents_auto_continue: bool = True    # domyslnie: gdy kolejka stoi, planista sam zleca jedno zadanie (przelacznik w panelu)
     agents_check_minutes: int = 5        # co ile minut planista sprawdza, czy Siedziba nad czyms pracuje
     agents_audit_hours: int = 24         # nowy audyt, gdy ostatni starszy niz tyle godzin
+    agents_audit_min_new: int = 30       # ...i od poprzedniego przybylo tyle informacji w plikach roslin (R9)
     agents_dispatch_max: int = 3         # ile zalecen audytu zleca jeden przebieg zleceniodawcy
     agents_plants_per_task: int = 4      # ile roslin w jednym zleconym zadaniu zbierania wiedzy
     agents_reorder_days: int = 7         # ta sama roslina + rodzaj zadania - najwczesniej po tylu dniach
@@ -180,8 +184,10 @@ class Settings(BaseSettings):
     nn_target_accuracy: float = 0.95     # siec decyduje sama tylko tam, gdzie w walidacji trafia co najmniej tak czesto
     nn_audit_rate: float = 0.05          # w trybie aktywnym tyle decyzji sieci i tak sprawdza LLM (kontrola losowa)
     nn_fallback_confidence: float = 0.6  # gdy LLM zawiedzie: odpowiedz sieci zamiast regul, jesli pewnosc >= tyle
-    nn_retrain_min_new: int = 40         # propozycja ponownego treningu, gdy przybylo tyle nowych przykladow
-    nn_retrain_growth: float = 0.15      # ...albo zbior urosl o tyle (15%)
+    nn_retrain_min_new: int = 40         # ponowny trening, gdy przybylo co najmniej tyle nowych przykladow...
+    nn_retrain_growth: float = 0.20      # ...I zbior urosl o co najmniej tyle (20%) - R12
+    nn_retrain_human: int = 15           # ...albo czlowiek oznaczyl tyle przypadkow w panelu /nn
+    nn_keep_versions: int = 2            # na dysku zostaje biezaca wersja + tyle-1 poprzednich (reszta usuwana)
     nn_auto_train: bool = True           # automatyczny trening co NN_AUTO_TRAIN_HOURS (domyslne; zmiana w panelu /nn)
     nn_auto_train_hours: int = 24
     nn_auto_train_time: str = "03:30"    # przy interwale >= 24 h trening startuje w oknie 2 h od tej godziny (puste = kiedykolwiek)

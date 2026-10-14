@@ -19,3 +19,10 @@ data/_claude_tmp/
 data/agents_settings.json
 data/backend_sync.json
 .pytest_cache/
+# sieci neuronowe: enkoder (~135 MB) pobiera zadanie nn_init (app/nn/encoders.download_e5), modele i cache powstaja
+# lokalnie - nie do gita (GitHub odrzuca pliki > 100 MB)
+data/nn/encoder/
+data/nn/cache/
+data/nn/models/
+# pliki robocze sesji Claude
+_claude_tmp/

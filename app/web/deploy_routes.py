@@ -27,7 +27,9 @@ async def commit_bar(request: Request, strona: str = ""):
 async def commit_state():
     st = deploy.pending()
     z = st.get("zmiany") or {}
-    return {"tryb": st["tryb"], "gotowy": st["gotowy"], "w_toku": st.get("w_toku"), "licznik": st["licznik"],
+    from app.agents import funnel
+    return {"lejek": funnel.snapshot(st),
+            "tryb": st["tryb"], "gotowy": st["gotowy"], "w_toku": st.get("w_toku"), "licznik": st["licznik"],
             "blokada": st.get("blokada"), "powod": st.get("powod"), "pliki": len(st.get("pliki") or []),
             "informacje": z.get("informacje", 0), "przepisy": z.get("przepisy", 0),
             "rozmieszczone": z.get("rozmieszczone", 0), "nowe_rosliny": z.get("nowe_rosliny", 0),
@@ -36,10 +38,13 @@ async def commit_state():
 
 @router.get("/commit")
 async def commit_page(request: Request):
+    from app.agents import funnel
+    from app.knowledge import gate
     st = deploy.pending(refresh=True)
     return templates.TemplateResponse(request, "commit.html", {"st": st, "msg": request.query_params.get("msg", ""),
                                                                 "min_points": settings.deploy_min_points,
-                                                                "min_recipes": settings.deploy_min_recipes})
+                                                                "min_recipes": settings.deploy_min_recipes,
+                                                                "lejek": funnel.snapshot(st), "brama": gate.summary()})
 
 
 @router.post("/commit")

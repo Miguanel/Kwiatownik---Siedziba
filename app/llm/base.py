@@ -25,7 +25,24 @@ class QuotaExceededError(RateLimitError):
 
     def __init__(self, msg: str, retry_after: float | None = None):
         super().__init__(msg, retry_after)
+        self.explicit = retry_after is not None     # API podalo, kiedy limit wraca (inaczej router liczy sam)
         self.cooldown_s = retry_after or 6 * 3600.0
+
+
+# dzienne limity odnawiaja sie o polnocy w strefie dostawcy (Gemini API: czas pacyficzny)
+QUOTA_RESET_TZ = {"gemini": "America/Los_Angeles"}
+
+
+def seconds_to_quota_reset(provider: str, now: float | None = None) -> float | None:
+    """Ile sekund do odnowienia dziennego limitu dostawcy (None = nie wiadomo)."""
+    import datetime as _dt
+    from zoneinfo import ZoneInfo
+    tz = QUOTA_RESET_TZ.get(provider)
+    if not tz:
+        return None
+    t = _dt.datetime.fromtimestamp(now if now is not None else time.time(), ZoneInfo(tz))
+    midnight = (t + _dt.timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    return (midnight - t).total_seconds() + 120          # 2 min zapasu po polnocy
 
 
 class RequestTooLargeError(LLMError):
@@ -113,6 +130,7 @@ class LLMResult:
     model: str
     seconds: float
     attempts: list[str] = field(default_factory=list)  # nieudane proby przed sukcesem
+    cached: bool = False                                # odpowiedz z pamieci podrecznej (app/llm/cache.py)
 
 
 class RateLimiter:

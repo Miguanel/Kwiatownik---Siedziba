@@ -38,7 +38,7 @@
         <span class="tag {{ r.job.status.value }}">{{ r.job.status.value }}</span> <span class="muted">{{ r.progress }}</span>{% else %}-{% endif %}</td>
       <td class="muted">{{ r.result or '' }}</td>
       {% if actions %}<td class="nw">
-        {% if t.status in ['proposed', 'failed', 'skipped', 'expired'] %}
+        {% if t.status in ['proposed', 'failed', 'skipped', 'expired', 'blocked'] %}
         <form method="post" action="/agents/tasks/{{ t.id }}/order" class="inline"><input type="hidden" name="back" value="{{ back }}"><button>Zlec</button></form>{% endif %}
         {% if t.status == 'proposed' %}
         <form method="post" action="/agents/tasks/{{ t.id }}/skip" class="inline"><input type="hidden" name="back" value="{{ back }}"><button title="Nie zlecaj tego zalecenia">Pomin</button></form>{% endif %}

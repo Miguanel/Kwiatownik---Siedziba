@@ -20,8 +20,10 @@ def _router(request: Request) -> ModelRouter:
 
 def _models_ctx(request: Request) -> dict:
     r = getattr(request.app.state, "llm", None)
+    ollama = r.providers.get("ollama") if r else None
     return {"models": r.snapshot() if r else [], "errors": r.discovery_errors if r else {},
-            "configured": r is not None}
+            "configured": r is not None, "vram": getattr(ollama, "vram", {}) or {},
+            "cache": r.cache.stats() if r and getattr(r, "cache", None) else None}
 
 
 # ---------------- panel (HTML / HTMX) ----------------

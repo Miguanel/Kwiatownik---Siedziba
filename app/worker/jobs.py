@@ -55,6 +55,7 @@ def mark_interrupted_jobs() -> list[int]:
     with Session(engine) as s:
         for job in s.exec(select(Job).where(Job.status.in_([JobStatus.running, JobStatus.queued]))).all():
             job.status = JobStatus.failed
+            job.finished_at = job.finished_at or datetime.now(timezone.utc)
             job.log = (job.log or "") + "Przerwane przez restart aplikacji\n"
             s.add(job)
             ids.append(job.id)

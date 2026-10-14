@@ -78,12 +78,18 @@ def _predictions(task: str = "", decision: str = "", page: int = 1, per: int = 4
         q = select(NNPrediction)
         if task:
             q = q.where(NNPrediction.task == task)
+        order = col(NNPrediction.id).desc()
         if decision == "rozbieznosc":
             q = q.where(NNPrediction.agree == False)  # noqa: E712
+        elif decision == "niepewne":
+            # uczenie aktywne (R12): przypadki, przy ktorych siec jest najmniej pewna - etykieta czlowieka
+            # uczy ja najwiecej (wszystkie inne przyklady pochodza od LLM i heurystyk)
+            q = q.where(col(NNPrediction.human_label).is_(None), col(NNPrediction.confidence).is_not(None))
+            order = col(NNPrediction.confidence)
         elif decision:
             q = q.where(NNPrediction.decision == decision)
         total = s.exec(select(func.count()).select_from(q.subquery())).one()
-        rows = list(s.exec(q.order_by(col(NNPrediction.id).desc()).offset((page - 1) * per).limit(per)).all())
+        rows = list(s.exec(q.order_by(order).offset((page - 1) * per).limit(per)).all())
     links = {r.id: _ref_link(r.ref) for r in rows}
     plants = _fact_plants(rows)
     return {"preds": rows, "links": links, "plants": plants, "total": total, "page": page, "per": per,

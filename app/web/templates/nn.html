@@ -16,6 +16,7 @@
   <div class="ag-tile"><b>{{ ov.day_saved }}</b>bez pytania LLM (24 h)</div>
   <div class="ag-tile"><b>{{ ov.saved }}</b>bez LLM ({{ ov.days }} dni)</div>
   <div class="ag-tile"><b {% if ov.conflicts %}class="nn-bad"{% endif %}>{{ ov.conflicts }}</b>rozbieznosci do rozstrzygniecia</div>
+  <div class="ag-tile"><a href="#decyzje" hx-get="/nn/decyzje?decision=niepewne" hx-target="#decyzje"><b>&#9998;</b>oznacz najmniej pewne</a><small class="muted" style="display:block">uczenie aktywne: {{ 15 }} Twoich etykiet = nowy trening</small></div>
   <div class="ag-tile"><b>{{ ov.avg_ms if ov.avg_ms is not none else '-' }}</b>ms na decyzje (srednio)</div>
 </div>
 

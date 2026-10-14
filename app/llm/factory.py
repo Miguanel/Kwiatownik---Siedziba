@@ -37,4 +37,18 @@ def build_router() -> ModelRouter | None:
         max_attempts=settings.llm_max_attempts,
         demote_after=settings.llm_demote_after,
         max_wait_s=settings.llm_max_wait_s,
+        cache=_cache(),
     )
+
+
+def _cache():
+    """Pamiec odpowiedzi LLM (LLM_CACHE_DAYS=0 wylacza)."""
+    if settings.llm_cache_days <= 0:
+        return None
+    from app.llm.cache import LLMCache
+    try:
+        return LLMCache(settings.data_dir / "llm_cache.db", settings.llm_cache_days)
+    except Exception:  # noqa: BLE001 - bez pamieci router dziala jak dawniej
+        import logging
+        logging.getLogger(__name__).exception("Pamiec odpowiedzi LLM niedostepna")
+        return None

@@ -20,6 +20,6 @@
     <button>{{ 'Wylacz' if auto else 'Wlacz' }}</button>
   </form>
   <span class="muted">
-    {% for st in ['proposed', 'ordered', 'running', 'done', 'failed'] %}{% if counts.get(st) %}<a href="/agents/tasks?status={{ st }}">{{ status_labels[st] }}: {{ counts[st] }}</a>{% if not loop.last %} &middot; {% endif %}{% endif %}{% endfor %}
+    {% for st in ['proposed', 'ordered', 'running', 'done', 'failed', 'blocked'] %}{% if counts.get(st) %}<a href="/agents/tasks?status={{ st }}">{{ status_labels[st] }}: {{ counts[st] }}</a>{% if not loop.last %} &middot; {% endif %}{% endif %}{% endfor %}
   </span>
 </div>

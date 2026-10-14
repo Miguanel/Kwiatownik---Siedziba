@@ -53,6 +53,7 @@ class CrawlConfig:
     refresh_seeds: bool = False     # "skanuj zaznaczone": pobierz ponownie znane strony z listy i zaktualizuj
     stop_when: dict | None = None   # etap rozpoznania: np. {"recipe": 5, "fact": 5} - stop po zebraniu probek
     harvest: bool = False           # pelne pobieranie strony z profilem: sitemapy zawsze, tylko adresy z profilu
+    url_model: object | None = None  # app/scrapers/url_model.UrlModel - ocena adresu przed pobraniem (R10)
 
 
 @dataclass
@@ -122,13 +123,14 @@ class SmartCrawler:
         self._refreshing: set[str] = set()   # adresy aktualnie odswiezane (zapis = aktualizacja)
 
     def _bonus(self, url: str) -> float:
+        learned = self.cfg.url_model.bonus(url) if self.cfg.url_model is not None else 0.0
         if not self.profile:
-            return 0.0
+            return learned
         if self.profile.is_recipe_url(url):
-            return 0.5
+            return 0.5 + learned
         if self.profile.is_fact_url(url):
-            return 0.35
-        return 0.25 if self.profile.is_listing_url(url) else 0.0
+            return 0.35 + learned
+        return (0.25 if self.profile.is_listing_url(url) else 0.0) + learned
 
     # ------------------------------------------------------------ kolejka
     def _push(self, url: str, anchor: str = "", depth: int = 0, parent: str | None = None,

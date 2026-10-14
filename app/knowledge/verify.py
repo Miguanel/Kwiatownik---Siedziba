@@ -5,7 +5,7 @@ czy tekst jest poprawna polszczyzna i czy nie brzmi jak niebezpieczna porada. Ni
 """
 import json
 
-BATCH = 12
+BATCH = 12   # domyslna paczka; w zadaniach: settings.verify_batch (R8 - mniej wywolan LLM)
 
 SYSTEM_PROMPT = """Jestes weryfikatorem faktow polskiego zielnika. Dla kazdej informacji dostajesz jej tekst \
 po polsku i CYTAT ze zrodla (moze byc w innym jezyku). Ocen kazda informacje:

@@ -60,7 +60,7 @@ def _audit_running(s: Session) -> bool:
 def _failed_keys(s: Session, hours: int = 2) -> set[str]:
     """Propozycje, ktore planista zlecil niedawno i ktore sie nie powiodly - nie proponuj od razu ponownie."""
     since = store.now() - timedelta(hours=hours)
-    rows = s.exec(select(AgentTask).where(AgentTask.agent == "planista", col(AgentTask.status).in_(["failed", "skipped"]),
+    rows = s.exec(select(AgentTask).where(AgentTask.agent == "planista", col(AgentTask.status).in_(["failed", "skipped", "blocked"]),
                                           col(AgentTask.created_at) >= since)).all()
     return {params(t).get("klucz") for t in rows} - {None}
 
@@ -80,6 +80,18 @@ def _no_effect(s: Session, hours: int) -> dict[str, str]:
     return out
 
 
+def _audit_worth_it(audit: AgentRun, age: timedelta) -> bool:
+    """R9: kolejny audyt ma sens, gdy od poprzedniego do plikow roslin trafilo dosc nowej wiedzy (inaczej powtorzy
+    te same zalecenia) - albo gdy minelo 3x wiecej czasu niz AGENTS_AUDIT_HOURS."""
+    if age > timedelta(hours=3 * settings.agents_audit_hours):
+        return True
+    before = (store.report(audit).get("lejek") or {}).get("w_plikach")
+    if before is None:
+        return True                                   # audyt sprzed miernika lejka
+    from app.agents import funnel
+    return funnel.counts()["w_plikach"] - before >= settings.agents_audit_min_new
+
+
 def candidates(state, limit_items: int = 30, load: dict | None = None) -> list[Proposal]:
     from app.worker.jobs import retry_depth
     from app.worker.suggestions import build_groups
@@ -92,7 +104,7 @@ def candidates(state, limit_items: int = 30, load: dict | None = None) -> list[P
         done_same = _no_effect(s, NO_EFFECT_HOURS)
         if not _audit_running(s):
             age = (store.now() - store.utc(audit.created_at)) if audit else None
-            if audit is None or age > timedelta(hours=settings.agents_audit_hours):
+            if audit is None or (age > timedelta(hours=settings.agents_audit_hours) and _audit_worth_it(audit, age)):
                 out.append(Proposal("audyt", "audyt", "Nowy audyt bazy wiedzy Kwiatownika",
                                     "Jeszcze nie bylo audytu - bez niego nie wiadomo, czego brakuje." if audit is None else
                                     f"Ostatni audyt #{audit.id} ma {age.days * 24 + age.seconds // 3600} h - "
@@ -157,6 +169,18 @@ def candidates(state, limit_items: int = 30, load: dict | None = None) -> list[P
         out.append(Proposal("ciaglosc:luki", "luki", "Zbieranie wiedzy o 3 roslinach z najwiekszymi lukami",
                             "Nic innego nie czeka - Siedziba szuka brakujacych informacji (takze po chinsku i japonsku), "
                             "zeby kolejka nie stala.", 10, "ciaglosc", p))
+    # R9: wartosc informacji - rodzaje zadan, ktore dawaly najwiecej efektu na minute, ida wyzej (UCB1)
+    from app.agents import value
+    try:
+        ylds = value.kind_yields()
+    except Exception:  # noqa: BLE001 - bez historii planista dziala jak dawniej
+        ylds = {}
+    for p in out:
+        if p.source in ("audyt", "potok") and p.kind != "audyt":
+            b = value.bonus(p.kind, ylds)
+            if b:
+                p.score += b
+                p.why = f"{p.why} [wartosc na minute: {b:+.1f}]"
     load = load if load is not None else watchdog.llm_load(state)
     if load.get("overloaded"):                         # modele sie dlawia -> najpierw zadania bez LLM
         for p in out:

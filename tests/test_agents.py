@@ -176,7 +176,7 @@ def test_audit_run_saves_report_tasks_and_compares(kw):
     assert expert_rec and expert_rec[0]["rosliny"] == ["tarnina"]
     assert all(t.status == "proposed" for t in props) and len(props) == len(rep["zalecenia"])
     assert any(t.reason.endswith("Ekspert: najpierw opowiesci") for t in props)
-    # drugi audyt: stare zalecenia zastapione, porownanie z poprzednim
+    # drugi audyt: trwaly backlog (R9) - potwierdzone zalecenia czekaja dalej, niepotwierdzone wygasaja
     data = json.loads((settings.kwiatownik_plants_dir / "tarnina.json").read_text(encoding="utf-8"))
     data["ciekawostki"] = ["a", "b", "c", "d", "e"]
     (settings.kwiatownik_plants_dir / "tarnina.json").write_text(json.dumps(data), encoding="utf-8")
@@ -184,7 +184,10 @@ def test_audit_run_saves_report_tasks_and_compares(kw):
     with Session(engine) as s:
         old = s.exec(select(AgentTask).where(AgentTask.run_id == rid)).all()
         run2 = s.get(AgentRun, rid2)
-    assert all(t.status == "expired" for t in old)
+    assert all(t.status in ("proposed", "expired") for t in old)
+    assert all("potwierdzone przez audyt" in (t.note or "") for t in old if t.status == "proposed")
+    assert all("juz tego nie zaleca" in (t.note or "") for t in old if t.status == "expired")
+    assert any(t.kind == "opowiesci" and t.status == "expired" for t in old)     # ekspert go nie powtorzyl
     rep2 = json.loads(run2.report_json)
     assert rep2["poprzedni"] == rid and rep2["ekspert"] is None and run2.expert_score is None
     assert rep2["zmiany"]["lepsze"][0]["id"] == "tarnina"
@@ -605,3 +608,45 @@ def test_fill_orders_several_at_once(kw, monkeypatch):
     with Session(engine) as s:
         busy = tasks.production_jobs(s)
     assert 1 <= len(runs) <= 3 and len(busy) <= 3
+
+
+def test_value_of_information_bonus_prefers_productive_kinds():
+    """R9: bandyta UCB1 - rodzaj z wiekszym efektem na minute dostaje wieksza premie, nieznany - premie za ciekawosc."""
+    from app.agents import value
+    ylds = {"zapis": {"n": 10, "na_minute": 2.0}, "skan": {"n": 10, "na_minute": 0.1}}
+    assert value.bonus("zapis", ylds) > value.bonus("skan", ylds)
+    assert value.bonus("nowy_rodzaj", ylds) > value.bonus("skan", ylds)
+    assert value.bonus("zapis", {}) == 0.0
+    assert value.job_value(json.dumps({"applied": 2, "verified": 3, "invalid": 9})) == 9.0
+
+
+def test_audit_backlog_keeps_confirmed_recommendations(kw):
+    """R9: zalecenie potwierdzone przez kolejny audyt zostaje tym samym zleceniem (nie przepada)."""
+    with Session(engine) as s:
+        for t in s.exec(select(AgentTask)).all():
+            s.delete(t)
+        s.commit()
+    rec = {"nr": 1, "typ": "luki", "tytul": "Luki: tarnina", "rosliny": ["tarnina"], "nazwy": ["Tarnina"],
+           "sloty": ["ciekawostki"], "priorytet": 2, "uzasadnienie": "brak ciekawostek"}
+    audit.save_tasks(1, [rec])
+    audit.save_tasks(2, [{**rec, "priorytet": 1, "uzasadnienie": "nadal brak"}])
+    with Session(engine) as s:
+        rows = s.exec(select(AgentTask)).all()
+    assert len(rows) == 1 and rows[0].status == "proposed" and rows[0].priority == 1 and rows[0].run_id == 1
+    audit.save_tasks(3, [])
+    with Session(engine) as s:
+        assert s.exec(select(AgentTask)).one().status == "expired"
+
+
+def test_safe_update_pauses_and_restores_job_limit_after_restart():
+    """R5 (aktualizuj.ps1): przed przebudowa limit 0, po starcie z nowym kodem wraca limit sprzed aktualizacji."""
+    from types import SimpleNamespace
+    from app.worker.runner import JobRunner
+    state = SimpleNamespace(jobs=JobRunner(3))
+    store.set_runtime(max_jobs=3, aktualizacja=False)
+    rt = store.begin_update(state)
+    assert state.jobs.max_concurrent == 0 and rt["limit_przed_aktualizacja"] == 3 and rt["aktualizacja"]
+    store.begin_update(state)                                   # drugi raz nie nadpisuje zapamietanego limitu
+    assert store.runtime()["limit_przed_aktualizacja"] == 3
+    fresh = SimpleNamespace(jobs=JobRunner(1))                  # "restart" z nowym kodem
+    assert store.apply_job_limit(fresh) == 3 and not store.runtime()["aktualizacja"]

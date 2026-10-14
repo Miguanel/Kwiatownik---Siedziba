@@ -23,14 +23,14 @@ from sqlmodel import Session, col, func, select
 from app.config import settings
 from app.db import engine
 from app.knowledge import gaps as gapmod
-from app.knowledge import merge, organize, photos, placement, plantfile, schema
+from app.knowledge import gate, merge, organize, photos, placement, plantfile, schema
 from app.knowledge.extract import extract_facts
 from app.knowledge.registry import discover_new_plants, sync_kwiatownik
 from app.knowledge.sections import fingerprint, norm_text, similar
 from app.knowledge.verify import BATCH, verify_facts
 from app.knowledge.wiki import WikiClient
 from app.llm.router import AllModelsFailedError
-from app.models import Item, ItemKind, Job, JobStatus, Plant, PlantFact, PlantQuery
+from app.models import Item, ItemKind, Job, JobStatus, Plant, PlantAlias, PlantFact, PlantQuery
 from app.worker import activity, snapshots
 from app.worker.jobs import job_log
 from app.worker.runner import JobRunner
@@ -159,6 +159,46 @@ def _names(plant: Plant) -> dict[str, str]:
     return gapmod.plant_names(plant.nazwa_lat, plant.nazwa_pl, labels, titles)
 
 
+def _name_keys(plant: Plant) -> list[str]:
+    """Nazwy rosliny do szukania w tekstach stron: polska, lacinska (i sam gatunek), nazwy z Wikidata we wszystkich
+    jezykach (zh, ja, uk...) i aliasy (np. dawne id pliku)."""
+    keys = {plant.nazwa_pl, plant.nazwa_lat, " ".join((plant.nazwa_lat or "").split()[:2])}
+    first = (plant.nazwa_pl or "").split()[0].lower() if plant.nazwa_pl else ""
+    if len(first) >= 6:                                # rdzen polskiej nazwy: rumianek/rumianku -> "rumian"
+        keys.add(first[:-2])
+    for v in _names(plant).values():
+        keys.update(v if isinstance(v, (list, tuple, set)) else [v])
+    with Session(engine) as s:
+        keys.update(a.name for a in s.exec(select(PlantAlias).where(PlantAlias.plant_id == plant.id)).all())
+    return sorted({str(k).strip().lower() for k in keys if k and len(str(k).strip()) >= 3}, key=len, reverse=True)
+
+
+def fact_pages_for(plant: Plant, limit: int = 3) -> list:
+    """Strony z ciekawostkami juz pobrane przez skaner (Item kind=fact), ktore mowia o tej roslinie (R11).
+    Najpierw te, ktore wymieniaja ja najczesciej; strony juz wykorzystane dla tej rosliny sa pomijane, wiec przy
+    kazdym zbieraniu dochodza nowe (wczesniej co raz te same 3 pierwsze z bazy)."""
+    if limit <= 0:
+        return []
+    keys = _name_keys(plant)
+    if not keys:
+        return []
+    with Session(engine) as s:
+        used = set(s.exec(select(PlantFact.source_url).where(PlantFact.plant_id == plant.id)).all())
+        rows = s.exec(select(Item).where(Item.kind == ItemKind.fact, col(Item.raw_text).is_not(None))).all()
+        for it in rows:
+            s.expunge(it)
+    scored = []
+    for it in rows:
+        if it.url in used:
+            continue
+        low = (it.raw_text or "").lower()
+        hits = sum(low.count(k) for k in keys)
+        if hits:
+            scored.append((hits, it.id, it))
+    scored.sort(key=lambda x: (-x[0], x[1]))
+    return [it for _, _, it in scored[:limit]]
+
+
 def _recent_queries(plant_id: str) -> tuple[set[str], set[str]]:
     """(zapytania zadane w ostatnich KNOWLEDGE_REQUERY_DAYS dniach, adresy juz uzyte dla tej rosliny)."""
     since = datetime.now(timezone.utc) - timedelta(days=settings.knowledge_requery_days)
@@ -196,15 +236,8 @@ def _query_facts(qid: int, n: int) -> None:
 async def _web_sources(plant: Plant, log, file_data: dict | None = None, slots: list[str] | None = None) -> list[tuple]:
     """(url, nazwa, jezyk, tekst, luki, id_zapytania) z innych stron: ciekawostki juz zebrane przez Siedzibe
     + wyszukiwarka skupiona na LUKACH rosliny (czego brakuje w schemacie) w wielu jezykach, takze zh/ja."""
-    out: list[tuple] = []
-    keys = [k for k in (plant.nazwa_lat, plant.nazwa_pl) if k]
-    with Session(engine) as s:
-        for it in s.exec(select(Item).where(Item.kind == ItemKind.fact, col(Item.raw_text).is_not(None))).all():
-            text = it.raw_text or ""
-            if any(k.lower() in text.lower() for k in keys):
-                out.append((it.url, urlparse(it.url).netloc, it.language or "?", text[:8000], None, None))
-                if len(out) >= 3:
-                    break
+    out: list[tuple] = [(it.url, urlparse(it.url).netloc, it.language or "?", (it.raw_text or "")[:8000], None, None)
+                        for it in fact_pages_for(plant, limit=settings.knowledge_fact_pages)]
     if settings.knowledge_web_pages <= 0 or not plant.nazwa_lat:
         return out
     from app.discovery.search import search_all
@@ -413,8 +446,9 @@ async def verify_plant(plant_id: str, llm, log, job_id: int = 0) -> dict:
         for f in facts:
             s.expunge(f)
         name, lat = plant.nazwa_pl, plant.nazwa_lat
-    for i in range(0, len(facts), BATCH):
-        batch = facts[i:i + BATCH]
+    size = max(1, settings.verify_batch or BATCH)        # R8: wieksze paczki = mniej wywolan i limitow 429
+    for i in range(0, len(facts), size):
+        batch = facts[i:i + size]
         if job_id:
             activity.set(job_id, f"{name}: weryfikacja drugim modelem", f"informacje {i + 1}-{i + len(batch)} z {len(facts)}")
         avoid = {(f.extracted_by or "").replace("/", ":", 1) for f in batch if f.extracted_by}
@@ -542,9 +576,49 @@ def _photos_of(plant) -> tuple[list[dict], list[dict]]:
     return data.get("zdjecia") or [], data.get("autorzy") or []
 
 
+def _gate_skip(pid: str, n: int, total: int, log, out: dict) -> bool:
+    """Bezpiecznik bramy zapisu: roslina z powtarzajaca sie odmowa kontroli kopii jest pomijana, dopoki jej plik
+    sie nie zmieni - zamiast wydawac czas LLM na wiedze, ktora i tak nie trafi na strone."""
+    reason = gate.blocked(pid)
+    if not reason:
+        return False
+    log(f"[{n}/{total}] {pid} - wstrzymana przez bezpiecznik bramy zapisu ({reason[:120]}); czeka na poprawke pliku")
+    out["zablokowane"] = out.get("zablokowane", 0) + 1
+    return True
+
+
+def _checkpoint(job_id: int, pid: str) -> None:
+    """Punkt kontrolny: roslina skonczona w tym zadaniu. Ponowienie po restarcie (actions.retry_job) ja pomija."""
+    with Session(engine) as s:
+        job = s.get(Job, job_id)
+        if job is None:
+            return
+        try:
+            st = json.loads(job.state_json) if job.state_json else {}
+        except ValueError:
+            st = {}
+        done = st.setdefault("done", [])
+        if pid not in done:
+            done.append(pid)
+            job.state_json = json.dumps(st, ensure_ascii=False)
+            s.add(job)
+            s.commit()
+
+
+def _check(plant_id: str, original: dict | None, cand: dict, log) -> list[str]:
+    """Brama zapisu: wyrownanie id do nazwy pliku (app/knowledge/gate.py) + kontrola kopii."""
+    errors, note = gate.align_identity(cand, plant_id)
+    if note:
+        log(f"  {note}")
+    return errors or plantfile.validate_candidate(original, cand, plant_id)
+
+
 def _rejected(plant_id: str, original: dict | None, cand: dict, errors: list[str], operation: str, log) -> str:
-    """Kopia odrzucona przez kontrole: plik bez zmian, ale migawka "przed/po" pokazuje, co chcielismy zapisac."""
-    log("  KONTROLA KOPII NIE PRZESZLA - plik bez zmian: " + "; ".join(errors[:5]))
+    """Kopia odrzucona przez kontrole: plik bez zmian, ale migawka "przed/po" pokazuje, co chcielismy zapisac.
+    Odmowa trafia do bezpiecznika bramy - po kolejnej z tego samego powodu roslina jest pomijana."""
+    trips = gate.record_rejection(plant_id, errors)
+    log("  ZABLOKOWANE W BRAMIE ZAPISU (kontrola kopii, plik bez zmian): " + "; ".join(errors[:5])
+        + (f" - odmowa {trips}. z rzedu, roslina wstrzymana do zmiany pliku" if trips >= gate.GATE_TRIPS else ""))
     _mark_error(plant_id, errors)
     snapshots.record_dict(plantfile.plant_path(settings.kwiatownik_plants_dir, plant_id), original, cand,
                           f"{operation}: {plant_id}", applied=False, note="; ".join(errors[:20]),
@@ -555,7 +629,7 @@ def _rejected(plant_id: str, original: dict | None, cand: dict, errors: list[str
 def _save_candidate(plant_id: str, original: dict | None, cand: dict, crlf: bool, log, facts=(),
                     operation: str = "dopisanie wiedzy") -> str:
     """Kontrola kopii -> kopia zapasowa -> zapis. Wspolne dla wiedzy i zdjec."""
-    errors = plantfile.validate_candidate(original, cand, plant_id)
+    errors = _check(plant_id, original, cand, log)
     if errors:
         return _rejected(plant_id, original, cand, errors, operation, log)
     if cand == original:
@@ -573,6 +647,7 @@ def _save_candidate(plant_id: str, original: dict | None, cand: dict, crlf: bool
             row.status, row.last_apply_at, row.note = "applied", datetime.now(timezone.utc), None
             s.add(row)
         s.commit()
+    gate.record_success(plant_id)
     log(f"  zapisano do Kwiatownika: {plantfile.diff_summary(original, cand)}"
         + (f" (kopia zapasowa: {backup.name})" if backup else ""))
     return "applied"
@@ -688,9 +763,10 @@ async def organize_plant(plant_id: str, log, llm=None) -> str:
     cand = await _organized(copy.deepcopy(original), name, latin, llm, log)
     if settings.knowledge_auto_merge:
         cand = await _merged(cand, name, latin, llm, log)
-    errors = plantfile.validate_candidate(original, cand, plant_id)
+    errors = _check(plant_id, original, cand, log)
     if errors:
         return _rejected(plant_id, original, cand, errors, "uporzadkowanie", log)
+    gate.record_success(plant_id)
     backup = plantfile.write_plant(plants_dir, plant_id, cand, crlf, Path(settings.backups_dir) / "plants",
                                    "uporzadkowanie")
     log("  plik uporzadkowany" + (f" (kopia zapasowa: {backup.name})" if backup else ""))
@@ -716,9 +792,10 @@ async def merge_plant(plant_id: str, log, llm=None) -> str:
         log("  bez zmian")
         update_coverage(plant_id, cand)
         return "nothing"
-    errors = plantfile.validate_candidate(original, cand, plant_id)
+    errors = _check(plant_id, original, cand, log)
     if errors:
         return _rejected(plant_id, original, cand, errors, "scalenie z rozdzialami", log)
+    gate.record_success(plant_id)
     backup = plantfile.write_plant(plants_dir, plant_id, cand, crlf, Path(settings.backups_dir) / "plants",
                                    "scalenie z rozdzialami")
     n = len((cand.get("scalone") or {}).get("pola") or {})
@@ -740,9 +817,10 @@ async def place_plant(plant_id: str, log, llm=None, force: bool = False) -> str:
     if cand == original:
         log("  bez zmian")
         return "nothing"
-    errors = plantfile.validate_candidate(original, cand, plant_id)
+    errors = _check(plant_id, original, cand, log)
     if errors:
         return _rejected(plant_id, original, cand, errors, "rozmieszczenie wiedzy", log)
+    gate.record_success(plant_id)
     backup = plantfile.write_plant(plants_dir, plant_id, cand, crlf, Path(settings.backups_dir) / "plants",
                                    "rozmieszczenie wiedzy")
     blk = cand.get("rozmieszczenie") or {}
@@ -767,11 +845,14 @@ async def run_plant_place(job_id: int, runner: JobRunner, llm=None, plant_ids: l
             log(f"[{n}/{len(ids)}] {pid} - opracowywana w innym zadaniu, pomijam")
             out["busy"] += 1
             continue
+        if _gate_skip(pid, n, len(ids), log, out):
+            continue
         activity.set(job_id, f"rozmieszczanie {n}/{len(ids)}", pid)
         log(f"[{n}/{len(ids)}] {pid}")
         _BUSY.add(pid)
         try:
             out[await place_plant(pid, log, llm, force)] += 1
+            _checkpoint(job_id, pid)
         except AllModelsFailedError as exc:
             log(f"Limity modeli wyczerpane - przerywam ({str(exc)[:120]})")
             break
@@ -824,7 +905,8 @@ def plants_to_research(limit: int) -> list[str]:
     never = sorted([p for p in rows if p.last_research_at is None], key=lambda p: -(p.mentions or 0))
     rest = sorted([p for p in rows if p.last_research_at is not None],
                   key=lambda p: (p.coverage if p.coverage is not None else 0, p.last_research_at))
-    return [p.id for p in never + rest if p.id not in _BUSY][:limit]
+    stop = gate.blocked_map()
+    return [p.id for p in never + rest if p.id not in _BUSY and p.id not in stop][:limit]
 
 
 async def run_plant_research(job_id: int, runner: JobRunner, llm, plant_ids: list[str] | None = None,
@@ -855,6 +937,8 @@ async def run_plant_research(job_id: int, runner: JobRunner, llm, plant_ids: lis
                 continue
             if pid in _BUSY:
                 log(f"[{n}/{len(ids)}] {title} - opracowywana teraz w innym zadaniu, pomijam")
+                continue
+            if _gate_skip(pid, n, len(ids), log, total):
                 continue
             activity.set(job_id, f"roslina {n}/{len(ids)}", title)
             log(f"[{n}/{len(ids)}] {title}")
@@ -895,6 +979,7 @@ async def run_plant_research(job_id: int, runner: JobRunner, llm, plant_ids: lis
                 total[k] += vs[k]
             if outcome in total:
                 total[outcome] += 1
+            _checkpoint(job_id, pid)
             _progress(job_id, n, len(ids))
     finally:
         if own_wiki:
@@ -911,9 +996,18 @@ async def run_plant_apply(job_id: int, runner: JobRunner, llm=None, plant_ids: l
         ids = plant_ids or list(s.exec(select(PlantFact.plant_id).where(PlantFact.status == "verified")
                                        .distinct()).all())
     out = {"applied": 0, "waiting": 0, "invalid": 0, "nothing": 0}
-    for pid in ids:
+    for n, pid in enumerate(ids, 1):
+        if runner.should_stop(job_id):
+            log("Zatrzymano")
+            break
+        if _gate_skip(pid, n, len(ids), log, out):
+            continue
+        activity.set(job_id, f"zapis {n}/{len(ids)}", pid)
         log(pid)
         out[await apply_plant(pid, log, llm)] += 1
+        _checkpoint(job_id, pid)
+        _progress(job_id, n, len(ids))
+    log("Statystyki: " + ", ".join(f"{k}={v}" for k, v in out.items()))
     _save_stats(job_id, out)
     return out
 
@@ -936,6 +1030,8 @@ async def run_plant_photos(job_id: int, runner: JobRunner, llm=None, plant_ids: 
             if runner.should_stop(job_id):
                 log("Zatrzymano")
                 break
+            if _gate_skip(pid, n, len(ids), log, out):
+                continue
             activity.set(job_id, f"zdjecia {n}/{len(ids)}", pid)
             log(f"[{n}/{len(ids)}] {pid}")
             try:
@@ -943,6 +1039,7 @@ async def run_plant_photos(job_id: int, runner: JobRunner, llm=None, plant_ids: 
             except Exception as exc:
                 log(f"  [blad] {str(exc)[:120]}")
                 out["error"] += 1
+            _checkpoint(job_id, pid)
             _progress(job_id, n, len(ids))
     finally:
         if own_wiki:
@@ -988,11 +1085,14 @@ async def run_plant_merge(job_id: int, runner: JobRunner, llm=None, plant_ids: l
             log(f"[{n}/{len(ids)}] {pid} - opracowywana w innym zadaniu, pomijam")
             out["busy"] += 1
             continue
+        if _gate_skip(pid, n, len(ids), log, out):
+            continue
         activity.set(job_id, f"scalanie {n}/{len(ids)}", pid)
         log(f"[{n}/{len(ids)}] {pid}")
         _BUSY.add(pid)
         try:
             out[await merge_plant(pid, log, llm)] += 1
+            _checkpoint(job_id, pid)
         except AllModelsFailedError as exc:
             log(f"Limity modeli wyczerpane - przerywam ({str(exc)[:120]})")
             break
@@ -1018,11 +1118,14 @@ async def run_plant_organize(job_id: int, runner: JobRunner, llm=None, plant_ids
             log(f"[{n}/{len(ids)}] {pid} - opracowywana w innym zadaniu, pomijam")
             out["busy"] += 1
             continue
+        if _gate_skip(pid, n, len(ids), log, out):
+            continue
         activity.set(job_id, f"porzadkowanie {n}/{len(ids)}", pid)
         log(f"[{n}/{len(ids)}] {pid}")
         _BUSY.add(pid)
         try:
             out[await organize_plant(pid, log, llm)] += 1
+            _checkpoint(job_id, pid)
         finally:
             _BUSY.discard(pid)
         _progress(job_id, n, len(ids))

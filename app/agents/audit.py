@@ -651,18 +651,41 @@ def compare(prev: dict, m: dict, score: float, prev_score: float | None) -> dict
 
 
 # ------------------------------------------------------------------ przebieg audytu
+def task_key(kind: str, p: dict) -> str:
+    """Tozsamosc zalecenia: rodzaj + rosliny + podrozdzialy + kraj (bez numeru i tytulu)."""
+    return "|".join([kind, ",".join(sorted(str(x) for x in p.get("rosliny") or [])),
+                     ",".join(sorted(str(x) for x in p.get("sloty") or [])), str(p.get("kraj") or "")])
+
+
 def save_tasks(run_id: int, recs: list[dict]) -> int:
-    """Zalecenia -> AgentTask 'proposed'. Niezlecone zalecenia poprzednich audytow -> 'expired' (zastapione)."""
+    """Zalecenia -> trwaly backlog (R9 z ekspertyzy 2026-10-14). Zalecenie, ktore juz czeka (ten sam rodzaj, rosliny,
+    podrozdzialy), jest AKTUALIZOWANE (priorytet, uzasadnienie), a nie zastepowane - wczesniej kazdy audyt
+    uniewaznial niezlecone zalecenia poprzedniego (61 z 147 zlecen przepadlo). Wygasaja tylko zalecenia, ktorych
+    nowy audyt juz nie potwierdza (np. luka zostala wypelniona)."""
     with Session(engine) as s:
-        for t in s.exec(select(AgentTask).where(AgentTask.agent == "audytor", AgentTask.status == "proposed")).all():
-            t.status, t.note = "expired", f"zastapione przez audyt #{run_id}"
-            s.add(t)
+        waiting = {task_key(t.kind, json.loads(t.params_json or "{}")): t
+                   for t in s.exec(select(AgentTask).where(AgentTask.agent == "audytor",
+                                                           AgentTask.status == "proposed")).all()}
+        kept: set[str] = set()
         for r in recs:
             p = {k: r[k] for k in ("rosliny", "nazwy", "sloty", "kraj", "kraj_nazwa") if r.get(k)}
             p["nr"] = r["nr"]
             reason = r["uzasadnienie"] + (f" | Ekspert: {r['ekspert']}" if r.get("ekspert") else "")
-            s.add(AgentTask(run_id=run_id, agent="audytor", kind=r["typ"], title=r["tytul"], reason=reason[:1000],
-                            priority=int(r["priorytet"]), params_json=json.dumps(p, ensure_ascii=False)))
+            key = task_key(r["typ"], p)
+            old = waiting.get(key)
+            if old is not None and key not in kept:
+                old.priority, old.reason, old.title = int(r["priorytet"]), reason[:1000], r["tytul"]
+                old.params_json = json.dumps(p, ensure_ascii=False)
+                old.note = f"potwierdzone przez audyt #{run_id}"
+                s.add(old)
+            else:
+                s.add(AgentTask(run_id=run_id, agent="audytor", kind=r["typ"], title=r["tytul"], reason=reason[:1000],
+                                priority=int(r["priorytet"]), params_json=json.dumps(p, ensure_ascii=False)))
+            kept.add(key)
+        for key, t in waiting.items():
+            if key not in kept:
+                t.status, t.note = "expired", f"audyt #{run_id} juz tego nie zaleca"
+                s.add(t)
         s.commit()
     return len(recs)
 
@@ -706,7 +729,9 @@ async def run_audit(llm=None, trigger: str = "reczny", job_id: int | None = None
         prev_run = prev_run if prev_run and prev_run.id != run_id else None
         changes = compare(store.report(prev_run), m, score, prev_run.score if prev_run else None)
         save_tasks(run_id, recs)
-        rep = {"metryki": m, "zalecenia": recs, "ekspert": expert, "zmiany": changes, "wagi": WEIGHTS,
+        from app.agents import funnel
+        rep = {"lejek": funnel.counts(),
+               "metryki": m, "zalecenia": recs, "ekspert": expert, "zmiany": changes, "wagi": WEIGHTS,
                "kryteria_nazwy": CRITERIA, "poprzedni": prev_run.id if prev_run else None}
         delta = f" ({changes['ocena']:+.1f})" if changes.get("ocena") is not None else ""
         summary = (f"Ocena {score:.0f}/100{delta}; {k['rosliny']} roslin, trudna wiedza {m['kryteria']['trudna_wiedza']:.0f}, "

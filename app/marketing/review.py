@@ -11,6 +11,7 @@ from sqlmodel import Session, col, select
 from app.marketing import metrics
 from app.marketing.persona import Persona
 from app.models import FbPost, FbPostReview
+from app.llm import fresh
 
 # klucz: (etykieta, waga, co oceniac)
 CRITERIA = {
@@ -185,7 +186,7 @@ async def evaluate(llm, post: FbPost, persona: Persona, log=lambda m: None, labe
     if llm is not None:
         for attempt in (1, 2):
             try:
-                res = await llm.complete(user_prompt(post, m, source), system=system_prompt(), json_mode=True,
+                res = await llm.complete(user_prompt(post, m, source), system=system_prompt(), json_mode=True, **fresh(llm),
                                          avoid={post.model} if post.model else None)
                 model = f"{res.provider}:{res.model}"
                 scores, review = parse_review(res.text, post.text or post.body)

@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from app.marketing.persona import Persona
 from app.marketing.picker import PlantPick
 from app.marketing.season import Season
+from app.llm import fresh
 
 _WORD = re.compile(r"[\wąćęłńóśźżĄĆĘŁŃÓŚŹŻ'-]+", re.U)
 _URL = re.compile(r"(https?://\S+|www\.\S+)", re.I)
@@ -173,7 +174,7 @@ async def write_post(llm, persona: Persona, m: Material, hint: str | None = None
     system = system_prompt(persona)
     feedback, draft, model = revise, None, ""
     for n in range(1, attempts + 1):
-        res = await llm.complete(user_prompt(m, hint, feedback), system=system, json_mode=True)
+        res = await llm.complete(user_prompt(m, hint, feedback), system=system, json_mode=True, **fresh(llm))
         model = f"{res.provider}:{res.model}"
         try:
             draft = parse(res.text, persona, m)

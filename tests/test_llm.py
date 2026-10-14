@@ -210,7 +210,7 @@ def test_quota_exhausted_gets_long_pause_and_too_large_is_skipped_without_penalt
     big = next(x for x in r.order if x.model == "openai/gpt-oss-120b")
     quota = next(x for x in r.order if x.model == "gemini-3.8-flash")
     assert big.failures == 0 and big.cooling() == 0 and keys(r)[0] == "groq:openai/gpt-oss-120b"
-    assert quota.cooling() > 3600 and quota.limit_hits == 1
+    assert quota.cooling() >= 900 and quota.limit_hits == 1
 
 
 def test_router_waits_for_limit_renewal_instead_of_failing(monkeypatch):
@@ -369,3 +369,71 @@ def test_cloud_only_never_uses_local_fallback():
         _run(r.complete("json", json_mode=True, cloud_only=True))
     assert local.calls == []
     assert _run(r.complete("json", json_mode=True)).provider == "ollama"     # zwykle zapytanie: zapas dziala
+
+
+def test_router_ranks_well_known_models_by_expected_utility(tmp_path):
+    """R6: Gemini z ocena 100, ale 6% skutecznosci, spada pod Groq (70% sukcesow, 2 s)."""
+    import json as _json
+    state = tmp_path / "state.json"
+    entries = [
+        {"provider": "gemini", "model": "gemini-3.8-flash", "score": 100.0, "successes": 14, "failures": 228,
+         "avg_latency": 33.3},
+        {"provider": "gemini", "model": "gemini-3.5-flash", "score": 93.0, "successes": 3, "failures": 1},
+        {"provider": "groq", "model": "openai/gpt-oss-120b", "score": 100.0, "successes": 722, "failures": 313,
+         "avg_latency": 2.4},
+        {"provider": "groq", "model": "openai/gpt-oss-20b", "score": 81.4, "successes": 412, "failures": 144,
+         "avg_latency": 1.4},
+    ]
+    state.write_text(_json.dumps({"order": entries}), encoding="utf-8")
+    r = ModelRouter([FakeProvider("gemini", []), FakeProvider("groq", [])], state_path=state)
+    # malo wywolan (gemini-3.5-flash) - zostaje na swoim miejscu; reszta wg uzytecznosci
+    assert keys(r) == ["groq:openai/gpt-oss-120b", "gemini:gemini-3.5-flash", "groq:openai/gpt-oss-20b",
+                       "gemini:gemini-3.8-flash"]
+    snap = {x["model"]: x["utility"] for x in r.snapshot()}
+    assert snap["openai/gpt-oss-120b"] > 10 * snap["gemini-3.8-flash"]
+
+
+def test_daily_quota_waits_until_provider_reset():
+    """R7: limit dzienny bez podanego czasu = przerwa do polnocy czasu pacyficznego (Gemini)."""
+    from app.llm.base import seconds_to_quota_reset
+    import datetime as _dt
+    from zoneinfo import ZoneInfo
+    t = _dt.datetime(2026, 10, 14, 6, 0, tzinfo=ZoneInfo("America/Los_Angeles")).timestamp()
+    assert abs(seconds_to_quota_reset("gemini", t) - (18 * 3600 + 120)) < 1
+    assert seconds_to_quota_reset("groq", t) is None
+
+
+def test_llm_cache_answers_repeated_json_prompt_without_calling_model(tmp_path):
+    """R4: ponowienie zadania po restarcie pyta o to samo - odpowiedz z pamieci, bez wywolania modelu."""
+    from app.llm.cache import LLMCache
+    gem = FakeProvider("gemini", ["gemini-3.8-flash"])
+    r = ModelRouter([gem], cache=LLMCache(tmp_path / "c.db"))
+    _run(r.refresh())
+    a = _run(r.complete("wyciagnij fakty", system="S", json_mode=True))
+    b = _run(r.complete("wyciagnij fakty", system="S", json_mode=True))
+    assert gem.calls == ["gemini-3.8-flash"] and b.cached and b.text == a.text
+    _run(r.complete("napisz post", system="S"))                       # bez JSON - zawsze nowa odpowiedz
+    _run(r.complete("napisz post", system="S"))
+    _run(r.complete("wyciagnij fakty", system="S", json_mode=True, cache=False))
+    assert len(gem.calls) == 4 and r.cache.stats()["trafienia"] == 1
+
+
+def test_ollama_slow_model_partly_on_cpu_gets_smaller_context():
+    """R8: model, ktory nie miesci sie w VRAM, dostaje mniejszy kontekst (wiecej warstw w GPU)."""
+    from app.llm.ollama import OllamaProvider
+    ctxs = []
+
+    def handler(req: httpx.Request):
+        if req.url.path == "/api/chat":
+            ctxs.append(json.loads(req.content)["options"]["num_ctx"])
+            return httpx.Response(200, json={"message": {"content": "ok"}})
+        if req.url.path == "/api/ps":
+            return httpx.Response(200, json={"models": [{"name": "qwen3:8b", "size": 6_000_000_000,
+                                                          "size_vram": 3_000_000_000}]})
+        return httpx.Response(404)
+
+    p = OllamaProvider("http://ollama:11434", client=httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    p.SLOW_S = -1                                       # kazda odpowiedz "wolna"
+    _run(p.generate("qwen3:8b", "x"))
+    _run(p.generate("qwen3:8b", "x"))
+    assert ctxs == [8192, 4096] and p.vram["qwen3:8b"]["procent_vram"] == 50.0

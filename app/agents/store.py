@@ -52,15 +52,43 @@ def job_limit(state=None) -> int:
 
 
 def apply_job_limit(state) -> int | None:
-    """Po starcie: limit zapisany w panelu ma pierwszenstwo przed MAX_CONCURRENT_JOBS z .env."""
+    """Po starcie: limit zapisany w panelu ma pierwszenstwo przed MAX_CONCURRENT_JOBS z .env.
+    Po bezpiecznej aktualizacji (aktualizuj.ps1 -> begin_update) wraca limit sprzed aktualizacji."""
     rt = runtime()
     runner = getattr(state, "jobs", None)
+    if rt.get("aktualizacja") and "limit_przed_aktualizacja" in rt:
+        rt = set_runtime(max_jobs=rt["limit_przed_aktualizacja"], aktualizacja=False)
+        log.warning("Po aktualizacji: przywrocono limit zadan w tle = %s", rt["max_jobs"])
     if runner is None or "max_jobs" not in rt:
         return None
     try:
         return runner.set_limit(int(rt["max_jobs"]))
     except (TypeError, ValueError):
         return None
+
+
+def begin_update(state) -> dict:
+    """Bezpieczna aktualizacja (R5): nowe zadania czekaja (limit 0), dzialajace koncza prace. Zapamietuje limit -
+    po restarcie z nowym kodem apply_job_limit sam go przywroci. Wolane drugi raz nie nadpisuje zapamietanego."""
+    rt = runtime()
+    if not rt.get("aktualizacja"):
+        rt = set_runtime(aktualizacja=True, limit_przed_aktualizacja=job_limit(state))
+    runner = getattr(state, "jobs", None)
+    if runner is not None and hasattr(runner, "set_limit"):
+        runner.set_limit(0)
+    set_runtime(max_jobs=0)
+    return runtime()
+
+
+def cancel_update(state) -> dict:
+    rt = runtime()
+    if rt.get("aktualizacja"):
+        n = int(rt.get("limit_przed_aktualizacja", settings.max_concurrent_jobs))
+        runner = getattr(state, "jobs", None)
+        if runner is not None and hasattr(runner, "set_limit"):
+            runner.set_limit(n)
+        rt = set_runtime(max_jobs=n, aktualizacja=False)
+    return rt
 
 
 def now() -> datetime:

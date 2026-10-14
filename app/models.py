@@ -51,6 +51,8 @@ class Source(SQLModel, table=True):
     auto_scan: bool | None = False       # skanowanie cykliczne (np. co noc)
     scraper_profile: str | None = None   # JSON profilu scrapera zbudowanego przez LLM
     profile_status: str | None = None    # ready | failed | degraded
+    auto_off_reason: str | None = None   # zrodlo wylaczone automatycznie za slaba wydajnosc (R10)
+    auto_off_at: datetime | None = None  # ...kiedy; wlaczone potem recznie = uzytkownik wie lepiej, nie wylaczamy znow
     created_at: datetime = Field(default_factory=_now)
 
 
@@ -156,6 +158,11 @@ class Plant(SQLModel, table=True):
     last_research_at: datetime | None = None
     last_apply_at: datetime | None = None
     note: str | None = None
+    # brama zapisu (app/knowledge/gate.py): ostatnia odmowa kontroli kopii i ile razy z rzedu z tego samego powodu
+    gate_reason: str | None = None
+    gate_count: int | None = None
+    gate_sig: str | None = None                       # odcisk pliku rosliny w chwili odmowy (zmiana pliku = odblokowanie)
+    gate_at: datetime | None = None
     created_at: datetime = Field(default_factory=_now)
 
 

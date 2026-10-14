@@ -5,7 +5,7 @@
   <p style="color:#b00">Nie pobrano modeli z {{ name }}: {{ err }}</p>
 {% endfor %}
 <table>
-  <tr><th>#</th><th>Provider</th><th>Model</th><th title="ocena z nazwy modelu">Ocena</th><th title="ocena x niezawodnosc - spada po bledach i limitach">Biezaca</th><th>OK</th><th>Kary</th><th title="ile razy wyczerpal limit">Limity</th><th>Sr. czas [s]</th><th>Status</th></tr>
+  <tr><th>#</th><th>Provider</th><th>Model</th><th title="ocena z nazwy modelu">Ocena</th><th title="ocena x niezawodnosc - spada po bledach i limitach">Biezaca</th><th title="ocena x P(sukces) x kara za czas odpowiedzi; od 20 wywolan model stoi na liscie wg tej wartosci">Uzytecznosc</th><th>OK</th><th>Kary</th><th title="ile razy wyczerpal limit">Limity</th><th>Sr. czas [s]</th><th>Status</th></tr>
   {% for m in models %}
     <tr {% if m.cooldown_s %}style="opacity:.55"{% endif %}>
       <td>{{ m.position }}</td>
@@ -13,6 +13,7 @@
       <td>{{ m.model }}{% if m.pinned %} &#128204;{% endif %}{% if m.fallback %} <span class="tag" title="lokalny model zapasowy - uzywany na koncu">&#128190; zapas</span>{% endif %}</td>
       <td>{{ m.score }}</td>
       <td><b>{{ m.rating }}</b></td>
+      <td title="{{ m.successes + m.failures }} wywolan">{{ m.utility if m.utility is defined else "-" }}</td>
       <td>{{ m.successes }}</td>
       <td>{{ m.failures }}</td>
       <td>{{ m.limit_hits or 0 }}</td>
@@ -23,6 +24,14 @@
       </td>
     </tr>
   {% else %}
-    <tr><td colspan="10">Brak modeli - kliknij "Odswiez liste modeli".</td></tr>
+    <tr><td colspan="11">Brak modeli - kliknij "Odswiez liste modeli".</td></tr>
   {% endfor %}
 </table>
+
+{% if vram %}
+<p class="muted">Ollama - pamięć karty (sprawdzane po wolnej odpowiedzi):
+  {% for name, v in vram.items() %}<b>{{ name }}</b>: {{ v.procent_vram }}% modelu w VRAM, kontekst {{ v.num_ctx }}{% if v.procent_vram < 90 %} (część liczy na CPU - kontekst zmniejszony){% endif %}{% if not loop.last %} &middot; {% endif %}{% endfor %}</p>
+{% endif %}
+{% if cache %}
+<p class="muted">Pamięć odpowiedzi LLM (data/llm_cache.db): {{ cache.wpisy }} zapisanych odpowiedzi, od startu {{ cache.trafienia }} zapytań bez wywołania modelu (np. ponowienia po restarcie).</p>
+{% endif %}

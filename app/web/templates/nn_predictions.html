@@ -34,6 +34,12 @@
         <form hx-post="/nn/rozstrzygnij/{{ p.id }}" hx-target="#nn-p{{ p.id }}" hx-swap="innerHTML"><input type="hidden" name="choice" value="nn"><button title="Zapisz odpowiedz sieci jako poprawna">siec ma racje</button></form>
         <form hx-post="/nn/rozstrzygnij/{{ p.id }}" hx-target="#nn-p{{ p.id }}" hx-swap="innerHTML"><input type="hidden" name="choice" value="llm"><button title="Zapisz odpowiedz LLM jako poprawna">LLM ma racje</button></form>
       {% endif %}
+      {% if f_decision == 'niepewne' and not p.human_label %}
+        {# uczenie aktywne (R12): czlowiek wybiera poprawna etykiete sposrod najbardziej prawdopodobnych #}
+        {% for lab, pr in tops[p.id][:3] %}
+        <form hx-post="/nn/rozstrzygnij/{{ p.id }}" hx-target="#nn-p{{ p.id }}" hx-swap="innerHTML"><input type="hidden" name="choice" value="{{ lab }}"><button title="To jest: {{ nn_label(lab) }}">{{ nn_label(lab) }}</button></form>
+        {% endfor %}
+      {% endif %}
     </td>
   </tr>
   {% else %}

@@ -68,7 +68,8 @@ PLANT_KINDS = {k for k, v in KINDS.items() if v.job.startswith("plant")}
 ACTIVE = [JobStatus.queued, JobStatus.running]
 NOT_PRODUCTION = ("agent_", "fb_", "ollama_pull", "nn_init")      # zadania, ktore nie licza sie jako "Siedziba pracuje"
 STATUS_LABELS = {"proposed": "zaproponowane", "ordered": "zlecone", "running": "w toku", "done": "wykonane",
-                 "failed": "nieudane", "skipped": "pominiete", "expired": "zastapione"}
+                 "failed": "nieudane", "skipped": "pominiete", "expired": "zastapione",
+                 "blocked": "zablokowane w bramie"}
 
 
 def params(task: AgentTask) -> dict:
@@ -159,7 +160,7 @@ def order(state, task_id: int, dispatch_run_id: int | None = None) -> tuple[bool
         t = s.get(AgentTask, task_id)
         if not t:
             return False, "nie ma takiego zadania"
-        if t.status not in ("proposed", "failed", "skipped", "expired"):
+        if t.status not in ("proposed", "failed", "skipped", "expired", "blocked"):
             return False, f"zadanie jest juz {STATUS_LABELS.get(t.status, t.status)}"
         kind, p = t.kind, params(t)
     try:
@@ -205,10 +206,28 @@ def sync_tasks() -> int:
                 t.finished_at = job.finished_at or now()
                 if job.status != JobStatus.done:
                     t.note = (job.log or "").strip().splitlines()[-1][:300] if job.log else job.status.value
+                elif gate_blocked(job.stats_json):
+                    # zadanie "udane", ale nic nie trafilo do plikow - brama zapisu odmowila (R3)
+                    t.status, t.note = "blocked", "zablokowane w bramie zapisu - szczegoly na stronie /commit"
             s.add(t)
             changed += 1
         s.commit()
     return changed
+
+
+WRITE_KEYS = ("applied", "merged", "placed", "organized")
+
+
+def gate_blocked(stats_json: str | None) -> bool:
+    """Zadanie roslin, w ktorym brama zapisu odmowila, a zaden plik sie nie zmienil."""
+    try:
+        st = json.loads(stats_json) if stats_json else {}
+    except ValueError:
+        return False
+    if not isinstance(st, dict):
+        return False
+    stopped = int(st.get("invalid") or 0) + int(st.get("zablokowane") or 0)
+    return stopped > 0 and not any(int(st.get(k) or 0) for k in WRITE_KEYS)
 
 
 def production_jobs(s: Session) -> list[Job]:

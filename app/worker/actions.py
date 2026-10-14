@@ -268,7 +268,17 @@ def retry_job(state, job_id: int) -> int | None:
             return job.id
         kind, sid = job.kind, job.source_id
         p = json.loads(job.params_json) if job.params_json else {}
-        has_frontier = bool(job.state_json and json.loads(job.state_json).get("frontier"))
+        st = json.loads(job.state_json) if job.state_json else {}
+        has_frontier = bool(st.get("frontier"))
+    # punkty kontrolne (R4): rosliny skonczone w przerwanym zadaniu nie sa opracowywane drugi raz
+    done = set(st.get("done") or [])
+    if done and kind.startswith("plant_") and p.get("plant_ids"):
+        left = [x for x in p["plant_ids"] if x not in done]
+        if not left:
+            job_log(job_id, f"Wszystkie rosliny tego zadania byly juz skonczone ({len(done)}) - nie ma czego ponawiac")
+            return None
+        job_log(job_id, f"Ponowienie od punktu kontrolnego: pomijam {len(p['plant_ids']) - len(left)} skonczonych roslin")
+        p["plant_ids"] = left
     if kind == "scan" and sid:
         new = start_scan(state, sid, p.get("max_pages"), resume_from=job_id if has_frontier else None,
                          retry_of=job_id)

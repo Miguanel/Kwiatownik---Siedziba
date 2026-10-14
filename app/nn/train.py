@@ -199,8 +199,28 @@ def _decide(task: str, rows: list[NNModel]) -> tuple[NNModel, str]:
                              mode=st["mode"] if st["version"] else "cien")      # nowa siec zaczyna w cieniu
     from app.nn.runtime import brain
     brain.invalidate(task)
+    prune_versions(task)
     with Session(engine) as s:
         return s.get(NNModel, winner_id), note
+
+
+def prune_versions(task: str, keep: int | None = None) -> list[int]:
+    """Usuwa z dysku pliki starych wersji sieci (R12: 241 MB modeli, takze odrzuconych). Zostaje biezaca wersja
+    i `keep`-1 najnowszych pozostalych (do recznego powrotu). Wiersze w bazie zostaja jako historia."""
+    import shutil
+    keep = max(1, keep if keep is not None else settings.nn_keep_versions)
+    with Session(engine) as s:
+        rows = s.exec(select(NNModel).where(NNModel.task == task).order_by(col(NNModel.version).desc())).all()
+    current = [r.version for r in rows if r.status == "biezaca"]
+    others = [r.version for r in rows if r.status != "biezaca"]
+    stay = set(current) | set(others[:keep - 1])
+    removed = []
+    for r in rows:
+        d = store.model_dir(task, r.version)
+        if r.version not in stay and d.exists():
+            shutil.rmtree(d, ignore_errors=True)
+            removed.append(r.version)
+    return removed
 
 
 def train_task(task: str, encoder: str | None = None, log_fn=None, should_stop=None, progress=None,

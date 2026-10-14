@@ -186,8 +186,20 @@ def build_groups(limit: int = 150) -> list[TaskGroup]:
                                           f"/sources/{x.id}") for x in bad], len(bad), 18))
 
         # ---------------- wiedza o roslinach
-        fresh = s.exec(select(Plant).where(col(Plant.last_research_at).is_(None))
-                       .order_by(col(Plant.mentions).desc(), Plant.nazwa_pl)).all()
+        # rosliny wstrzymane przez bezpiecznik bramy zapisu nie trafiaja do zadan (app/knowledge/gate.py)
+        from app.knowledge import gate
+        stop = gate.blocked_map()
+        if stop:
+            gs = gate.summary()
+            groups.append(TaskGroup("plants_gate", "plants", "Wiedza zatrzymana w bramie zapisu",
+                                    "Kontrola kopii kilka razy z rzedu odrzucila zapis tych roslin - ich pliki wymagaja "
+                                    "poprawki w Kwiatowniku. Do tego czasu zadania je pomijaja.",
+                                    [], [TaskItem(x["id"], x["nazwa"] or x["id"],
+                                                  f"{x['informacje']} informacji czeka; {x['powod'][:90]}",
+                                                  f"/plants/{x['id']}") for x in gs["lista"] if x["zablokowana"]],
+                                    len(stop), 47))
+        fresh = [p for p in s.exec(select(Plant).where(col(Plant.last_research_at).is_(None))
+                                   .order_by(col(Plant.mentions).desc(), Plant.nazwa_pl)).all() if p.id not in stop]
         groups.append(TaskGroup("plants_new", "plants", "Rosliny bez wiedzy z sieci",
                                 "Siedziba jeszcze nie zbierala o nich informacji (Wikipedia w kilku jezykach + strony "
                                 "z innych krajow). Zweryfikowane informacje trafia do plikow roslin ze zrodlami.",
@@ -195,21 +207,22 @@ def build_groups(limit: int = 150) -> list[TaskGroup]:
                                 [TaskItem(p.id, p.nazwa_pl, (p.nazwa_lat or "") + (" - nowa" if p.origin == "nowa" else ""),
                                           f"/plants/{p.id}", by_kind.get("plant_research")) for p in fresh[:limit]],
                                 len(fresh), 45))
-        waiting = s.exec(select(PlantFact.plant_id, func.count()).where(PlantFact.status == "verified")
-                         .group_by(PlantFact.plant_id)).all()
+        waiting = [(pid, n) for pid, n in s.exec(select(PlantFact.plant_id, func.count())
+                                                   .where(PlantFact.status == "verified")
+                                                   .group_by(PlantFact.plant_id)).all() if pid not in stop]
         groups.append(TaskGroup("plants_apply", "plants", "Zweryfikowana wiedza czeka na zapis",
                                 "Informacje potwierdzone przez drugi model, jeszcze nie zapisane w plikach roslin.",
                                 [("plant_apply", "Zapisz do Kwiatownika")],
                                 [TaskItem(pid, pid, f"{n} informacji", f"/plants/{pid}") for pid, n in waiting],
                                 len(waiting), 42))
-        no_photos = _plants_without_photos()
+        no_photos = [pid for pid in _plants_without_photos() if pid not in stop]
         groups.append(TaskGroup("plants_photos", "plants", "Rosliny bez zdjec",
                                 "Pliki roslin bez galerii. Siedziba pobierze zdjecia z Wikipedii / Wikimedia Commons "
                                 "(z autorem i licencja) - bez LLM, szybko.",
                                 [("plant_photos", "Pobierz zdjecia")],
                                 [TaskItem(pid, pid, "", f"/plants/{pid}") for pid in no_photos[:limit]],
                                 len(no_photos), 43))
-        messy = _unorganized_plants()
+        messy = [(pid, n) for pid, n in _unorganized_plants() if pid not in stop]
         groups.append(TaskGroup("plants_organize", "plants", "Wiedza w plikach do uporzadkowania",
                                 "Pliki roslin z wiedza zapisana jako luzna lista informacji (bez sekcji). Agregator "
                                 "ulozy ja w sekcje, polaczy powtorzenia i ponumeruje zrodla.",
@@ -217,7 +230,7 @@ def build_groups(limit: int = 150) -> list[TaskGroup]:
                                 [TaskItem(pid, pid, f"{n} informacji", f"/plants/{pid}") for pid, n in messy[:limit]],
                                 len(messy), 41))
 
-        unmerged = _unmerged_plants()
+        unmerged = [(pid, n) for pid, n in _unmerged_plants() if pid not in stop]
         groups.append(TaskGroup("plants_merge", "plants", "Wiedza z sieci do scalenia z rozdzialami",
                                 "Pliki roslin z wiedza z sieci, ktora nie jest jeszcze wmontowana w rozdzialy strony "
                                 "(Medycyna, Surowce, Rzemioslo...). Bielik polaczy ja z tekstem Kwiatownika, "

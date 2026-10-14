@@ -12,13 +12,14 @@
 import asyncio
 import json
 import logging
+import math
 import time
 from collections import Counter, deque
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from app.llm.base import (AuthError, InvalidOutputError, LLMError, LLMProvider, LLMResult, QuotaExceededError,
-                          RateLimiter, RateLimitError, RequestTooLargeError, ServerError)
+                          RateLimiter, RateLimitError, RequestTooLargeError, ServerError, seconds_to_quota_reset)
 from app.llm.scoring import SCORERS
 
 log = logging.getLogger(__name__)
@@ -51,6 +52,19 @@ class ModelEntry:
         return f"{self.provider}:{self.model}"
 
     @property
+    def evidence(self) -> int:
+        return self.successes + self.failures
+
+    @property
+    def utility(self) -> float:
+        """Oczekiwana uzytecznosc (R6): ocena z nazwy x P(sukces) x kara za czas odpowiedzi.
+        P(sukces) = srednia rozkladu Beta(sukcesy+1, porazki+1) - model, ktory odpowiada w 6% przypadkow,
+        spada pod model gorszy z nazwy, ale skuteczny i szybki."""
+        p = (self.successes + 1) / (self.evidence + 2)
+        lat = 1.0 if self.avg_latency is None else 1.0 / (1.0 + math.log10(1.0 + self.avg_latency / 5.0))
+        return round(self.score * p * lat, 2)
+
+    @property
     def rating(self) -> float:
         """Biezaca ocena: ocena z nazwy x niezawodnosc (nowy model = pelna ocena, porazki i limity obnizaja)."""
         total = self.successes + self.failures
@@ -70,7 +84,7 @@ class ModelRouter:
     def __init__(self, providers: list[LLMProvider], state_path: Path | None = None,
                  priority: list[str] | None = None, blocklist: list[str] | None = None,
                  max_per_provider: int = 5, max_attempts: int = 0, demote_after: int = 3,
-                 max_wait_s: float = 0.0):
+                 max_wait_s: float = 0.0, cache=None):
         self.providers = {p.name: p for p in providers}
         self.state_path = state_path
         self.priority = [x.strip() for x in (priority or []) if x.strip()]
@@ -87,6 +101,7 @@ class ModelRouter:
         self._server_errors: dict[str, deque] = {}    # provider -> [(czas, model)] bledow 5xx/timeout
         self.provider_pause: dict[str, float] = {}    # provider -> do kiedy wstrzymany (awaria po stronie API)
         self._prefer_skip: dict[str, float] = {}      # model preferowany -> do kiedy pomijany (po bledzie)
+        self.cache = cache                             # app/llm/cache.LLMCache albo None
         self._load()
 
     # ------------------------------------------------------------ odkrywanie
@@ -147,6 +162,19 @@ class ModelRouter:
         self.order = pinned + [e for e in merged if not e.pinned]
         self._fallbacks_last()
 
+    MIN_EVIDENCE = 20        # od tylu wywolan model jest ustawiany wg uzytecznosci, a nie wg kolejnosci zdarzen
+
+    def _rebalance(self) -> None:
+        """Modele z wystarczajaca historia (>= MIN_EVIDENCE wywolan) zajmuja swoje miejsca na liscie wg uzytecznosci;
+        nowe i przypiete zostaja tam, gdzie byly. Wywolywane po kazdym wyniku zapytania."""
+        slots = [i for i, e in enumerate(self.order) if not e.pinned and not e.fallback
+                 and e.evidence >= self.MIN_EVIDENCE]
+        if len(slots) < 2:
+            return
+        ranked = sorted((self.order[i] for i in slots), key=lambda e: -e.utility)
+        for i, e in zip(slots, ranked):
+            self.order[i] = e
+
     def _fallbacks_last(self) -> None:
         """Modele zapasowe (lokalna Ollama) zawsze na samym koncu - uzywane dopiero, gdy chmura zawiedzie."""
         self.order = [e for e in self.order if not e.fallback] + [e for e in self.order if e.fallback]
@@ -183,7 +211,7 @@ class ModelRouter:
     async def complete(self, prompt: str, system: str | None = None, json_mode: bool = False,
                        avoid: set[str] | None = None, prefer: list[str] | None = None,
                        prefer_timeout: float | None = None, cloud_only: bool = False,
-                       prefer_only: bool = False) -> LLMResult:
+                       prefer_only: bool = False, cache: bool | None = None) -> LLMResult:
         """avoid: modele ("provider:model"), ktorych lepiej nie uzywac (np. weryfikacja innym modelem niz
         ten, ktory tekst napisal). Gdy zaden inny nie jest dostepny - uzyje ich mimo wszystko.
         prefer: modele do sprobowania NAJPIERW, po kolei (np. Bielik 11B -> Bielik 4.5B do scalania tekstow
@@ -191,12 +219,24 @@ class ModelRouter:
         preferowanego - model za wolny na tym komputerze jest pomijany przez PREFER_SLOW_PAUSE_S.
         cloud_only: bez modeli zapasowych (lokalna Ollama) - gdy wolny lokalny model nie ma sensu (np. scalanie:
         lepiej scalic regulami niz czekac kilkanascie minut na model liczacy na CPU)."""
+        use_cache = self.cache is not None and (json_mode if cache is None else cache)
+        key = self.cache.key(prompt, system, json_mode, prefer, avoid, cloud_only) if use_cache else None
+        if key:
+            hit = self.cache.get(key)
+            if hit is not None:                       # to samo zapytanie juz bylo (np. ponowienie po restarcie)
+                text, provider, model = hit
+                self.recent.append({"ts": time.time(), "model": f"{provider}:{model}", "ok": True, "s": 0.0,
+                                    "cache": True})
+                return LLMResult(text, provider, model, 0.0, [], cached=True)
         job = _beat()                                  # zadanie czeka na model = zyje (wykrywanie zawieszonych)
         try:
-            return await self._complete_all(prompt, system, json_mode, avoid, prefer, prefer_timeout, cloud_only,
-                                            prefer_only)
+            res = await self._complete_all(prompt, system, json_mode, avoid, prefer, prefer_timeout, cloud_only,
+                                           prefer_only)
         finally:
             _beat(job)
+        if key:
+            self.cache.put(key, res.text, res.provider, res.model)
+        return res
 
     async def _complete_all(self, prompt, system, json_mode, avoid, prefer, prefer_timeout, cloud_only,
                             prefer_only) -> LLMResult:
@@ -320,6 +360,7 @@ class ModelRouter:
         e.streak = 0
         e.last_used = time.time()
         e.avg_latency = took if e.avg_latency is None else round(0.8 * e.avg_latency + 0.2 * took, 2)
+        self._rebalance()
         self._save()
 
     def _on_failure(self, e: ModelEntry, exc: LLMError) -> None:
@@ -333,6 +374,12 @@ class ModelRouter:
         e.failures += 1
         e.streak += 1
         e.cooldown_until = now + exc.cooldown_s if exc.cooldown_s else 0.0
+        if isinstance(exc, QuotaExceededError) and not getattr(exc, "explicit", True):
+            # limit dzienny bez podanego czasu: model czeka do odnowienia limitu u dostawcy (dla Gemini polnoc
+            # czasu pacyficznego), a nie 6 h - wczesniejsze proby i tak koncza sie kolejnym 429 (R7)
+            reset = seconds_to_quota_reset(e.provider, now)
+            if reset:
+                e.cooldown_until = now + max(reset, 900.0)
         victims = [e]
         if isinstance(exc, AuthError):  # zly klucz -> caly provider w dol listy
             victims = [x for x in self.order if x.provider == e.provider]
@@ -354,6 +401,7 @@ class ModelRouter:
             log.warning("Model %s zawiodl (%s: %s) - przeniesiony na koniec listy, przerwa %ss", e.key,
                         type(exc).__name__, str(exc)[:120], int(exc.cooldown_s))
         self._fallbacks_last()
+        self._rebalance()
         self._save()
 
     OUTAGE_WINDOW_S = 180.0   # okno obserwacji bledow 5xx
@@ -379,7 +427,8 @@ class ModelRouter:
     # ------------------------------------------------------------ stan
     def snapshot(self) -> list[dict]:
         now = time.time()
-        return [e.to_dict() | {"position": i + 1, "cooldown_s": round(e.cooling(now)), "rating": e.rating}
+        return [e.to_dict() | {"position": i + 1, "cooldown_s": round(e.cooling(now)), "rating": e.rating,
+                               "utility": e.utility}
                 for i, e in enumerate(self.order)]
 
     def _save(self) -> None:
@@ -397,6 +446,7 @@ class ModelRouter:
             data = json.loads(self.state_path.read_text(encoding="utf-8"))
             self.order = [ModelEntry(**d) for d in data.get("order", [])]
             self._fallbacks_last()
+            self._rebalance()
         except (ValueError, TypeError) as exc:
             log.warning("Nie wczytano stanu routera (%s) - zaczynam od zera", exc)
 

@@ -284,3 +284,30 @@ async def agents_plant(request: Request, plant_id: str):
     return templates.TemplateResponse(request, "agents_plant.html", {
         "request": request, "pid": plant_id, "name": name, "hist": hist, "tasks": tasks, "criteria": CRITERIA,
         "flag_labels": FLAG_LABELS, "trend": _trend([(h["run"], h["wynik"]) for h in hist])})
+
+
+
+# ------------------------------------------------------------ bezpieczna aktualizacja (aktualizuj.ps1, R5)
+@router.get("/agents/praca.json")
+async def agents_work_state(request: Request):
+    """Co teraz dziala w tle - dla skryptu aktualizacji (czeka, az zadania skoncza prace)."""
+    from sqlmodel import Session, select
+    from app.db import engine
+    from app.models import Job, JobStatus
+    from app.agents.tasks import NOT_PRODUCTION
+    with Session(engine) as s:
+        rows = s.exec(select(Job).where(Job.status.in_([JobStatus.running, JobStatus.queued]))).all()
+    work = [j for j in rows if not j.kind.startswith(NOT_PRODUCTION)]
+    rt = store.runtime()
+    return {"limit": store.job_limit(request.app.state), "aktualizacja": bool(rt.get("aktualizacja")),
+            "dzialajace": [{"id": j.id, "rodzaj": j.kind, "postep": f"{j.progress or 0}/{j.total or '?'}"}
+                           for j in work if j.status == JobStatus.running],
+            "czeka": sum(1 for j in work if j.status == JobStatus.queued)}
+
+
+@router.post("/agents/aktualizacja")
+async def agents_update(request: Request, akcja: str = Form("start")):
+    """start: wstrzymaj nowe zadania przed przebudowa kontenera; anuluj: wroc do pracy bez aktualizacji."""
+    rt = store.begin_update(request.app.state) if akcja == "start" else store.cancel_update(request.app.state)
+    return {"aktualizacja": bool(rt.get("aktualizacja")), "limit": rt.get("max_jobs"),
+            "limit_przed_aktualizacja": rt.get("limit_przed_aktualizacja")}

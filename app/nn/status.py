@@ -41,6 +41,15 @@ def current_model(s: Session, task: str) -> NNModel | None:
     return s.exec(select(NNModel).where(NNModel.task == task, NNModel.version == st["version"])).first()
 
 
+def human_since(s: Session, task: str, since) -> int:
+    """Przyklady oznaczone przez czlowieka (panel /nn) od chwili `since` (od ostatniego treningu)."""
+    from app.models import NNSample
+    q = select(func.count()).select_from(NNSample).where(NNSample.task == task, NNSample.origin == "czlowiek")
+    if since is not None:
+        q = q.where(NNSample.created_at >= since)
+    return int(s.exec(q).one() or 0)
+
+
 def task_summary(s: Session, task: str, days: int = 7) -> dict:
     spec = TASKS[task]
     st = store.task_state(task)
@@ -71,10 +80,14 @@ def task_summary(s: Session, task: str, days: int = 7) -> dict:
     thr = (metrics.get("threshold") or {}).get("threshold", 1.01)
     ready = (st["mode"] == "cien" and m is not None and thr <= 1.0 and agreement is not None
              and agree + disagree >= 50 and agreement >= settings.nn_target_accuracy - 0.1)
-    retrain = n_now >= spec.min_total and (m is None or new >= settings.nn_retrain_min_new
-                                           or (m.n_train and new / m.n_train >= settings.nn_retrain_growth))
+    human = human_since(s, task, m.created_at if m else None)
+    # R12: ponowny trening ma sens dopiero przy wyraznie wiekszym zbiorze (dawniej co kilkadziesiat przykladow -
+    # 12 treningow, jedna przyjeta wersja) albo gdy czlowiek oznaczyl nowe przypadki (najcenniejsze przyklady)
+    retrain = n_now >= spec.min_total and (
+        m is None or human >= settings.nn_retrain_human
+        or (new >= settings.nn_retrain_min_new and m.n_train and new / m.n_train >= settings.nn_retrain_growth))
     return {
-        "key": task, "spec": spec, "mode": st["mode"], "model": m, "metrics": metrics,
+        "key": task, "spec": spec, "mode": st["mode"], "model": m, "metrics": metrics, "human_new": human,
         "decisions": by_dec, "total": total, "saved": sum(by_dec.get(k, 0) for k in SAVED),
         "agree": agree, "disagree": disagree, "agreement": agreement,
         "audit": (audit_ok / audit_n) if audit_n else None, "audit_n": audit_n,

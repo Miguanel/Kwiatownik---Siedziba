@@ -177,10 +177,45 @@ def _finish(job_id: int, source_id: int, stats: dict) -> None:
         job.stats_json = json.dumps(stats)
         s.add(job)
         s.commit()
+    _check_yield(job_id, source_id)
+
+
+def _url_rows(source_id: int) -> list[tuple[str, bool]]:
+    """(adres, czy przydatna) stron tej witryny juz w bazie - material dla url_model (R10)."""
+    with Session(engine) as s:
+        rows = s.exec(select(Item.url, Item.kind, Item.status).where(Item.source_id == source_id)).all()
+    return [(u, k == ItemKind.fact or (k == ItemKind.recipe and st != ItemStatus.skipped)) for u, k, st in rows if u]
+
+
+def _check_yield(job_id: int, source_id: int) -> str | None:
+    """Zrodlo, ktore po AUTO_OFF_PAGES stronach nie dalo przepisu i prawie zadnych ciekawostek, jest wylaczane
+    (dane zostaja). Gdy uzytkownik wlaczy je potem recznie, nie wylaczamy go drugi raz."""
+    from app.scrapers.url_model import poor_yield
+    with Session(engine) as s:
+        src = s.get(Source, source_id)
+        if src is None or not src.active or src.auto_off_at is not None:
+            return None
+        pages = s.exec(select(func.count()).select_from(Item).where(Item.source_id == source_id)).one()
+    useful = _useful_counts(source_id)
+    why = poor_yield(pages, useful["recipe"], useful["fact"])
+    if why:
+        with Session(engine) as s:
+            src = s.get(Source, source_id)
+            src.active, src.auto_off_reason, src.auto_off_at = False, why[:300], datetime.now(timezone.utc)
+            s.add(src)
+            s.commit()
+        job_log(job_id, f"Zrodlo wylaczone automatycznie: {why}. Wlaczysz je recznie na stronie zrodla.")
+    return why
 
 
 async def _crawl(job_id: int, source_id: int, runner: JobRunner, llm, cfg: CrawlConfig, start_url: str) -> dict:
+    from app.scrapers.url_model import UrlModel
     store = DbStore(job_id, source_id, runner)
+    if cfg.url_model is None:
+        cfg.url_model = UrlModel.train(_url_rows(source_id))
+        if cfg.url_model is not None:
+            store.log(f"Ocena adresow przed pobraniem: model z {cfg.url_model.n_pos + cfg.url_model.n_neg} stron "
+                      f"tej witryny ({cfg.url_model.n_pos} przydatnych) - podobne adresy ida pierwsze")
     if llm is None and not cfg.profile:
         store.log("Uwaga: brak LLM - klasyfikacja tylko heurystykami")
     fetcher = Fetcher(settings.user_agent, settings.request_delay_s, proxy=_proxy(source_id, store))

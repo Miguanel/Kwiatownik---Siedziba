@@ -65,11 +65,49 @@ def sync_kwiatownik(session: Session, plants_dir: Path) -> int:
             session.add(Plant(**p))
             added += 1
         else:
+            if p["nazwa_lat"] and row.nazwa_lat and _species(p["nazwa_lat"]) != _species(row.nazwa_lat):
+                species_changed(session, row, p["nazwa_lat"])
             row.nazwa_pl, row.nazwa_lat = p["nazwa_pl"], p["nazwa_lat"] or row.nazwa_lat
             row.origin = p["origin"]
             session.add(row)
     session.commit()
     return added
+
+
+def _species(lat: str | None) -> str:
+    return " ".join(str(lat or "").lower().split()[:2])
+
+
+def species_changed(session: Session, row: Plant, new_lat: str) -> dict:
+    """Plik rosliny opisuje teraz INNY gatunek niz wiedza zebrana pod tym id (np. tarnina.json byl kopia poziomki
+    i Siedziba zbierala pod "tarnina" wiedze o poziomce). Wiedza starego gatunku przechodzi do rosliny, ktora go
+    opisuje (bez powtorek), a dane identyfikacji (Wikidata, tytuly, zdjecia) sa czyszczone - nastepne zbieranie
+    zacznie od wlasciwego gatunku. Zwraca {"przeniesiono", "odrzucono"}."""
+    from app.models import PlantFact
+    old = _species(row.nazwa_lat)
+    target = next((p for p in session.exec(select(Plant).where(Plant.id != row.id)).all()
+                   if _species(p.nazwa_lat) == old), None)
+    have = {f.fingerprint for f in session.exec(select(PlantFact).where(PlantFact.plant_id == target.id)).all()} \
+        if target else set()
+    out = {"przeniesiono": 0, "odrzucono": 0}
+    for f in session.exec(select(PlantFact).where(PlantFact.plant_id == row.id,
+                                                  col(PlantFact.status) != "rejected")).all():
+        if target is not None and f.fingerprint not in have:
+            f.plant_id = target.id
+            f.status = "verified" if f.status in ("verified", "applied") else f.status
+            have.add(f.fingerprint)
+            out["przeniesiono"] += 1
+        else:
+            f.status, f.reason = "rejected", f"dotyczy innego gatunku ({row.nazwa_lat}), nie {new_lat}"
+            out["odrzucono"] += 1
+        session.add(f)
+    row.wikidata = row.wiki_titles_json = row.names_json = row.photos_json = None
+    row.photos_at = row.last_research_at = None
+    row.coverage, row.gaps_json, row.status = None, None, "idle"
+    row.note = (f"gatunek w pliku zmienil sie z {row.nazwa_lat} na {new_lat}: przeniesiono {out['przeniesiono']} "
+                f"informacji do {target.id if target else '-'}, odrzucono {out['odrzucono']}")[:300]
+    log.warning("Roslina %s: %s", row.id, row.note)
+    return out
 
 
 def ingredient_candidates(session: Session) -> Counter:

@@ -31,6 +31,29 @@
   <div class="card"><b>{{ st.pliki | length }}</b>pliki</div>
 </div>
 
+{# Miernik lejka wiedzy i brama zapisu (ekspertyza 2026-10-14, R3) #}
+<h2>Droga wiedzy na stronę</h2>
+<div class="cards cm-cards">
+  <div class="card"><b>{{ lejek.zebrane }}</b>zebrane<small>czekają na weryfikację</small></div>
+  <div class="card"><b>{{ lejek.sprawdzone }}</b>sprawdzone<small>czekają na zapis do plików</small></div>
+  <div class="card" {% if lejek.w_bramie %}style="outline:2px solid #b3541e"{% endif %}><b>{{ lejek.w_bramie }}</b>zatrzymane w bramie<small>{{ lejek.rosliny_w_bramie }} roślin wstrzymanych</small></div>
+  <div class="card"><b>{{ lejek.czeka_na_commit }}</b>w plikach, przed commitem</div>
+  <div class="card"><b>{{ lejek.w_plikach }}</b>zapisane w plikach roślin<small>łącznie</small></div>
+  <div class="card"><b>{{ lejek.odrzucone }}</b>odrzucone przy weryfikacji</div>
+</div>
+{% if brama.lista %}
+<h3>Brama zapisu: ostatnie odmowy kontroli kopii</h3>
+<p class="muted">Plik rośliny zostaje bez zmian, gdy kopia nie przejdzie kontroli. Po {{ 2 }} odmowach z tego samego powodu roślina jest
+  wstrzymana (zadania i planista ją pomijają), dopóki jej plik się nie zmieni - zwykle trzeba go poprawić ręcznie w Kwiatowniku2.</p>
+<table>
+  <tr><th>roślina</th><th>powód</th><th>odmów z rzędu</th><th>czeka informacji</th><th>stan</th></tr>
+  {% for x in brama.lista %}
+  <tr><td><a href="/plants/{{ x.id }}">{{ x.nazwa or x.id }}</a></td><td>{{ x.powod }}</td><td>{{ x.odmow }}</td>
+    <td>{{ x.informacje }}</td><td>{% if x.zablokowana %}<span class="tag failed">wstrzymana</span>{% else %}<span class="tag queued">ostrzeżenie</span>{% endif %}</td></tr>
+  {% endfor %}
+</table>
+{% endif %}
+
 <div class="cm-go">
   <form method="post" action="/commit" onsubmit="return confirm('Zrobić commit i push? Render zbuduje nową wersję strony.')">
     <button class="big" {% if st.w_toku or st.blokada or not st.pliki %}disabled{% endif %}>{% if st.w_toku %}Commit w toku…{% else %}Zatwierdź commit i wyślij{% endif %}</button>

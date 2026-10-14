@@ -18,7 +18,7 @@ import shutil
 from datetime import date, datetime
 from pathlib import Path
 
-from app.knowledge import merge, organize, photos, placement
+from app.knowledge import gate, merge, organize, photos, placement
 from app.knowledge.sections import SECTIONS, norm_part
 from app.worker import snapshots
 
@@ -156,7 +156,10 @@ def validate_candidate(original: dict | None, cand: dict, pid: str) -> list[str]
     if original is not None:
         own_photos = photos_owned(original)
         for key, val in original.items():
-            if key in ("wiedza", "zdjecia_wiki", "scalone") or (key == "url" and own_photos):
+            # bloki Siedziby (jedna lista: gate.SIEDZIBA_BLOCKS) i galeria, ktora Siedziba sama wstawila
+            if gate.is_siedziba_block(key) or (key == "url" and own_photos):
+                continue
+            if key == "id" and cand.get("id") == pid:      # id wyrownane do nazwy pliku (gate.align_identity)
                 continue
             if key not in cand:
                 errors.append(f"usunieto pole '{key}'")

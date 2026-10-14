@@ -11,6 +11,7 @@
   <label>stron <input name="max_pages" type="number" value="{{ src.max_pages }}" style="width:70px"></label>
   <label>glebokosc <input name="max_depth" type="number" value="{{ src.max_depth }}" style="width:55px"></label>
   <label><input type="checkbox" name="active" value="true" {% if src.active %}checked{% endif %}> aktywne</label>
+  {% if src.auto_off_reason %}<span class="muted" title="wylaczone {{ src.auto_off_at }}">{% if src.active %}włączone ręcznie po automatycznym wyłączeniu ({{ src.auto_off_reason }}) - Siedziba nie wyłączy go ponownie{% else %}wyłączone automatycznie: {{ src.auto_off_reason }}{% endif %}</span>{% endif %}
   <label title="codzienny automatyczny skan"><input type="checkbox" name="auto_scan" value="true" {% if src.auto_scan %}checked{% endif %}> auto (co dzien)</label>
   <button>Zapisz</button>
 </form>
