@@ -579,3 +579,90 @@ def test_phased_scan_probe_profile_harvest(tmp_path, monkeypatch):
         assert s.get(Source, sid).profile_status == "ready" and LLM.profile_calls >= 1
         assert len(s.exec(select(Item).where(Item.kind == ItemKind.recipe)).all()) == 3
         assert _json.loads(job.stats_json)["profile_ok"] is True
+
+
+def test_translate_list_remembers_done_recipes_after_stop(tmp_path, monkeypatch):
+    """Lista 20 przepisow, zadanie zatrzymane w polowie: ponowienie i ponowne uruchomienie tej samej listy
+    tlumacza tylko to, co dalej czeka (status przepisu + punkty kontrolne zadania)."""
+    import json
+
+    import app.worker.actions as act
+    import app.worker.export as exp
+    import app.worker.jobs as jobs_mod
+    from app.config import settings
+    from app.models import ItemStatus
+
+    eng = create_engine(f"sqlite:///{(tmp_path / 't.db').as_posix()}")
+    SQLModel.metadata.create_all(eng)
+    for m in (exp, jobs_mod, act):
+        monkeypatch.setattr(m, "engine", eng)
+    monkeypatch.setattr(settings, "kwiatownik_przepisy_dir", tmp_path)
+    monkeypatch.setattr(settings, "kwiatownik_plants_dir", tmp_path)
+    with Session(eng) as s:
+        items = [Item(url=f"https://s.example/{n}", kind=ItemKind.recipe, title=f"r{n}", raw_text="...")
+                 for n in range(20)]
+        s.add_all(items)
+        job = Job(kind="translate", status=JobStatus.running)
+        s.add(job)
+        s.commit()
+        ids, jid = [i.id for i in items], job.id
+        job.params_json = json.dumps({"limit": None, "item_ids": ids, "force": False})
+        s.add(job)
+        s.commit()
+
+    seen = []
+
+    async def fake_one(iid, llm, plants, kw_cands, kw_ids, log):
+        seen.append(iid)
+        with Session(eng) as s:
+            it = s.get(Item, iid)
+            if len(seen) == 3:
+                it.status = ItemStatus.skipped           # np. "brak konkretnego przepisu"
+                out = "no_recipe"
+            elif len(seen) == 4:
+                return "postponed"                       # limit modeli - zostaje do tlumaczenia
+            else:
+                it.status, out = ItemStatus.translated, "translated"
+            s.add(it)
+            s.commit()
+        return out
+
+    class Stop:                                          # recznie zatrzymane po 8 przepisach
+        def should_stop(self, job_id):
+            return len(seen) >= 8
+
+    monkeypatch.setattr(exp, "translate_one", fake_one)
+    monkeypatch.setattr(exp, "get_translator", lambda: None)
+    asyncio.run(exp.run_translate(jid, Stop(), object(), item_ids=ids))
+    assert seen == ids[:8]
+    with Session(eng) as s:
+        job = s.get(Job, jid)
+        assert json.loads(job.state_json)["done"] == [i for i in ids[:8] if i != ids[3]]   # odlozony - nie
+        job.status = JobStatus.cancelled
+        s.add(job)
+        s.commit()
+
+    started = {}
+    monkeypatch.setattr(act, "start_translate", lambda state, limit, item_ids, retry_of=None, force=False:
+                        started.update(ids=item_ids, force=force) or 77)
+    assert act.retry_job(None, jid) == 77                 # ponowienie: bez 7 skonczonych
+    assert started["ids"] == [ids[3]] + ids[8:] and started["force"] is False
+
+    # ta sama lista 20 uruchomiona od nowa (nowe zadanie bez punktow kontrolnych) - status przepisow wystarcza
+    seen.clear()
+
+    class Go:
+        def should_stop(self, job_id):
+            return False
+    with Session(eng) as s:
+        job2 = Job(kind="translate", status=JobStatus.running)
+        s.add(job2)
+        s.commit()
+        jid2 = job2.id
+    asyncio.run(exp.run_translate(jid2, Go(), object(), item_ids=ids))
+    assert seen == [ids[3]] + ids[8:]
+    with Session(eng) as s:
+        assert "Pomijam 7 z 20" in (s.get(Job, jid2).log or "")
+    seen.clear()                                          # reczne "Przetlumacz ponownie" jednego przepisu - mimo statusu
+    asyncio.run(exp.run_translate(jid2, Go(), object(), item_ids=[ids[0]], force=True))
+    assert seen == [ids[0]]

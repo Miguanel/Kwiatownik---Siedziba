@@ -24,7 +24,7 @@ from app.mt.nllb import MTQualityError, MTUnavailable, get_translator
 from app.pipeline.fast_translate import can_fast_translate, fast_translate_recipe
 from app.pipeline.translate import NoRecipeError, skip_reason, translate_recipe
 from app.worker import activity, snapshots
-from app.worker.jobs import job_log
+from app.worker.jobs import checkpoint, job_log
 from app.worker.runner import JobRunner
 
 
@@ -251,12 +251,37 @@ def items_without_enrichment(limit: int | None = None, session: Session | None =
     return ids[:limit] if limit else ids
 
 
+def pending_items(ids: list[int], kind: str) -> list[int]:
+    """Z listy wybranych przepisow tylko te, ktore dalej czekaja: do tlumaczenia surowe i nieudane, do opracowania
+    przetlumaczone bez opracowania. Przepisy zrobione wczesniej (np. w przerwanym zadaniu) nie ida drugi raz."""
+    if not ids:
+        return []
+    with Session(engine) as s:
+        rows = {it.id: it for it in s.exec(select(Item).where(col(Item.id).in_(ids))).all()}
+    if kind == "translate":
+        ok = lambda it: it.status in (ItemStatus.raw, ItemStatus.error) and it.duplicate_of is None  # noqa: E731
+    else:
+        wait = set(items_without_enrichment())
+        ok = lambda it: it.id in wait  # noqa: E731
+    return [i for i in ids if i in rows and ok(rows[i])]
+
+
+def _only_pending(ids: list[int], kind: str, log) -> list[int]:
+    left = pending_items(ids, kind)
+    if len(left) < len(ids):
+        log(f"Pomijam {len(ids) - len(left)} z {len(ids)} wybranych przepisow - juz zrobione wczesniej "
+            f"(albo pominiete / zatwierdzone). Zostaje {len(left)}.")
+    return left
+
+
 async def run_enrich(job_id: int, runner: JobRunner, llm, limit: int | None = None,
-                     item_ids: list[int] | None = None) -> dict:
+                     item_ids: list[int] | None = None, force: bool = False) -> dict:
     if llm is None:
         raise RuntimeError("Opracowanie wymaga LLM - ustaw klucze GEMINI/GROQ w .env")
-    ids = list(item_ids) if item_ids else items_without_enrichment(limit or settings.translate_batch)
     log = lambda m: job_log(job_id, m)  # noqa: E731
+    ids = list(item_ids) if item_ids else items_without_enrichment(limit or settings.translate_batch)
+    if item_ids and not force:
+        ids = _only_pending(ids, "enrich", log)
     log(f"Do opracowania: {len(ids)} przepisow; systemy: {', '.join(parse_systems(settings.enrich_systems))}")
     stats = {"enriched": 0, "error": 0, "postponed": 0, "skipped": 0}
     postponed_in_row = 0
@@ -270,6 +295,8 @@ async def run_enrich(job_id: int, runner: JobRunner, llm, limit: int | None = No
         activity.set(job_id, f"opracowuje {n}/{len(ids)}", f"#{iid}")
         outcome = await enrich_one(iid, llm, log)
         stats[outcome] += 1
+        if outcome != "postponed":                     # odlozone (limity modeli) - ponowienie sprobuje znowu
+            checkpoint(job_id, iid)
         postponed_in_row = postponed_in_row + 1 if outcome == "postponed" else 0
         _progress(job_id, n, len(ids))
     log("Statystyki: " + ", ".join(f"{k}={v}" for k, v in stats.items()))
@@ -278,7 +305,9 @@ async def run_enrich(job_id: int, runner: JobRunner, llm, limit: int | None = No
 
 
 async def run_translate(job_id: int, runner: JobRunner, llm, limit: int | None = None,
-                        item_ids: list[int] | None = None) -> dict:
+                        item_ids: list[int] | None = None, force: bool = False) -> dict:
+    """force=False: z wybranej listy tylko przepisy, ktore dalej czekaja (surowe / nieudane). force=True - reczne
+    "Przetlumacz ponownie" konkretnego przepisu. Kazdy skonczony przepis to punkt kontrolny dla ponowienia."""
     mt = get_translator()
     if llm is None and not (mt and mt.model_present()):
         raise RuntimeError("Tlumaczenie wymaga LLM (klucze GEMINI/GROQ w .env) albo modelu NLLB (MT_ENGINE=nllb)")
@@ -290,6 +319,8 @@ async def run_translate(job_id: int, runner: JobRunner, llm, limit: int | None =
                 Item.kind == ItemKind.recipe, Item.status == ItemStatus.raw, col(Item.duplicate_of).is_(None))
                 .order_by(col(Item.confidence).desc(), col(Item.id)).limit(limit or settings.translate_batch)).all())
     log = lambda m: job_log(job_id, m)  # noqa: E731
+    if item_ids and not force:
+        ids = _only_pending(ids, "translate", log)
     plants = load_plants(settings.kwiatownik_plants_dir)
     kw_recipes = load_kwiatownik_recipes(settings.kwiatownik_przepisy_dir, exclude={settings.export_filename})
     kw_cands = [Candidate("kwiatownik", r.ref, r.title, r.ingredients) for r in kw_recipes]
@@ -318,6 +349,8 @@ async def run_translate(job_id: int, runner: JobRunner, llm, limit: int | None =
         activity.set(job_id, f"tlumacze i sprawdzam {n}/{len(ids)}", title)
         outcome = await translate_one(iid, llm, plants, kw_cands, kw_ids, log)
         stats[outcome] += 1
+        if outcome != "postponed":                     # odlozone (limity modeli) zostaja "do tlumaczenia"
+            checkpoint(job_id, iid)
         postponed_in_row = postponed_in_row + 1 if outcome == "postponed" else 0
         _progress(job_id, n, len(ids))
     log("Statystyki: " + ", ".join(f"{k}={v}" for k, v in stats.items()))

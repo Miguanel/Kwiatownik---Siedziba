@@ -140,17 +140,18 @@ def start_discover(state, country: str, cfg: DiscoveryConfig, auto_add: bool = F
 
 
 def start_translate(state, limit: int | None = None, item_ids: list[int] | None = None,
-                    retry_of: int | None = None) -> int:
+                    retry_of: int | None = None, force: bool = False) -> int:
+    """force=True: przetlumacz wybrane przepisy nawet, jesli byly juz tlumaczone (reczne "ponownie")."""
     return _create(state, None, "translate", len(item_ids) if item_ids else limit, dedupe=not item_ids,
-                   work_factory=lambda jid, runner, llm: run_translate(jid, runner, llm, limit, item_ids),
-                   params={"limit": limit, "item_ids": item_ids}, retry_of=retry_of)
+                   work_factory=lambda jid, runner, llm: run_translate(jid, runner, llm, limit, item_ids, force),
+                   params={"limit": limit, "item_ids": item_ids, "force": force}, retry_of=retry_of)
 
 
 def start_enrich(state, limit: int | None = None, item_ids: list[int] | None = None,
-                 retry_of: int | None = None) -> int:
+                 retry_of: int | None = None, force: bool = False) -> int:
     return _create(state, None, "enrich", len(item_ids) if item_ids else limit, dedupe=not item_ids,
-                   work_factory=lambda jid, runner, llm: run_enrich(jid, runner, llm, limit, item_ids),
-                   params={"limit": limit, "item_ids": item_ids}, retry_of=retry_of)
+                   work_factory=lambda jid, runner, llm: run_enrich(jid, runner, llm, limit, item_ids, force),
+                   params={"limit": limit, "item_ids": item_ids, "force": force}, retry_of=retry_of)
 
 
 def start_import_k1(state, limit: int | None = None, retry_of: int | None = None) -> int:
@@ -279,6 +280,13 @@ def retry_job(state, job_id: int) -> int | None:
             return None
         job_log(job_id, f"Ponowienie od punktu kontrolnego: pomijam {len(p['plant_ids']) - len(left)} skonczonych roslin")
         p["plant_ids"] = left
+    if done and kind in ("translate", "enrich") and p.get("item_ids"):
+        left = [x for x in p["item_ids"] if x not in done]
+        if not left:
+            job_log(job_id, f"Wszystkie przepisy tego zadania byly juz zrobione ({len(done)}) - nie ma czego ponawiac")
+            return None
+        job_log(job_id, f"Ponowienie od punktu kontrolnego: pomijam {len(p['item_ids']) - len(left)} zrobionych przepisow")
+        p["item_ids"] = left
     if kind == "scan" and sid:
         new = start_scan(state, sid, p.get("max_pages"), resume_from=job_id if has_frontier else None,
                          retry_of=job_id)
@@ -311,11 +319,11 @@ def retry_job(state, job_id: int) -> int | None:
         cfg = DiscoveryConfig(**p["cfg"]) if p.get("cfg") else DiscoveryConfig()
         new = start_discover(state, country, cfg, p.get("auto_add", False), retry_of=job_id)
     elif kind == "translate":
-        new = start_translate(state, p.get("limit"), p.get("item_ids"), retry_of=job_id)
+        new = start_translate(state, p.get("limit"), p.get("item_ids"), retry_of=job_id, force=bool(p.get("force")))
     elif kind == "import_k1":
         new = start_import_k1(state, p.get("limit"), retry_of=job_id)
     elif kind == "enrich":
-        new = start_enrich(state, p.get("limit"), p.get("item_ids"), retry_of=job_id)
+        new = start_enrich(state, p.get("limit"), p.get("item_ids"), retry_of=job_id, force=bool(p.get("force")))
     elif kind.startswith("ollama_pull:"):
         new = start_ollama_pull(state, p.get("model") or kind.split(":", 1)[1], retry_of=job_id)
     elif kind == "fb_post":

@@ -257,10 +257,10 @@ async def items_bulk(request: Request, action: str = Form(...), ids: list[int] =
         return _redirect(f"/jobs/{jobs[0]}" if len(jobs) == 1 else "/jobs")
     if action == "translate":
         rec = [it.id for it in items if it.kind == ItemKind.recipe]
-        return _redirect(f"/jobs/{actions.start_translate(state, item_ids=rec)}" if rec else back)
+        return _redirect(f"/jobs/{actions.start_translate(state, item_ids=rec, force=True)}" if rec else back)
     if action == "enrich":
         rec = [it.id for it in items if it.kind == ItemKind.recipe and it.data_json]
-        return _redirect(f"/jobs/{actions.start_enrich(state, item_ids=rec)}" if rec else back)
+        return _redirect(f"/jobs/{actions.start_enrich(state, item_ids=rec, force=True)}" if rec else back)
     new_status = {"approve": ItemStatus.approved, "reject": ItemStatus.skipped, "raw": ItemStatus.raw}.get(action)
     if new_status:
         for it in items:

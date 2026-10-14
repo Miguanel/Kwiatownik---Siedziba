@@ -72,3 +72,32 @@ def retry_depth(job_id: int) -> int:
             depth += 1
             job = s.get(Job, job.retry_of)
     return depth
+
+
+def checkpoint(job_id: int, key) -> None:
+    """Punkt kontrolny: pozycja (roslina, przepis) skonczona w tym zadaniu - ponowienie (actions.retry_job) ja pomija."""
+    import json
+    with Session(engine) as s:
+        job = s.get(Job, job_id)
+        if job is None:
+            return
+        try:
+            st = json.loads(job.state_json) if job.state_json else {}
+        except ValueError:
+            st = {}
+        done = st.setdefault("done", [])
+        if key not in done:
+            done.append(key)
+            job.state_json = json.dumps(st, ensure_ascii=False)
+            s.add(job)
+            s.commit()
+
+
+def done_keys(job: Job) -> list:
+    """Pozycje zapisane jako skonczone (checkpoint) w zadaniu."""
+    import json
+    try:
+        return list((json.loads(job.state_json) if job.state_json else {}).get("done") or [])
+    except ValueError:
+        return []
+

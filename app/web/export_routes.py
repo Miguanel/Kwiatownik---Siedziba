@@ -66,7 +66,7 @@ async def export_enrich(request: Request, limit: int = Form(20)):
 
 @router.post("/items/{iid}/enrich")
 async def item_enrich(iid: int, request: Request):
-    return _back(f"/jobs/{actions.start_enrich(request.app.state, item_ids=[iid])}")
+    return _back(f"/jobs/{actions.start_enrich(request.app.state, item_ids=[iid], force=True)}")
 
 
 @router.post("/export/run")
@@ -85,7 +85,7 @@ def export_approve_all(session: Session = Depends(get_session)):
 
 @router.post("/items/{iid}/translate")
 async def item_translate(iid: int, request: Request):
-    return _back(f"/jobs/{actions.start_translate(request.app.state, item_ids=[iid])}")
+    return _back(f"/jobs/{actions.start_translate(request.app.state, item_ids=[iid], force=True)}")
 
 
 @router.post("/items/{iid}/not-duplicate")
