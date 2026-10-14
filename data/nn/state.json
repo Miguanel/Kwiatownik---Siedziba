@@ -6,7 +6,7 @@
     },
     "fact_part": {
       "mode": "cien",
-      "version": 5
+      "version": 7
     },
     "page_kind": {
       "mode": "cien",
@@ -14,7 +14,7 @@
     },
     "recipe_type": {
       "mode": "cien",
-      "version": 7
+      "version": 9
     }
   }
 }
