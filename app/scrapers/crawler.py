@@ -54,6 +54,8 @@ class CrawlConfig:
     stop_when: dict | None = None   # etap rozpoznania: np. {"recipe": 5, "fact": 5} - stop po zebraniu probek
     harvest: bool = False           # pelne pobieranie strony z profilem: sitemapy zawsze, tylko adresy z profilu
     url_model: object | None = None  # app/scrapers/url_model.UrlModel - ocena adresu przed pobraniem (R10)
+    max_pending: int = 6            # najwyzej tyle stron czeka na klasyfikacje (LLM) - pobieranie czeka na nie
+    drain_timeout_s: float = 300.0  # po pobraniu limitu stron: najdluzej tyle czekamy na klasyfikacje reszty
 
 
 @dataclass
@@ -219,6 +221,9 @@ class SmartCrawler:
             if self.store.should_stop():
                 self.store.log("Zatrzymano na zadanie uzytkownika")
                 break
+            # pobieranie nie wyprzedza klasyfikacji: gdy LLM jest wolny (limity, model lokalny), dawniej 150 stron
+            # pobieralo sie w kilka minut, a potem zadanie "wisialo" godzinami na 150/150, czekajac na klasyfikacje
+            await self._throttle()
             if self._targets_reached():
                 self.store.log("Rozpoznanie zakonczone: zebrano probki " + ", ".join(
                     f"{k}={self.stats.get(k, 0)}/{v}" for k, v in self.cfg.stop_when.items()))
@@ -234,13 +239,13 @@ class SmartCrawler:
                 self._reprioritize()
                 self._save_frontier()
                 since_reprio = 0
-            self.store.progress(self.stats["fetched"], self.cfg.max_pages)
+            self.store.progress(self.stats["fetched"] - self._pending(), self.cfg.max_pages)
 
         if self._tasks:
             if self.store.should_stop():  # zatrzymanie: nie czekaj na klasyfikacje (LLM moze czekac minutami)
                 for t in self._tasks:
                     t.cancel()
-            await asyncio.gather(*self._tasks, return_exceptions=True)
+            await self._drain()
         self._save_frontier()
         self.store.save_patterns(self.book.stats)
         if self.profile:
@@ -249,6 +254,34 @@ class SmartCrawler:
         self.store.log(f"Koniec. Wzorce z trafieniami: {best or 'brak'}")
         self.store.log("Statystyki: " + ", ".join(f"{k}={v}" for k, v in self.stats.items()))
         return self.stats
+
+    def _pending(self) -> int:
+        self._tasks = [t for t in self._tasks if not t.done()]
+        return len(self._tasks)
+
+    async def _throttle(self) -> None:
+        """Czeka, az liczba stron czekajacych na klasyfikacje spadnie ponizej max_pending."""
+        while self._pending() >= max(1, self.cfg.max_pending) and not self.store.should_stop():
+            self._act(f"klasyfikuje strony: {len(self._tasks)} czeka na model", "")
+            self.store.progress(self.stats["fetched"] - len(self._tasks), self.cfg.max_pages)
+            await asyncio.wait(self._tasks, return_when=asyncio.FIRST_COMPLETED)
+
+    async def _drain(self) -> None:
+        """Konczy klasyfikacje pobranych stron, najdluzej drain_timeout_s. Strony niesklasyfikowane nie sa zapisywane
+        - nastepny skan znajdzie je ponownie (linki, sitemapa), wiec nic nie przepada, a zadanie sie konczy."""
+        waiting = self._pending()
+        if not waiting:
+            return
+        self._act(f"koncze klasyfikacje: {waiting} stron", "")
+        done, pending = await asyncio.wait(self._tasks, timeout=max(0.0, self.cfg.drain_timeout_s))
+        if pending:
+            for t in pending:
+                t.cancel()
+            await asyncio.gather(*pending, return_exceptions=True)
+            self.stats["unclassified"] = len(pending)
+            self.store.log(f"Klasyfikacja {len(pending)} stron nie zmiescila sie w {int(self.cfg.drain_timeout_s)} s "
+                           "(modele zajete) - wroca przy nastepnym skanie")
+        self.store.progress(self.stats["fetched"], self.cfg.max_pages)
 
     async def _process(self, item: _QItem, pattern: str) -> None:
         if not await self.fetcher.allowed(item.url):

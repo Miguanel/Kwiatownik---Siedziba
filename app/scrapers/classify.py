@@ -12,6 +12,7 @@ import logging
 import re
 from dataclasses import dataclass
 
+from app.llm import supported
 from app.scrapers.page import PageData
 
 log = logging.getLogger(__name__)
@@ -254,7 +255,8 @@ async def classify(page: PageData, keywords: list[str], llm=None, skip_culinary:
         prompt = (f"URL: {page.url}\nTITLE: {title}\nHEADINGS: {' | '.join(page.headings[:15])}\n"
                   f"TEXT (beginning):\n{page.text[:2500]}")
         try:
-            res = await llm.complete(prompt, system=SYSTEM_PROMPT, json_mode=True)
+            # bez lokalnej Ollamy: kilkanascie minut na strone to gorzej niz siec neuronowa albo heurystyki ponizej
+            res = await llm.complete(prompt, system=SYSTEM_PROMPT, json_mode=True, **supported(llm, cloud_only=True))
             data = json.loads(res.text.strip().removeprefix("```json").removesuffix("```"))
             kind = data.get("type") if data.get("type") in ("recipe", "fact", "other") else "other"
             if kind == "other" and str(data.get("reason", "")).lower().startswith("culinary"):

@@ -151,6 +151,12 @@ class Settings(BaseSettings):
     agents_stall_minutes: int = 30       # zadanie bez znaku zycia (log, krok, zapytanie do LLM) tak dlugo = zawieszone
     agents_stall_action: str = "stop"    # stop = zatrzymaj zawieszone zadanie; report = tylko zglos w historii
     agents_max_llm_jobs: int = 2         # agenci nie zlecaja nowych zadan z LLM, gdy tyle juz dziala (modele sie dlawia)
+    # kampanie "od A do Z" (app/agents/focus.py): planista prowadzi kilka roslin i jedno zrodlo przez caly potok,
+    # zanim zacznie nastepne - zamiast skakac po zadaniach
+    agents_focus: bool = True            # wylaczone = dawny ranking bez kampanii
+    agents_focus_plants: int = 3         # ile roslin naraz w kampanii roslin
+    agents_focus_hours: int = 18         # kampania, ktora nie domknela sie przez tyle godzin, ustepuje nastepnej
+    agents_translate_wip: int = 60       # tyle przepisow czeka na tlumaczenie = nie zbieraj nowych (skany, pobieranie)
 
     # --- Backend Kwiatownika na Render (liczniki strony, papirus na zywo) ---
     backend_url: str = ""                # np. https://kwiatownik-backend.onrender.com (puste = wylaczone)

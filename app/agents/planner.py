@@ -5,6 +5,9 @@ Co AGENTS_CHECK_MINUTES (petla w tle) sprawdza kolejke. Uklada ranking propozycj
   2. zalecenia audytu czekajace na zlecenie (wiedza trudno dostepna i opowiesci - cel Kwiatownika),
   3. domykanie potoku z listy "Zadania do zrobienia" (zapis i scalenie wiedzy, eksport, tlumaczenie, skany...),
   4. awaryjnie: zbieranie wiedzy o roslinach z najwiekszymi lukami (zeby kolejka nigdy nie stala).
+Kampanie "od A do Z" (app/agents/focus.py) przestawiaja ten ranking: kilka roslin i jedno zrodlo przechodzi caly
+potok, zanim planista zacznie nastepne; praca bez efektu nie jest powtarzana, a przy duzej kolejce tlumaczen nowe
+skany czekaja.
 W trybie automatycznym, gdy nie dziala zadne zadanie produkcyjne, zleca JEDNO - najlepsze z rankingu.
 Po 3 nieudanych zleceniach z rzedu robi przerwe (AGENTS_FAIL_PAUSE_MIN). Decyzje sa w historii (/agents).
 Zadania wymagajace decyzji czlowieka (zatwierdzanie przepisow, dodawanie/wylaczanie zrodel) nie sa zlecane.
@@ -92,12 +95,16 @@ def _audit_worth_it(audit: AgentRun, age: timedelta) -> bool:
     return funnel.counts()["w_plikach"] - before >= settings.agents_audit_min_new
 
 
-def candidates(state, limit_items: int = 30, load: dict | None = None) -> list[Proposal]:
+def candidates(state, limit_items: int = 200, load: dict | None = None, info: dict | None = None) -> list[Proposal]:
+    """Ranking propozycji. info (opcjonalnie) dostaje stan kampanii ("kampania") do raportu planisty."""
+    from app.agents import focus as focus_mod
     from app.worker.jobs import retry_depth
     from app.worker.suggestions import build_groups
 
     has_llm = getattr(state, "llm", None) is not None
     out: list[Proposal] = []
+    groups = build_groups(limit=limit_items)
+    by_key = {g.key: g for g in groups}
     with Session(engine) as s:
         audit = store.last_run("audytor")
         failed = _failed_keys(s)
@@ -113,25 +120,36 @@ def candidates(state, limit_items: int = 30, load: dict | None = None) -> list[P
         # zalecenia audytu
         tasks = s.exec(select(AgentTask).where(AgentTask.agent == "audytor", AgentTask.status == "proposed")
                        .order_by(AgentTask.priority, col(AgentTask.id)).limit(8)).all()
+        foc = focus_mod.build(s, by_key, list(tasks))
+        if foc.on and foc.tasks:                       # zalecenia, dla ktorych wybrano rosliny kampanii
+            known = {t.id for t in tasks}
+            tasks = list(tasks) + [t for t in s.exec(select(AgentTask).where(col(AgentTask.id).in_(foc.tasks))).all()
+                                   if t.id not in known]
+        retry_src = focus_mod.failed_sources(s, by_key)
+        tried = {k: focus_mod.tried(s, k) for k in ("zapis", "porzadkuj", "scal", "zdjecia")} if foc.on else {}
+        covered: dict[str, set] = {}                   # rodzaj -> rosliny z wyzszych zalecen tego samego rodzaju
         for t in tasks:
             if needs_llm(t.kind) and not has_llm:
                 continue
             p = params(t)
             if t.kind in PLANT_KINDS and p.get("rosliny"):
-                recent = recently_ordered(s, t.kind, settings.agents_reorder_days)
+                recent = recently_ordered(s, t.kind, settings.agents_reorder_days) | covered.get(t.kind, set())
                 if all(x in recent for x in p["rosliny"]):
-                    continue
+                    continue                           # juz zlecone albo w calosci w innym zaleceniu (np. 129 w 127)
+                covered.setdefault(t.kind, set()).update(p["rosliny"])
             # zalecenia audytu (cel: wiedza trudno dostepna, opowiesci) - za zapisem/porzadkowaniem/scaleniem juz
             # zebranej wiedzy (tanie, a od razu widoczne w Kwiatowniku), przed reszta potoku
             out.append(Proposal(f"task:{t.id}", t.kind, t.title, t.reason or "", 79 - 4 * t.priority, "audyt", p, t.id))
     # domykanie potoku (lista "Zadania do zrobienia")
-    for g in build_groups(limit=limit_items):
+    for g in groups:
         if g.key not in GROUPS or not g.items or f"grupa:{g.key}" in failed:
             continue
         kind, n, score = GROUPS[g.key]
         if needs_llm(kind) and not has_llm:
             continue
         free = [i for i in g.items if not i.status]
+        if kind in tried:                              # ten sam rodzaj niedawno sie wykonal, a roslina dalej czeka
+            free = [i for i in free if i.id not in tried[kind]]
         if not free:
             continue
         if kind == "ponow":
@@ -143,6 +161,7 @@ def candidates(state, limit_items: int = 30, load: dict | None = None) -> list[P
                     and retry_depth(int(i.id)) < settings.max_auto_retries]
             if not free:
                 continue
+        free = focus_mod.order_items(g.key, free, foc, retry_src)
         pick = free[:n] if n else free[:1]
         if kind in PLANT_KINDS:
             p = {"rosliny": [i.id for i in pick], "nazwy": [str(i.label or i.id) for i in pick]}
@@ -181,6 +200,9 @@ def candidates(state, limit_items: int = 30, load: dict | None = None) -> list[P
             if b:
                 p.score += b
                 p.why = f"{p.why} [wartosc na minute: {b:+.1f}]"
+    out = focus_mod.adjust(out, foc, retry_src)
+    if info is not None:
+        info["kampania"] = foc.report()
     load = load if load is not None else watchdog.llm_load(state)
     if load.get("overloaded"):                         # modele sie dlawia -> najpierw zadania bez LLM
         for p in out:
@@ -277,7 +299,8 @@ def run_planner(state, trigger: str = "auto", execute: bool | None = None, force
     auto = store.runtime().get("auto", True)
     execute = auto if execute is None else execute
     load = watchdog.llm_load(state)
-    props = candidates(state, load=load)
+    info: dict = {}
+    props = candidates(state, load=load, info=info)
     cap = store.job_limit(state)
     with Session(engine) as s:
         busy = production_jobs(s)
@@ -323,6 +346,7 @@ def run_planner(state, trigger: str = "auto", execute: bool | None = None, force
                 break
         report = {"stan": state_info, "propozycje": [asdict(p) for p in props[:12]], "decyzja": decision.split(": ", 1)[1],
                   "zlecono": ordered, "proby": log_lines, "straznik": events, "llm": load,
+                  "kampania": info.get("kampania"),
                   "sygnatura": _signature(decision, props, ordered, events)}
         for line in log_lines + ([watchdog.summary(events)] if events else []):
             store.run_log(run_id, line)
@@ -331,6 +355,7 @@ def run_planner(state, trigger: str = "auto", execute: bool | None = None, force
 
     report = {"stan": state_info, "propozycje": [asdict(p) for p in props[:12]], "decyzja": decision.split(": ", 1)[1],
               "zlecono": None, "proby": [], "straznik": events, "llm": load,
+              "kampania": info.get("kampania"),
               "sygnatura": _signature(decision, props, None, events)}
     with Session(engine) as s:                     # to samo co ostatnio -> tylko licznik powtorzen (bez zasmiecania)
         last = s.exec(select(AgentRun).where(AgentRun.agent == "planista").order_by(col(AgentRun.id).desc())).first()

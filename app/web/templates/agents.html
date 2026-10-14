@@ -83,6 +83,35 @@
 </table></div>
 {% endif %}
 
+{% set k = plan.kampania if plan else None %}
+{% if k and k.on %}
+<div class="ag-section"><h2>Kampanie "od A do Z"</h2><span class="muted">planista prowadzi te rosliny i to zrodlo przez caly potok, zanim zacznie nastepne</span></div>
+<div class="ag-grid wide">
+  <div class="ag-card fc-card fc-plants">
+    <h3>Rosliny{% if k.plants_hours is not none %} <span class="muted">{{ "od chwili" if k.plants_hours < 0.1 else "od " ~ k.plants_hours ~ " h" }}</span>{% endif %}</h3>
+    {% if k.plants %}<ol class="fc-stages">{% for p in k.plants %}{% set st = k.stages.get(p, '') %}
+      <li><a href="/agents/plants/{{ p }}">{{ k.names.get(p, p) }}</a>
+        <span class="fc-chip fc-{{ 'done' if st == 'gotowe' else ('run' if st == 'w toku' else 'todo') }}">{{ st }}</span></li>{% endfor %}</ol>
+      <p class="muted fc-path">badania &rarr; zapis &rarr; porzadkowanie &rarr; scalanie &rarr; zdjecia</p>
+    {% else %}<p class="muted">Brak roslin z praca do domkniecia.</p>{% endif %}
+  </div>
+  <div class="ag-card fc-card fc-source">
+    <h3>Zrodlo{% if k.source_hours is not none %} <span class="muted">{{ "od chwili" if k.source_hours < 0.1 else "od " ~ k.source_hours ~ " h" }}</span>{% endif %}</h3>
+    {% if k.source %}<p><a href="/sources/{{ k.source }}"><b>{{ k.source_name }}</b></a></p>
+      <p><span class="fc-chip fc-{{ 'run' if k.source_stage == 'w toku' else 'todo' }}">{{ k.source_stage }}</span></p>
+      <p class="muted fc-path">skan &rarr; scraper &rarr; pobranie calej strony &rarr; tlumaczenie</p>
+    {% else %}<p class="muted">Zadne zrodlo nie czeka na skan ani scraper.</p>{% endif %}
+    <p class="{{ 'ag-down' if k.wip_hold else 'muted' }}">Do tlumaczenia: <b>{{ k.backlog }}</b> przepisow
+      {% if k.wip_hold %}- nowe skany i pobieranie czekaja (limit {{ k.wip_limit }}){% else %}(limit {{ k.wip_limit }}){% endif %}</p>
+  </div>
+  {% if k.history %}<div class="ag-card fc-card">
+    <h3>Ostatnie kampanie</h3>
+    <ul class="ag-list">{% for h in k.history[:5] %}<li><b>{{ 'Rosliny' if h.typ == 'rosliny' else 'Zrodlo' }}:</b> {{ h.co|join(', ') }}
+      <span class="muted">- {{ h.wynik }}, {{ h.godzin }} h</span></li>{% endfor %}</ul>
+  </div>{% endif %}
+</div>
+{% endif %}
+
 <div class="ag-section"><h2>Propozycje planisty</h2>
   {% if plan %}<span class="muted">{{ last.planista.updated_at|dt if last.planista.updated_at else '' }} - {{ plan.decyzja }}</span>{% endif %}</div>
 {% if plan and plan.propozycje %}{{ proposals(plan.propozycje[:6]) }}{% else %}

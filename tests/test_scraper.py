@@ -277,3 +277,26 @@ def test_probe_stops_after_collecting_samples():
     full = crawl(MemoryStore(), max_pages=30)
     probe = crawl(MemoryStore(), max_pages=30, stop_when={"recipe": 2})
     assert probe["recipe"] >= 2 and probe["fetched"] < full["fetched"]
+
+
+def test_fetching_waits_for_slow_classification_and_drain_has_deadline(monkeypatch):
+    """Skan nie "wisi" na 150/150: pobieranie czeka na klasyfikacje (max_pending), a po limicie stron
+    niesklasyfikowane strony sa porzucane po drain_timeout_s (wroca przy nastepnym skanie)."""
+    import app.scrapers.crawler as crawler_mod
+    from app.scrapers.classify import Classification
+    state = {"now": 0, "max": 0}
+
+    async def slow_classify(page, keywords, llm=None):
+        state["now"] += 1
+        state["max"] = max(state["max"], state["now"])
+        try:
+            await asyncio.sleep(0.01 if "recipes" in page.url else 0.6)    # "model" wolny na stronach sklepu
+        finally:
+            state["now"] -= 1
+        return Classification("other", 0.5, "llm:fake", page.title or "", "test")
+
+    monkeypatch.setattr(crawler_mod, "classify", slow_classify)
+    store = MemoryStore()
+    stats = crawl(store, max_pages=12, max_pending=2, drain_timeout_s=0.2, llm_concurrency=5)
+    assert state["max"] <= 2                                 # nigdy wiecej niz max_pending stron w kolejce do modelu
+    assert stats["unclassified"] >= 1 and any("nie zmiescila sie" in m for m in store.logs)

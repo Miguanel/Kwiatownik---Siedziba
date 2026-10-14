@@ -516,6 +516,8 @@ def test_loop_checks_again_soon_when_queue_is_idle(kw, monkeypatch):
     calls = []
     monkeypatch.setattr(settings, "agents_enabled", True)
     monkeypatch.setattr(planner, "run_planner", lambda state, trigger: calls.append(trigger))
+    from app.agents import backend_sync
+    monkeypatch.setattr(backend_sync, "configured", lambda: False)   # .env z BACKEND_URL nie wysyla nic w tescie
 
     async def run():
         task = asyncio.create_task(loop.agents_loop(_state(), first_delay=0, poll_s=0.01))

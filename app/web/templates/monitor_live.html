@@ -7,28 +7,51 @@
 </div>
 
 <h2>Teraz pracuje nad</h2>
+{% if cards %}
+<div class="lj-grid">
 {% for c in cards %}
   {% set j = c.job %}
-  <div class="box" style="display:block">
-    <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap">
-      <div><a href="/jobs/{{ j.id }}"><b>#{{ j.id }} {{ j.kind }}</b></a>{% if c.name %} - {{ c.name }}{% endif %}
-        {% if j.retry_of %}<span class="muted">(ponowienie #{{ j.retry_of }})</span>{% endif %}</div>
-      <div class="muted">trwa {{ c.elapsed }}{% if c.eta != "-" %} &middot; zostalo ok. {{ c.eta }}{% endif %}
-        &middot; {{ j.progress or 0 }}/{{ j.total or "?" }}
-        <form class="inline" method="post" action="/jobs/{{ j.id }}/stop"><button>Zatrzymaj</button></form></div>
+  <article class="lj lj-{{ c.group }}{% if c.stale %} lj-stale{% endif %}">
+    <header class="lj-head">
+      <div class="lj-titles">
+        <span class="lj-group">{{ c.group_label }}</span>
+        <h3><a href="/jobs/{{ j.id }}">{{ c.title }}</a> <span class="lj-id">#{{ j.id }}</span></h3>
+        {% if c.subject %}<p class="lj-subject" title="{{ c.subject }}">{{ c.subject }}</p>{% endif %}
+      </div>
+      <form class="inline lj-stop" method="post" action="/jobs/{{ j.id }}/stop"><button title="Zatrzymaj zadanie">Zatrzymaj</button></form>
+    </header>
+
+    <div class="lj-progress">
+      <div class="bar"><div style="width: {{ c.pct if c.pct is not none else 0 }}%"></div></div>
+      <span class="lj-count">{{ j.progress or 0 }}/{{ j.total or "?" }}{% if c.pct is not none %} &middot; {{ c.pct }}%{% endif %}</span>
     </div>
-    {% if c.pct is not none %}<div class="bar" style="margin:6px 0"><div style="width: {{ c.pct }}%"></div></div>{% endif %}
+    <dl class="lj-meta">
+      <div><dt>trwa</dt><dd>{{ c.elapsed }}</dd></div>
+      {% if c.eta != "-" %}<div><dt>zostało ok.</dt><dd>{{ c.eta }}</dd></div>{% endif %}
+      {% if j.retry_of %}<div><dt>ponowienie</dt><dd><a href="/jobs/{{ j.retry_of }}">#{{ j.retry_of }}</a></dd></div>{% endif %}
+    </dl>
+
     {% if c.act %}
-      <p style="margin:6px 0"><span class="tag running">{{ c.act.step }}</span>
-        <span style="word-break:break-all">{{ c.act.detail }}</span>
-        <span class="muted">({{ c.act.age }} s temu)</span></p>
+    <div class="lj-now">
+      <span class="lj-step">{{ c.act.step }}</span>
+      {% if c.act.detail %}<span class="lj-detail" title="{{ c.act.detail }}">{{ c.act.detail }}</span>{% endif %}
+      <span class="lj-age">{{ c.act.age | round | int }} s temu</span>
+    </div>
     {% endif %}
-    {% if c.last %}<pre class="log" style="max-height:90px;margin:0">{{ c.last | join("\n") }}</pre>{% endif %}
-  </div>
+    {% if c.stale %}<p class="lj-warn">Brak nowego kroku od {{ c.stale }} - zadanie najpewniej czeka na model LLM. Jeśli to się nie zmienia, zatrzymaj je - ponowienie zacznie od punktu kontrolnego (skan: od zapisanej kolejki adresów).</p>{% endif %}
+
+    {% if c.recent %}
+    <ol class="lj-log" aria-label="Ostatnie wpisy dziennika">
+      {% for t, text in c.recent %}<li><time>{{ t }}</time><span title="{{ text }}">{{ text }}</span></li>{% endfor %}
+    </ol>
+    {% endif %}
+  </article>
+{% endfor %}
+</div>
 {% else %}
   <p class="box" style="display:block">System teraz odpoczywa - nie ma dzialajacych zadan.
     <a href="/tasks">Zobacz proponowane zadania &rarr;</a></p>
-{% endfor %}
+{% endif %}
 
 <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px">
   <div>
