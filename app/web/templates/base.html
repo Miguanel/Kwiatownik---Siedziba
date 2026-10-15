@@ -3,13 +3,51 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{{ app_name }}</title>
+  {% set cur = nav_current(request.url.path if request is defined else "/") %}
+  <title>{% if cur %}{{ cur[1] }} · {% endif %}{{ app_name }}</title>
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%232f5d3a'/%3E%3Cg transform='translate(16 15.5)'%3E%3Cellipse cx='0' cy='-6.2' rx='3.7' ry='5.6' fill='%23f4efdc' transform='rotate(0)'/%3E%3Cellipse cx='0' cy='-6.2' rx='3.7' ry='5.6' fill='%23f4efdc' transform='rotate(72)'/%3E%3Cellipse cx='0' cy='-6.2' rx='3.7' ry='5.6' fill='%23f4efdc' transform='rotate(144)'/%3E%3Cellipse cx='0' cy='-6.2' rx='3.7' ry='5.6' fill='%23f4efdc' transform='rotate(216)'/%3E%3Cellipse cx='0' cy='-6.2' rx='3.7' ry='5.6' fill='%23f4efdc' transform='rotate(288)'/%3E%3Ccircle r='3.1' fill='%23e2b93b'/%3E%3C/g%3E%3C/svg%3E">
   <script src="https://unpkg.com/htmx.org@2.0.4"></script>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/rpg-awesome/0.2.0/css/rpg-awesome.min.css">
   <style>
     body { font-family: system-ui, sans-serif; margin: 0; background: #f6f7f2; color: #1f2a1f; }
-    nav { background: #2f5d3a; padding: 10px 16px; display: flex; flex-wrap: wrap; gap: 6px 16px; }
-    nav a { color: #fff; text-decoration: none; font-weight: 600; white-space: nowrap; }
+    html { scroll-padding-top: calc(var(--nav-h, 0px) + 10px); }
+    /* gorny pasek: przyklejony; logo + nazwa biezacej zakladki; zakladki w grupach oddzielonych kreska */
+    .topnav { position: sticky; top: 0; z-index: 100; background: #2f5d3a; color: #fff;
+      box-shadow: 0 2px 8px rgba(20, 40, 25, .18); }
+    .tn-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 8px 18px;
+      padding: 8px 16px; }
+    .tn-brand { display: flex; align-items: center; gap: 10px; color: #fff; text-decoration: none; min-width: 0; }
+    .tn-logo { width: 34px; height: 34px; flex: none; border-radius: 9px; background: rgba(255,255,255,.12); }
+    .tn-titles { display: flex; flex-direction: column; line-height: 1.15; min-width: 0; }
+    .tn-app { font-size: .74em; letter-spacing: .04em; text-transform: uppercase; color: #cfe0cc; white-space: nowrap; }
+    .tn-current { font-size: 1.08em; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    /* kreska przed kazda grupa; ta na poczatku linii jest ucinana (margines -1px + overflow) */
+    .tn-tabs { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 0; min-width: 0; overflow: hidden;
+      padding: 3px 0; }
+    .tn-group { display: flex; flex-wrap: nowrap; gap: 2px; padding: 0 8px; margin-left: -1px;
+      border-left: 1px solid rgba(255,255,255,.28); }
+    .tn-tabs a { color: #eef5ec; text-decoration: none; font-weight: 600; font-size: .9em; white-space: nowrap;
+      padding: 5px 9px; border-radius: 7px; }
+    .tn-tabs a:hover { background: rgba(255,255,255,.12); color: #fff; }
+    .tn-tabs a[aria-current="page"] { background: #f4efdc; color: #22442b; }
+    .tn-tabs a:focus-visible, .tn-brand:focus-visible, .tn-toggle:focus-visible { outline: 2px solid #f2c94c; outline-offset: 2px; }
+    .tn-end { display: flex; align-items: center; gap: 10px; }
+    .tn-toggle { display: none; align-items: center; gap: 6px; background: rgba(255,255,255,.12); color: #fff;
+      border: 1px solid rgba(255,255,255,.3); border-radius: 8px; padding: 6px 12px; font: inherit; font-weight: 600;
+      cursor: pointer; }
+    .tn-toggle svg { width: 18px; height: 18px; }
+    @media (max-width: 1100px) {
+      .tn-row { grid-template-columns: minmax(0, 1fr) auto; }
+      .tn-toggle { display: inline-flex; }
+      .tn-end { grid-column: 2; grid-row: 1; }
+      .tn-tabs { display: none; grid-column: 1 / -1; grid-row: 2; flex-direction: column; align-items: stretch; gap: 0;
+        max-height: calc(100vh - 64px); overflow-y: auto; padding: 4px 0 6px; }
+      .topnav.open .tn-tabs { display: flex; }
+      .tn-group { flex-wrap: wrap; gap: 6px; padding: 10px 0; }
+      .tn-group { border-left: 0; margin-left: 0; }
+      .tn-group + .tn-group { border-top: 1px solid rgba(255,255,255,.22); }
+      .tn-tabs a { font-size: .95em; padding: 8px 12px; background: rgba(255,255,255,.08); }
+    }
     main { max-width: 1100px; margin: 24px auto; padding: 0 16px; }
     table { width: 100%; border-collapse: collapse; background: #fff; }
     th, td { padding: 7px 10px; border-bottom: 1px solid #e3e6dc; text-align: left; vertical-align: top; }
@@ -27,7 +65,7 @@
     .bar { background: #e3e6dc; border-radius: 6px; height: 12px; overflow: hidden; } .bar div { background: #2f5d3a; height: 100%; }
     .inline { display: inline; }
     /* reczny commit: licznik w nawigacji i komunikat "Commit gotowy" (commit_bar.html, odswiezane co 60 s) */
-    .nav-commit { margin-left: auto; }
+    .nav-commit { color: #fff; text-decoration: none; white-space: nowrap; }
     .cm-chip { display: inline-block; padding: 1px 10px; border-radius: 10px; background: rgba(255,255,255,.18); color: #fff; font-weight: 600; font-size: .9em; }
     .cm-chip.cm-ready { background: #f2c94c; color: #2a2a18; }
     .cm-chip.cm-run { background: #9fd3a8; color: #1f2a1f; }
@@ -38,40 +76,48 @@
     .cm-banner .cm-actions { display: flex; gap: 10px; align-items: center; }
     .cm-banner .cm-actions form { margin: 0; }
     .cm-banner button { background: #2f5d3a; color: #fff; border: 0; border-radius: 6px; padding: 7px 14px; font-weight: 600; cursor: pointer; }
-    .bulkbar { position: sticky; top: 0; z-index: 5; box-shadow: 0 2px 6px rgba(0,0,0,.08); }
+    .bulkbar { position: sticky; top: var(--nav-h, 0px); z-index: 5; box-shadow: 0 2px 6px rgba(0,0,0,.08); }
     /* male ekrany: tabele przewijane w poziomie, formularze na cala szerokosc */
     @media (max-width: 760px) {
       main { margin: 12px auto; padding: 0 10px; }
       table { display: block; overflow-x: auto; white-space: nowrap; }
       form.box input:not([type=checkbox]), form.box select, form.box button { flex: 1 1 140px; }
-      nav { padding: 8px 10px; font-size: .95em; }
+      .tn-row { padding: 7px 10px; }
+      .tn-toggle span { display: none; }
       h1 { font-size: 1.4em; }
     }
   </style>
 </head>
 <body>
-  <nav>
-    <a href="/">{{ app_name }}</a>
-    <a href="/monitor">Na zywo</a>
-    <a href="/tasks">Zadania do zrobienia</a>
-    <a href="/agents">Agenci</a>
-    <a href="/site">Strona</a>
-    <a href="/sources">Zrodla</a>
-    <a href="/scrapers">Scrapery</a>
-    <a href="/plants">Rosliny</a>
-    <a href="/discover">Odkrywanie</a>
-    <a href="/items">Zebrane</a>
-    <a href="/wzmianki">Wzmianki</a>
-    <a href="/export">Eksport</a>
-    <a href="/posts">Fanpage</a>
-    <a href="/jobs">Zadania</a>
-    <a href="/llm">LLM</a>
-    <a href="/nn">Sieci</a>
-    <a href="/uklad">Uklad strony</a>
-    <a href="/docs">API</a>
-    <a href="/commit" class="nav-commit" hx-get="/commit/pasek?strona=nav" hx-trigger="load, every 60s" hx-swap="innerHTML">commit</a>
-  </nav>
+  <header class="topnav" id="topnav">
+    <div class="tn-row">
+      <a class="tn-brand" href="/" title="{{ app_name }} – panel">
+        <svg class="tn-logo" viewBox="0 0 32 32" aria-hidden="true"><g transform="translate(16 15.5)"><ellipse cx="0" cy="-6.2" rx="3.7" ry="5.6" fill="#f4efdc" transform="rotate(0)"/><ellipse cx="0" cy="-6.2" rx="3.7" ry="5.6" fill="#f4efdc" transform="rotate(72)"/><ellipse cx="0" cy="-6.2" rx="3.7" ry="5.6" fill="#f4efdc" transform="rotate(144)"/><ellipse cx="0" cy="-6.2" rx="3.7" ry="5.6" fill="#f4efdc" transform="rotate(216)"/><ellipse cx="0" cy="-6.2" rx="3.7" ry="5.6" fill="#f4efdc" transform="rotate(288)"/><circle r="3.1" fill="#e2b93b"/></g></svg>
+        <span class="tn-titles"><span class="tn-app">{{ app_name }}</span><span class="tn-current">{{ cur[1] if cur else "Panel" }}</span></span>
+      </a>
+      <nav class="tn-tabs" id="tnTabs" aria-label="Zakladki">
+        {% for group in nav_groups %}<div class="tn-group">{% for href, label in group %}<a href="{{ href }}"{% if cur and cur[0] == href %} aria-current="page"{% endif %}>{{ label }}</a>{% endfor %}</div>{% endfor %}
+      </nav>
+      <div class="tn-end">
+        <a href="/commit" class="nav-commit" hx-get="/commit/pasek?strona=nav" hx-trigger="load, every 60s" hx-swap="innerHTML">commit</a>
+        <button class="tn-toggle" type="button" aria-expanded="false" aria-controls="tnTabs">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg><span>Menu</span></button>
+      </div>
+    </div>
+  </header>
   <div id="commitBanner" hx-get="/commit/pasek?strona=banner" hx-trigger="load, every 60s" hx-swap="innerHTML"></div>
   <main>{% block content %}{% endblock %}</main>
+  <script>
+    (function () {
+      var nav = document.getElementById('topnav'), btn = nav.querySelector('.tn-toggle'), root = document.documentElement;
+      function setH() { root.style.setProperty('--nav-h', nav.offsetHeight + 'px'); }
+      function open(on) { nav.classList.toggle('open', on); btn.setAttribute('aria-expanded', on ? 'true' : 'false'); setH(); }
+      btn.addEventListener('click', function () { open(!nav.classList.contains('open')); });
+      document.addEventListener('keydown', function (e) { if (e.key === 'Escape') open(false); });
+      document.addEventListener('click', function (e) { if (!nav.contains(e.target)) open(false); });
+      setH();
+      if (window.ResizeObserver) new ResizeObserver(setH).observe(nav); else window.addEventListener('resize', setH);
+    })();
+  </script>
 </body>
 </html>
