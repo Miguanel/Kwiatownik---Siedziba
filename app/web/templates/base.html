@@ -11,42 +11,46 @@
   <style>
     body { font-family: system-ui, sans-serif; margin: 0; background: #f6f7f2; color: #1f2a1f; }
     html { scroll-padding-top: calc(var(--nav-h, 0px) + 10px); }
-    /* gorny pasek: przyklejony; logo + nazwa biezacej zakladki; zakladki w grupach oddzielonych kreska */
+    /* gorny pasek: przyklejony; logo + nazwa biezacej zakladki; zakladki zawsze widoczne -
+       kazda grupa w osobnym prostokacie, prostokaty jeden za drugim (gdy sie nie mieszcza: nastepna linia;
+       na telefonie jeden rzad przewijany w bok) */
     .topnav { position: sticky; top: 0; z-index: 100; background: #2f5d3a; color: #fff;
       box-shadow: 0 2px 8px rgba(20, 40, 25, .18); }
-    .tn-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 8px 18px;
-      padding: 8px 16px; }
-    .tn-brand { display: flex; align-items: center; gap: 10px; color: #fff; text-decoration: none; min-width: 0; }
+    .tn-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "brand end" "tabs tabs";
+      align-items: center; gap: 6px 18px; padding: 7px 16px 8px; }
+    .tn-brand { grid-area: brand; display: flex; align-items: center; gap: 10px; color: #fff; text-decoration: none; min-width: 0; }
     .tn-logo { width: 34px; height: 34px; flex: none; border-radius: 9px; background: rgba(255,255,255,.12); }
     .tn-titles { display: flex; flex-direction: column; line-height: 1.15; min-width: 0; }
     .tn-app { font-size: .74em; letter-spacing: .04em; text-transform: uppercase; color: #cfe0cc; white-space: nowrap; }
     .tn-current { font-size: 1.08em; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    /* kreska przed kazda grupa; ta na poczatku linii jest ucinana (margines -1px + overflow) */
-    .tn-tabs { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 0; min-width: 0; overflow: hidden;
-      padding: 3px 0; }
-    .tn-group { display: flex; flex-wrap: nowrap; gap: 2px; padding: 0 8px; margin-left: -1px;
-      border-left: 1px solid rgba(255,255,255,.28); }
+    .tn-end { grid-area: end; display: flex; align-items: center; gap: 10px; }
+    .tn-strip { grid-area: tabs; position: relative; min-width: 0; }
+    .tn-tabs { display: flex; flex-wrap: wrap; gap: 6px; padding: 2px; position: relative; }
+    .tn-tabs::-webkit-scrollbar { display: none; }
+    .tn-group { display: flex; flex: none; gap: 2px; padding: 3px; border-radius: 10px;
+      background: rgba(255,255,255,.07); border: 1px solid rgba(255,255,255,.22); }
+    .tn-group:has([aria-current="page"]) { border-color: rgba(244,239,220,.6); background: rgba(255,255,255,.11); }
     .tn-tabs a { color: #eef5ec; text-decoration: none; font-weight: 600; font-size: .9em; white-space: nowrap;
-      padding: 5px 9px; border-radius: 7px; }
-    .tn-tabs a:hover { background: rgba(255,255,255,.12); color: #fff; }
+      padding: 4px 8px; border-radius: 7px; }
+    .tn-tabs a:hover { background: rgba(255,255,255,.14); color: #fff; }
     .tn-tabs a[aria-current="page"] { background: #f4efdc; color: #22442b; }
-    .tn-tabs a:focus-visible, .tn-brand:focus-visible, .tn-toggle:focus-visible { outline: 2px solid #f2c94c; outline-offset: 2px; }
-    .tn-end { display: flex; align-items: center; gap: 10px; }
-    .tn-toggle { display: none; align-items: center; gap: 6px; background: rgba(255,255,255,.12); color: #fff;
-      border: 1px solid rgba(255,255,255,.3); border-radius: 8px; padding: 6px 12px; font: inherit; font-weight: 600;
-      cursor: pointer; }
-    .tn-toggle svg { width: 18px; height: 18px; }
-    @media (max-width: 1100px) {
-      .tn-row { grid-template-columns: minmax(0, 1fr) auto; }
-      .tn-toggle { display: inline-flex; }
-      .tn-end { grid-column: 2; grid-row: 1; }
-      .tn-tabs { display: none; grid-column: 1 / -1; grid-row: 2; flex-direction: column; align-items: stretch; gap: 0;
-        max-height: calc(100vh - 64px); overflow-y: auto; padding: 4px 0 6px; }
-      .topnav.open .tn-tabs { display: flex; }
-      .tn-group { flex-wrap: wrap; gap: 6px; padding: 10px 0; }
-      .tn-group { border-left: 0; margin-left: 0; }
-      .tn-group + .tn-group { border-top: 1px solid rgba(255,255,255,.22); }
-      .tn-tabs a { font-size: .95em; padding: 8px 12px; background: rgba(255,255,255,.08); }
+    .tn-tabs a:focus-visible, .tn-brand:focus-visible, .tn-arrow:focus-visible { outline: 2px solid #f2c94c; outline-offset: -2px; }
+    /* strzalki i cien na brzegach, gdy czesc zakladek jest poza ekranem */
+    .tn-arrow { position: absolute; top: 0; bottom: 0; width: 34px; display: none; align-items: center;
+      border: 0; color: #fff; font-size: 1.3em; font-weight: 700; cursor: pointer; padding: 0; z-index: 2; }
+    .tn-arrow.prev { left: 0; justify-content: flex-start; padding-left: 4px;
+      background: linear-gradient(90deg, #2f5d3a 55%, rgba(47,93,58,0)); }
+    .tn-arrow.next { right: 0; justify-content: flex-end; padding-right: 4px;
+      background: linear-gradient(270deg, #2f5d3a 55%, rgba(47,93,58,0)); }
+    .tn-strip.more-l .tn-arrow.prev, .tn-strip.more-r .tn-arrow.next { display: flex; }
+    /* szerszy ekran: logo, zakladki i commit obok siebie */
+    @media (min-width: 1100px) {
+      .tn-row { grid-template-columns: auto minmax(0, 1fr) auto; grid-template-areas: "brand tabs end"; }
+    }
+    @media (max-width: 760px) {
+      .tn-tabs { flex-wrap: nowrap; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; scroll-behavior: smooth; }
+      .tn-tabs a { padding: 7px 11px; }
+      .tn-arrow { width: 40px; }
     }
     main { max-width: 1100px; margin: 24px auto; padding: 0 16px; }
     table { width: 100%; border-collapse: collapse; background: #fff; }
@@ -82,8 +86,7 @@
       main { margin: 12px auto; padding: 0 10px; }
       table { display: block; overflow-x: auto; white-space: nowrap; }
       form.box input:not([type=checkbox]), form.box select, form.box button { flex: 1 1 140px; }
-      .tn-row { padding: 7px 10px; }
-      .tn-toggle span { display: none; }
+      .tn-row { padding: 7px 10px 8px; }
       h1 { font-size: 1.4em; }
     }
   </style>
@@ -95,13 +98,15 @@
         <svg class="tn-logo" viewBox="0 0 32 32" aria-hidden="true"><g transform="translate(16 15.5)"><ellipse cx="0" cy="-6.2" rx="3.7" ry="5.6" fill="#f4efdc" transform="rotate(0)"/><ellipse cx="0" cy="-6.2" rx="3.7" ry="5.6" fill="#f4efdc" transform="rotate(72)"/><ellipse cx="0" cy="-6.2" rx="3.7" ry="5.6" fill="#f4efdc" transform="rotate(144)"/><ellipse cx="0" cy="-6.2" rx="3.7" ry="5.6" fill="#f4efdc" transform="rotate(216)"/><ellipse cx="0" cy="-6.2" rx="3.7" ry="5.6" fill="#f4efdc" transform="rotate(288)"/><circle r="3.1" fill="#e2b93b"/></g></svg>
         <span class="tn-titles"><span class="tn-app">{{ app_name }}</span><span class="tn-current">{{ cur[1] if cur else "Panel" }}</span></span>
       </a>
-      <nav class="tn-tabs" id="tnTabs" aria-label="Zakladki">
-        {% for group in nav_groups %}<div class="tn-group">{% for href, label in group %}<a href="{{ href }}"{% if cur and cur[0] == href %} aria-current="page"{% endif %}>{{ label }}</a>{% endfor %}</div>{% endfor %}
-      </nav>
+      <div class="tn-strip" id="tnStrip">
+        <button class="tn-arrow prev" type="button" tabindex="-1" aria-label="Przewin zakladki w lewo">‹</button>
+        <nav class="tn-tabs" id="tnTabs" aria-label="Zakladki">
+          {% for group in nav_groups %}<div class="tn-group">{% for href, label in group %}<a href="{{ href }}"{% if cur and cur[0] == href %} aria-current="page"{% endif %}>{{ label }}</a>{% endfor %}</div>{% endfor %}
+        </nav>
+        <button class="tn-arrow next" type="button" tabindex="-1" aria-label="Przewin zakladki w prawo">›</button>
+      </div>
       <div class="tn-end">
         <a href="/commit" class="nav-commit" hx-get="/commit/pasek?strona=nav" hx-trigger="load, every 60s" hx-swap="innerHTML">commit</a>
-        <button class="tn-toggle" type="button" aria-expanded="false" aria-controls="tnTabs">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg><span>Menu</span></button>
       </div>
     </div>
   </header>
@@ -109,14 +114,34 @@
   <main>{% block content %}{% endblock %}</main>
   <script>
     (function () {
-      var nav = document.getElementById('topnav'), btn = nav.querySelector('.tn-toggle'), root = document.documentElement;
+      var nav = document.getElementById('topnav'), strip = document.getElementById('tnStrip'),
+          tabs = document.getElementById('tnTabs'), root = document.documentElement;
       function setH() { root.style.setProperty('--nav-h', nav.offsetHeight + 'px'); }
-      function open(on) { nav.classList.toggle('open', on); btn.setAttribute('aria-expanded', on ? 'true' : 'false'); setH(); }
-      btn.addEventListener('click', function () { open(!nav.classList.contains('open')); });
-      document.addEventListener('keydown', function (e) { if (e.key === 'Escape') open(false); });
-      document.addEventListener('click', function (e) { if (!nav.contains(e.target)) open(false); });
-      setH();
-      if (window.ResizeObserver) new ResizeObserver(setH).observe(nav); else window.addEventListener('resize', setH);
+      function edges() {
+        var max = tabs.scrollWidth - tabs.clientWidth;
+        strip.classList.toggle('more-l', tabs.scrollLeft > 2);
+        strip.classList.toggle('more-r', tabs.scrollLeft < max - 2);
+      }
+      function by(dir) { tabs.scrollBy({left: dir * tabs.clientWidth * 0.7}); }
+      strip.querySelector('.prev').addEventListener('click', function () { by(-1); });
+      strip.querySelector('.next').addEventListener('click', function () { by(1); });
+      tabs.addEventListener('scroll', edges, {passive: true});
+      // kolko myszy przewija zakladki w bok (gdy sie nie mieszcza)
+      tabs.addEventListener('wheel', function (e) {
+        if (tabs.scrollWidth <= tabs.clientWidth || Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
+        e.preventDefault();
+        tabs.scrollLeft += e.deltaY;
+      }, {passive: false});
+      // biezaca zakladka zawsze widoczna
+      var cur = tabs.querySelector('[aria-current="page"]');
+      if (cur) {
+        tabs.style.scrollBehavior = 'auto';
+        tabs.scrollLeft = cur.offsetLeft - tabs.clientWidth / 2 + cur.offsetWidth / 2;
+        tabs.style.scrollBehavior = '';
+      }
+      function all() { setH(); edges(); }
+      all();
+      if (window.ResizeObserver) new ResizeObserver(all).observe(nav); else window.addEventListener('resize', all);
     })();
   </script>
 </body>
