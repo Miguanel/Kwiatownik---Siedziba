@@ -20,7 +20,9 @@ i dochodzi na Windows tunelem SSH.
    Skrypt: instaluje Dockera na laptopie (`serwer/instaluj.sh`: klapa i usypianie wylaczone, zapora tylko SSH,
    sterownik i toolkit NVIDIA, jesli jest karta), klonuje repozytoria do `~/kwiatownik`, wstrzymuje Siedzibe tutaj,
    kopiuje `.env`, `data\`, `models\` oraz dane czekajace na commit w Kwiatowniku2, buduje i uruchamia Siedzibe
-   na laptopie, a tutaj robi `docker compose down`. Klon prywatnego repo pyta o login GitHub i token (nie haslo).
+   na laptopie, a tutaj robi `docker compose down`.
+   Uzytkownik Siedziby bez sudo (np. WorkerSiedziba): administrator laptopa robi raz czesc systemowa
+   `sudo bash /home/WorkerSiedziba/instaluj_siedziba.sh system WorkerSiedziba`, potem znow `.\przenies_na_laptopa.ps1`. Klon prywatnego repo pyta o login GitHub i token (nie haslo).
 3. Laptop HP EliteBook 8770w ma Quadro K3000M (Kepler, CUDA compute 3.0, 2 GB): Ollama wymaga compute >= 5.0,
    wiec Ollama liczy na CPU i sterownika NVIDIA nie instalujemy. (Inna karta, Maxwell lub nowsza:
    `bash instaluj.sh --gpu`, potem `sudo reboot` i `.\laptop.ps1 -Aktualizuj` - wlaczy GPU.)

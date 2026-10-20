@@ -46,9 +46,14 @@ if (($kod.Count -gt 0 -or $niewypchniete -gt 0) -and -not $Wymus) {
 Write-Host "OK - kod wypchniety."
 
 if (-not $BezInstalacji) {
-    Krok "Przygotowanie laptopa (serwer/instaluj.sh - zapyta o haslo sudo)"
+    Krok "Przygotowanie laptopa (serwer/instaluj.sh)"
     scp serwer/instaluj.sh "${Serwer}:instaluj_siedziba.sh"; Sprawdz "Kopiowanie instaluj.sh"
-    ssh -t $Serwer "bash ~/instaluj_siedziba.sh"; Sprawdz "Instalacja na laptopie"
+    ssh -t $Serwer "bash ~/instaluj_siedziba.sh"
+    if ($LASTEXITCODE -eq 3) {
+        throw "Brak Dockera i sudo na laptopie - administrator laptopa musi raz wykonac polecenie pokazane wyzej, potem uruchom ten skrypt ponownie"
+    }
+    if ($LASTEXITCODE -eq 2) { throw "Czesc systemowa zrobiona - uruchom ten skrypt ponownie (nowe logowanie = grupa docker)" }
+    Sprawdz "Instalacja na laptopie"
 }
 ssh $Serwer "test -f $Zdalnie/docker-compose.yml && test -d ~/kwiatownik/Kwiatownik2/.git && test -d ~/kwiatownik/Kwiatownik"
 Sprawdz "Kontrola repozytoriow na laptopie (~/kwiatownik)"
