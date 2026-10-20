@@ -1,0 +1,3 @@
+# skrypty dla laptopa z Linuxem zawsze z koncami linii LF (CRLF psuje bash)
+*.sh text eol=lf
+docker-compose*.yml text eol=lf

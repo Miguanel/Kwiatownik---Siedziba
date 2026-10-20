@@ -5,7 +5,8 @@ services:
     restart: unless-stopped
     stop_grace_period: 30s          # czas na zapisanie stanu zadan przy zatrzymaniu (potem kill)
     ports:
-      - "127.0.0.1:8000:8000"      # panel tylko z tego komputera (bez logowania - nie wystawiac w sieci)
+      # panel tylko z tego komputera (bez logowania - nie wystawiac w sieci); z innego komputera: tunel SSH
+      - "${PANEL_BIND:-127.0.0.1}:8000:8000"
     env_file:
       - .env
     environment:
@@ -44,7 +45,7 @@ services:
     ports:
       # port na komputerze 11435 (11434 zajmuje zwykle Ollama zainstalowana w Windows); Siedziba laczy sie
       # wewnatrz Dockera przez http://ollama:11434, wiec ten port jest tylko do podgladu z przegladarki
-      - "11435:11434"
+      - "127.0.0.1:11435:11434"
     volumes:
       - ollama_models:/root/.ollama
     environment:
@@ -53,21 +54,16 @@ services:
       OLLAMA_KV_CACHE_TYPE: q8_0    # pamiec kontekstu w 8 bitach (~polowa)
       OLLAMA_MAX_LOADED_MODELS: "1" # nigdy dwa modele naraz w pamieci
     restart: unless-stopped
-    # Karta NVIDIA (znacznie szybciej). Bez GPU NVIDIA zakomentuj caly blok deploy ponizej:
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
+    # Karta NVIDIA: osobny plik docker-compose.gpu.yml, wlaczany w .env:
+    #   COMPOSE_FILE=docker-compose.yml:docker-compose.gpu.yml   (Windows: separator ; zamiast :)
+    # Bez GPU NVIDIA Ollama liczy na CPU (serwer/aktualizuj.sh ustawia to sam po wykryciu karty).
 
   # Meta-wyszukiwarka do odkrywania nowych stron (panel SearXNG: http://localhost:8081)
   searxng:
     image: searxng/searxng:latest
     container_name: siedziba-searxng
     ports:
-      - "8081:8080"
+      - "127.0.0.1:8081:8080"
     volumes:
       - ./searxng:/etc/searxng
     restart: unless-stopped

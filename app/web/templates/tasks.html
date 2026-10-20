@@ -189,7 +189,7 @@
   function applyLast3() {
     const mode = l3();
     last3Btn.setAttribute('aria-pressed', mode ? 'true' : 'false');
-    last3Btn.textContent = mode ? 'Przywroc poprzedni widok' : 'Pokaz 3 ostatnie';
+    last3Btn.textContent = mode ? 'Przywroc poprzedni widok' : 'Pokaż po 3 z każdej kategorii';
     groups().forEach(d => {
       showAllRows(d);
       if (!mode || (mode.full || []).includes(d.dataset.group)) return;

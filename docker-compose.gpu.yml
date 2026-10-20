@@ -1,0 +1,11 @@
+# Ollama na karcie NVIDIA (wymaga sterownika NVIDIA i nvidia-container-toolkit na komputerze z Dockerem).
+# Wlaczenie w .env:  COMPOSE_FILE=docker-compose.yml:docker-compose.gpu.yml   (Windows: ; zamiast :)
+services:
+  ollama:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

@@ -2,7 +2,7 @@
   "tasks": {
     "fact_section": {
       "mode": "cien",
-      "version": 4
+      "version": 9
     },
     "fact_part": {
       "mode": "cien",

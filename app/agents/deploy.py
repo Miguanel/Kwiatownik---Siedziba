@@ -38,6 +38,8 @@ TZ = ZoneInfo(settings.timezone)
 DATA_PATHS = ("data/przepisy", "data/plants", "data/changelog.json")
 CHANGELOG = "data/changelog.json"
 CHANGELOG_KEEP = 200
+# Kopia Kwiatownika2 z Windows (CRLF) = "true"; kopia sklonowana na serwerze Linux (LF) = "input"
+AUTOCRLF = os.environ.get("DEPLOY_GIT_AUTOCRLF", "true").strip() or "true"
 CHECK_EVERY_MIN = 30                      # automatyczne sprawdzenie (bez zapisu w historii) najczesciej co tyle
 PENDING_MAX_AGE_S = 60                    # licznik "czeka na commit" liczony najczesciej co tyle sekund
 _last_check = {"t": None}
@@ -68,7 +70,7 @@ def repo_dir() -> Path | None:
 
 
 def git(repo: Path, *args: str, check: bool = True, timeout: int = 180) -> subprocess.CompletedProcess:
-    cmd = ["git", "-c", "core.autocrlf=true", "-c", "core.filemode=false", "-c", "safe.directory=*",
+    cmd = ["git", "-c", f"core.autocrlf={AUTOCRLF}", "-c", "core.filemode=false", "-c", "safe.directory=*",
            "-c", "core.quotepath=false", "-C", str(repo), *args]
     env = {**os.environ, "GIT_TERMINAL_PROMPT": "0", "LC_ALL": "C.UTF-8"}
     res = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout,
@@ -394,6 +396,26 @@ def push_url(repo: Path) -> str:
     return f"https://x-access-token:{token}@github.com/{m.group(1)}.git"
 
 
+def sync_with_remote(repo: Path, url: str, ident: list[str]) -> str:
+    """Dociaga commity z GitHuba (np. zmiany strony zrobione na innym komputerze) i ustawia nasz commit na nich.
+
+    Siedziba moze dzialac na innym komputerze niz ten, na ktorym powstaje kod Kwiatownika2 - wtedy sa dwie kopie
+    repozytorium i bez tego push bylby odrzucony (non-fast-forward). Zwraca "" (ok) albo opis problemu."""
+    branch = settings.deploy_branch
+    got = git(repo, "fetch", "--quiet", url, branch, check=False, timeout=120)
+    if got.returncode != 0:
+        return mask("git fetch: " + (got.stderr or got.stdout).strip()[:400])
+    behind = git(repo, "rev-list", "--count", "HEAD..FETCH_HEAD", check=False).stdout.strip()
+    if behind in ("", "0"):
+        return ""
+    res = git(repo, *ident, "-c", "rebase.autoStash=true", "rebase", "FETCH_HEAD", check=False, timeout=240)
+    if res.returncode != 0:
+        git(repo, "rebase", "--abort", check=False)
+        return mask("konflikt z commitami na GitHubie (rebase cofniety, commit zostal lokalnie): "
+                    + (res.stderr or res.stdout).strip()[:300])
+    return ""
+
+
 def commit_and_push(repo: Path, files: list[str], message: str) -> tuple[str, bool, str]:
     """Commit TYLKO podanych plikow + push. Zwraca (sha, czy_wypchnieto, komunikat)."""
     ident = ["-c", f"user.name={settings.deploy_git_name}", "-c", f"user.email={settings.deploy_git_email}"]
@@ -401,8 +423,11 @@ def commit_and_push(repo: Path, files: list[str], message: str) -> tuple[str, bo
     res = git(repo, *ident, "commit", "-m", message, "--only", "--", *files, check=False)
     if res.returncode != 0:
         raise DeployError(mask("git commit: " + (res.stderr or res.stdout).strip()[:400]))
-    sha = git(repo, "rev-parse", "--short", "HEAD").stdout.strip()
     url = push_url(repo)
+    synced = sync_with_remote(repo, url, ident)
+    if synced:
+        return git(repo, "rev-parse", "--short", "HEAD").stdout.strip(), False, synced
+    sha = git(repo, "rev-parse", "--short", "HEAD").stdout.strip()
     pushed = git(repo, "push", url, f"HEAD:{settings.deploy_branch}", check=False, timeout=240)
     if pushed.returncode != 0:
         return sha, False, mask((pushed.stderr or pushed.stdout).strip()[:400])
