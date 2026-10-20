@@ -79,10 +79,14 @@ if [ "$DZIALA" = 1 ] && [ "$CZEKAJ_MIN" -gt 0 ] 2>/dev/null; then
     done
 fi
 
-# obrazy (Ollama ~2 GB) - przy slabym laczu pobieranie potrafi zerwac sie timeoutem; docker wznawia od pobranych warstw
-for PROBA in 1 2 3 4 5 6; do
-    docker compose pull --ignore-buildable && break
-    echo "!! Pobieranie obrazow przerwane (proba $PROBA/6) - ponawiam za 20 s"; sleep 20
+# obrazy: pobieramy tylko BRAKUJACE (te przyslane z Windows: .\laptop.ps1 -KopiujObrazy zostaja), z ponowieniami -
+# przy slabym laczu pobieranie potrafi zerwac sie timeoutem, a docker wznawia od juz pobranych warstw
+for OBRAZ in $(docker compose config --images 2>/dev/null | grep / ); do
+    docker image inspect "$OBRAZ" >/dev/null 2>&1 && continue
+    for PROBA in 1 2 3 4 5 6; do
+        docker pull "$OBRAZ" && break
+        echo "!! Pobieranie $OBRAZ przerwane (proba $PROBA/6) - ponawiam za 20 s"; sleep 20
+    done
 done
 
 if ! docker compose up -d --build; then

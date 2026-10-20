@@ -7,10 +7,13 @@
 #    .\laptop.ps1 -Stan              kontenery, dysk, pamiec, GPU, bateria
 #    .\laptop.ps1 -Ssh               konsola na laptopie
 #    .\laptop.ps1 -Zamknij           zamknij tunel
+#    .\laptop.ps1 -KopiujObrazy      obrazy Dockera (Ollama, SearXNG, python) z tego komputera na laptopa przez LAN
+#    .\laptop.ps1 -KopiujModele      modele Ollamy (wolumen ollama_models) z tego komputera na laptopa przez LAN
 #  Panel nie ma logowania - jest tylko na 127.0.0.1 laptopa, a tunel SSH przenosi go na ten komputer.
 # ============================================================
 param([switch]$Konfiguruj, [string]$Adres, [switch]$Aktualizuj, [int]$CzekajMin = 20, [switch]$Logi,
-      [switch]$Stan, [switch]$Ssh, [switch]$Zamknij, [string]$Serwer = "siedziba")
+      [switch]$Stan, [switch]$Ssh, [switch]$Zamknij, [switch]$KopiujObrazy, [switch]$KopiujModele,
+      [string]$Serwer = "siedziba")
 
 $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot
@@ -43,6 +46,28 @@ if ($Konfiguruj) {
     } else { Write-Host "Alias '$Serwer' juz jest w $cfg (zmiana IP: popraw HostName tam)." }
     ssh -o BatchMode=yes $Serwer "echo 'Logowanie kluczem dziala:' `$(whoami)@`$(hostname)"
     exit $LASTEXITCODE
+}
+
+# cmd /c: potok bajtow docker -> ssh (PowerShell 5 psuje dane binarne w potoku miedzy programami)
+if ($KopiujObrazy) {
+    $obrazy = @("ollama/ollama:latest", "searxng/searxng:latest", "python:3.11-slim") |
+              Where-Object { docker image ls -q $_ }
+    if (-not $obrazy) { throw "Brak obrazow w Dockerze na tym komputerze (docker images)" }
+    Write-Host "Wysylam na laptopa: $($obrazy -join ', ') - kilka GB, potrwa..."
+    cmd /c "docker save $($obrazy -join ' ') | ssh $Serwer docker load"
+    if ($LASTEXITCODE -ne 0) { throw "Kopiowanie obrazow nieudane" }
+    ssh $Serwer "docker images --format '{{.Repository}}:{{.Tag}}  {{.Size}}'"
+    exit 0
+}
+if ($KopiujModele) {
+    Write-Host "Modele Ollamy z tego komputera:"
+    docker compose run --rm --no-deps -T --entrypoint sh ollama -c 'du -sh /root/.ollama/models; find /root/.ollama/models/manifests -type f | sed s#.*/manifests/##'
+    Write-Host "Wysylam caly wolumen modeli na laptopa (moze byc kilkanascie GB)..."
+    cmd /c ("docker compose run --rm --no-deps -T --entrypoint tar ollama -c -C /root/.ollama . | " +
+            "ssh $Serwer ""cd $Kat && docker compose run --rm --no-deps -T --entrypoint tar ollama -x -C /root/.ollama""")
+    if ($LASTEXITCODE -ne 0) { throw "Kopiowanie modeli nieudane" }
+    ssh $Serwer "cd $Kat && docker compose run --rm --no-deps -T --entrypoint sh ollama -c 'du -sh /root/.ollama/models; find /root/.ollama/models/manifests -type f | sed s#.*/manifests/##'"
+    exit 0
 }
 
 if ($Zamknij) { Tunel | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }; Write-Host "Tunel zamkniety."; exit 0 }
