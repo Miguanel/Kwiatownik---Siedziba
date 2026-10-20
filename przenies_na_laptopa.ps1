@@ -17,10 +17,11 @@
 #         -BezInstalacji      pomin krok 2 (laptop juz przygotowany)
 #         -BezModeli          nie kopiuj models\ (laptop przygotuje NLLB sam: docker compose --profile mt run --rm nllb-init)
 #         -Wymus              przenies mimo niewypchnietego kodu
+#         -Dokoncz            dane juz sa na laptopie (np. przerwane pobieranie obrazow) - tylko budowa, start, sprzatanie
 #  Gdyby cos poszlo nie tak po kroku 3: docker compose start  (Siedziba wraca tutaj, nic nie jest usuniete)
 # ============================================================
 param([string]$Serwer = "siedziba", [int]$CzekajMin = 20, [switch]$BezInstalacji, [switch]$BezModeli,
-      [switch]$Wymus)
+      [switch]$Wymus, [switch]$Dokoncz)
 
 $ErrorActionPreference = "Stop"
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
@@ -45,6 +46,18 @@ if (($kod.Count -gt 0 -or $niewypchniete -gt 0) -and -not $Wymus) {
 }
 Write-Host "OK - kod wypchniety."
 
+$kw2 = Join-Path (Split-Path $PSScriptRoot) "Kwiatownik2"
+$dane = @("data/plants", "data/przepisy", "data/changelog.json")
+function DaneKw2 {   # dane Siedziby w Kwiatowniku2, ktore jeszcze nie przeszly przez /commit
+    @(git -C $kw2 -c core.quotepath=false status --porcelain=v1 --untracked-files=all -- @dane |
+      Where-Object { $_.Length -gt 3 -and $_.Substring(0, 2) -notmatch "D" } | ForEach-Object { $_.Substring(3) })
+}
+$tmp = Join-Path $env:TEMP "siedziba_przeniesienie"
+
+if ($Dokoncz) {
+    Write-Host "Tryb -Dokoncz: dane sa juz na laptopie, pomijam instalacje, wstrzymanie i kopiowanie."
+    $pliki = DaneKw2
+} else {
 if (-not $BezInstalacji) {
     Krok "Przygotowanie laptopa (serwer/instaluj.sh)"
     scp serwer/instaluj.sh "${Serwer}:instaluj_siedziba.sh"; Sprawdz "Kopiowanie instaluj.sh"
@@ -77,18 +90,13 @@ if ($dziala -and $CzekajMin -gt 0) {
 docker compose stop; Sprawdz "docker compose stop"
 
 Krok "Pakowanie danych"
-$tmp = Join-Path $env:TEMP "siedziba_przeniesienie"
 New-Item -ItemType Directory -Force $tmp | Out-Null
 $tgz = Join-Path $tmp "siedziba_dane.tgz"
 $co = @(".env", "data"); if (-not $BezModeli -and (Test-Path models)) { $co += "models" }
 tar -czf $tgz --exclude "data/_claude_tmp" @co; Sprawdz "tar (Siedziba)"
 Write-Host ("Siedziba: {0:N0} MB" -f ((Get-Item $tgz).Length / 1MB))
 
-# dane Siedziby w Kwiatowniku2, ktore jeszcze nie przeszly przez /commit
-$kw2 = Join-Path (Split-Path $PSScriptRoot) "Kwiatownik2"
-$dane = @("data/plants", "data/przepisy", "data/changelog.json")
-$pliki = @(git -C $kw2 -c core.quotepath=false status --porcelain=v1 --untracked-files=all -- @dane |
-           Where-Object { $_.Length -gt 3 -and $_.Substring(0, 2) -notmatch "D" } | ForEach-Object { $_.Substring(3) })
+$pliki = DaneKw2
 $tgz2 = Join-Path $tmp "kwiatownik2_dane.tgz"
 if ($pliki.Count -gt 0) {
     $lista = Join-Path $tmp "kw2_pliki.txt"
@@ -111,6 +119,8 @@ if ($pliki.Count -gt 0) {
     Sprawdz "Rozpakowanie (Kwiatownik2)"
 }
 
+}   # koniec: if (-not $Dokoncz)
+
 Krok "Budowa i start na laptopie (pierwszy raz kilka minut)"
 ssh -t $Serwer "bash $Zdalnie/serwer/aktualizuj.sh 0"; Sprawdz "Start Siedziby na laptopie"
 ssh $Serwer 'for i in $(seq 60); do curl -fs -o /dev/null http://127.0.0.1:8000/ && echo "Panel odpowiada." && exit 0; sleep 5; done; exit 1'
@@ -122,6 +132,6 @@ if ($pliki.Count -gt 0) {
     git -C $kw2 stash push -u -m "Siedziba przeniesiona na laptopa $(Get-Date -Format yyyy-MM-dd)" -- @dane
     Write-Host "Kwiatownik2: dane Siedziby odlozone do git stash (kopia; teraz pracuje na nich laptop)."
 }
-Remove-Item -Recurse -Force $tmp
+Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
 Write-Host "`nGotowe. Siedziba dziala na laptopie. Panel: .\laptop.ps1   Aktualizacja: .\laptop.ps1 -Aktualizuj" -ForegroundColor Green
 Write-Host "Kwiatownik2 na tym komputerze: przed zmianami strony zawsze  git pull  (laptop wypycha commity danych)."

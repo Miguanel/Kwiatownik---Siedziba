@@ -14,6 +14,7 @@ set -uo pipefail
 cd "$(dirname "$0")/.."
 ADRES="http://127.0.0.1:8000"
 CZEKAJ_MIN="${1:-20}"
+SKRYPT_PRZED=$(md5sum serwer/aktualizuj.sh)
 
 if [ "$CZEKAJ_MIN" = "anuluj" ]; then
     curl -fsS -X POST -d akcja=anuluj "$ADRES/agents/aktualizacja"; echo; exit 0
@@ -37,6 +38,10 @@ git pull --ff-only || echo "!! git pull nieudany (zmiany kodu zrobione na laptop
 for f in "${ZMIENIONE[@]}"; do [ -f "$TMP/$f" ] && mkdir -p "$(dirname "$f")" && cp -p "$TMP/$f" "$f"; done
 rm -rf "$TMP"
 chmod +x serwer/*.sh 2>/dev/null || true
+# pull przyniosl nowa wersje tego skryptu - dalej ma dzialac juz nowa
+if [ "$(md5sum serwer/aktualizuj.sh)" != "$SKRYPT_PRZED" ] && [ -z "${AKTUALIZUJ_PONOWNIE:-}" ]; then
+    echo "== nowa wersja aktualizuj.sh - uruchamiam ja"; AKTUALIZUJ_PONOWNIE=1 exec bash serwer/aktualizuj.sh "$@"
+fi
 
 # ---- 1b. Kwiatownik2: zmiany strony z GitHuba; niezacommitowane dane Siedziby przechodza dzieki autostash.
 #          Git w kontenerze (root) zapisuje w Kwiatownik2/.git, wiec pull tez idzie przez kontener, gdy dziala.
@@ -73,6 +78,12 @@ if [ "$DZIALA" = 1 ] && [ "$CZEKAJ_MIN" -gt 0 ] 2>/dev/null; then
         echo "$(date +%T)  dziala zadan: $N"; sleep 30
     done
 fi
+
+# obrazy (Ollama ~2 GB) - przy slabym laczu pobieranie potrafi zerwac sie timeoutem; docker wznawia od pobranych warstw
+for PROBA in 1 2 3 4 5 6; do
+    docker compose pull --ignore-buildable && break
+    echo "!! Pobieranie obrazow przerwane (proba $PROBA/6) - ponawiam za 20 s"; sleep 20
+done
 
 if ! docker compose up -d --build; then
     echo "Budowa nieudana. Stary kontener nadal dziala - cofnij wstrzymanie: bash serwer/aktualizuj.sh anuluj"
