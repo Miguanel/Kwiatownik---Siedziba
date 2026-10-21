@@ -33,8 +33,8 @@ log = logging.getLogger(__name__)
 
 COMMON_LANGS = {"pl", "en"}
 ASIA_LANGS = {"zh", "ja", "ko"}
-HARD_SECTIONS = {"medycyna_wschodu", "barwienie", "kosmetyka", "nazwy_ludowe", "kultura"}
-STORY_SECTIONS = {"historia", "kultura", "nazwy_ludowe", "ciekawostki"}
+HARD_SECTIONS = {"medycyna_wschodu", "barwienie", "kosmetyka", "nazwy_ludowe", "kultura", "magia"}
+STORY_SECTIONS = {"historia", "kultura", "nazwy_ludowe", "ciekawostki", "magia"}
 CRITERIA = {"kompletnosc": "Kompletnosc schematu", "trudna_wiedza": "Wiedza trudno dostepna",
             "opowiesci": "Opowiesci i wierzenia", "przepisy": "Przepisy niekulinarne", "zrodla": "Zrodla i wiarygodnosc"}
 WEIGHTS = {"kompletnosc": 0.20, "trudna_wiedza": 0.30, "opowiesci": 0.25, "przepisy": 0.10, "zrodla": 0.15}

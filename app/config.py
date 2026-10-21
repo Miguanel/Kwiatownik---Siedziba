@@ -104,6 +104,15 @@ class Settings(BaseSettings):
     knowledge_encyclopedias: bool = True  # zagraniczne encyklopedie i bazy (Kotobank, Baidu Baike, PFAF...) - panel /encyklopedie
     knowledge_enc_max: int = 3            # ile encyklopedii na rosline w jednym przebiegu (rotacyjnie)
     knowledge_asia_langs: str = "zh,ja"   # Wikipedie czytane zawsze (poza KNOWLEDGE_WIKI_LANGS), jesli artykul jest
+    # --- Magia roslin (/magia): czary, zabobony, obrzedy, rosliny czarownic - zadanie plant_magic
+    magic_langs: str = "pl,de,ru,uk,en,cs,it,es,fr,ja,zh,la"   # jezyki zapytan (tezaurus: app/knowledge/magic_lexicon.py)
+    magic_plants: int = 3                 # ile roslin w jednym zadaniu (gdy nie wskazano)
+    magic_queries: int = 8                # ile zapytan na rosline w przebiegu (tropy + pojecia + archiwa)
+    magic_pages: int = 4                  # ile stron na rosline w przebiegu
+    magic_sweeps: int = 2                 # ile zapytan "od praktyki" (bez nazwy rosliny) w jednym zadaniu
+    magic_max_depth: int = 3              # jak daleko isc za tropami (trop z tropu z tropu...)
+    magic_include_modern: bool = False    # wspolczesne korespondencje wicca/new age bez dawnych zrodel - odrzucaj
+    magic_requery_days: int = 60          # to samo zapytanie o magie najwczesniej po tylu dniach
     backups_dir: Path = BASE_DIR / "data" / "backups"
     # Podglad "przed/po" kazdego zapisu pliku JSON (zakladka "Na zywo"); puste = DATA_DIR/snapshots
     snapshots_dir: Path | None = None

@@ -26,6 +26,7 @@ from app.web.monitor_routes import router as monitor_router
 from app.web.nn_routes import router as nn_router
 from app.web.encyclopedia_routes import router as encyclopedia_router
 from app.web.leads_routes import router as leads_router
+from app.web.magic_routes import router as magic_router
 from app.web.tasks_routes import router as tasks_router
 from app.worker import actions
 from app.worker.discover import cleanup_discoveries
@@ -126,6 +127,7 @@ app.include_router(deploy_router)
 app.include_router(nn_router)
 app.include_router(encyclopedia_router)
 app.include_router(leads_router)
+app.include_router(magic_router)
 
 
 @app.get("/health")

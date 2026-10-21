@@ -321,7 +321,37 @@ def build_groups(limit: int = 150) -> list[TaskGroup]:
                                  for j in failed], len(failed), 5))
     groups += _lead_groups(by_kind)
     groups += _nn_groups(by_kind)
+    groups += _magic_groups(by_kind, limit)
     return sorted(groups, key=lambda g: (g.total == 0, g.priority))
+
+
+def _magic_groups(by_kind: dict, limit: int) -> list[TaskGroup]:
+    """Magia roslin: rosliny do zbadania (najpierw nigdy nieszukane, slynne w magii ludowej, z otwartymi tropami)."""
+    try:
+        from app.models import MagicLead, PlantQuery
+        from app.worker.magic import magic_counts, plants_for_magic
+        with Session(engine) as s:
+            names = dict(s.exec(select(Plant.id, Plant.nazwa_pl)).all())
+            leads = dict(s.exec(select(MagicLead.plant_id, func.count()).where(MagicLead.status == "nowy")
+                                .group_by(MagicLead.plant_id)).all())
+            asked = set(s.exec(select(PlantQuery.plant_id).where(col(PlantQuery.slot).startswith("magia"))).all())
+        counts = magic_counts()
+        ids = plants_for_magic(min(limit, 60))
+    except Exception:  # noqa: BLE001 - brak tabeli przy pierwszym starcie
+        return []
+    todo = [pid for pid in ids if pid not in asked or leads.get(pid)]
+    busy = by_kind.get("plant_magic")
+    return [TaskGroup("plants_magic", "plants", "Magia i zabobony do odnalezienia",
+                      "Dawne magiczne i obrzedowe uzycia roslin (czary, amulety, uroki, wrozby, rosliny czarownic) - "
+                      "zapytania w wielu jezykach, tropy z lokalnymi nazwami i praktykami, stare ksiegi i archiwa. "
+                      "Panel: /magia.",
+                      [("plant_magic", "Szukaj magii")],
+                      [TaskItem(pid, names.get(pid, pid),
+                                " - ".join(x for x in (f"{counts[pid]} informacji o magii" if counts.get(pid) else
+                                                       "jeszcze bez magii",
+                                                       f"{leads[pid]} tropow" if leads.get(pid) else "") if x),
+                                "/magia", busy) for pid in todo],
+                      len(todo), 66)]
 
 
 def _lead_groups(by_kind: dict) -> list[TaskGroup]:
@@ -431,6 +461,9 @@ def run_task(state, group: str, action: str, ids: list[str]) -> str:
     if action == "leads_extract":
         jid = actions.start_leads_extract(state, 20)
         return f"Przegladanie ciekawostek pod katem wzmianek - zadanie #{jid}."
+    if action == "plant_magic":
+        jid = actions.start_plant_magic(state, [str(i) for i in ids])
+        return f"Szukanie magii i zabobonow {len(ids)} roslin - zadanie #{jid}."
     if action == "nn_train":
         jid = actions.start_nn_train(state, [str(i) for i in ids])
         return f"Trening {len(ids)} sieci - zadanie #{jid}."

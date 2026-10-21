@@ -69,18 +69,21 @@ def save(data: dict) -> None:
 # ------------------------------------------------------------------ odczyt dla algorytmu
 def chapters(data: dict | None = None) -> list[dict]:
     """Rozdzialy w kolejnosci strony: wbudowane + wlasne wstawione po rozdziale "po"."""
-    from app.knowledge.placement import CHAPTER_ICONS, CHAPTERS
+    from app.knowledge.placement import CHAPTER_ICONS, CHAPTERS, EXTRA_CHAPTERS
     data = data or load()
     out = [{"id": k, "tytul": v, "ikona": CHAPTER_ICONS.get(k, "ra-leaf"), "wbudowany": True, "po": None}
            for k, v in CHAPTERS.items()]
+    for k, (tytul, ikona, po) in EXTRA_CHAPTERS.items():  # wbudowane rozdzialy spoza szablonu (np. Magia i zabobony)
+        idx = next((i for i, c in enumerate(out) if c["id"] == po), len(out) - 1)
+        out.insert(idx + 1, {"id": k, "tytul": tytul, "ikona": ikona, "wbudowany": True, "po": po})
     for r in data["rozdzialy"]:
         if any(c["id"] == r["id"] for c in out):
             continue
         row = {"id": r["id"], "tytul": r.get("tytul") or r["id"], "ikona": r.get("ikona") or "ra-leaf",
                "wbudowany": False, "po": r.get("po"), "zrodlo": r.get("zrodlo"), "utworzono": r.get("utworzono")}
         idx = next((i for i, c in enumerate(out) if c["id"] == r.get("po")), len(out) - 1)
-        while idx + 1 < len(out) and not out[idx + 1]["wbudowany"] and out[idx + 1].get("po") == r.get("po"):
-            idx += 1                                   # kilka wlasnych po tym samym rozdziale - w kolejnosci dodania
+        while idx + 1 < len(out) and out[idx + 1].get("po") == r.get("po"):
+            idx += 1                                   # po wbudowanych dodatkowych (Magia) i wczesniej dodanych wlasnych
         out.insert(idx + 1, row)
     return out
 

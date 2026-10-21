@@ -36,6 +36,7 @@ KIND_LABELS = {
     "plant_organize": "Porządkowanie wiedzy", "plant_photos": "Zdjęcia z Wikimedia Commons", "plants_sync": "Rejestr roślin",
     "translate": "Tłumaczenie przepisów", "enrich": "Opracowanie przepisów", "export": "Eksport przepisów",
     "import_k1": "Import ze starego Kwiatownika", "leads_extract": "Wzmianki o przepisach", "leads_search": "Szukanie przepisów",
+    "plant_magic": "Magia roślin",
     "nn_train": "Trening sieci neuronowych", "nn_init": "Pobieranie enkodera", "agent_audit": "Audyt bazy wiedzy",
     "agent_dispatch": "Zleceniodawca", "agent_deploy": "Wdrożeniowiec", "fb_post": "Post na fanpage",
     "fb_ideas": "Pomysły na posty", "fb_review": "Ocena postów", "ollama_pull": "Pobieranie modelu",

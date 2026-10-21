@@ -238,9 +238,14 @@ def apply_routing(raw: str, slots: list[Slot], points: list[dict]) -> dict[int, 
     return out
 
 
+# sekcje, ktorych nie wplatamy w tekst rozdzialow - maja wlasny rozdzial na stronie (rozmieszczenie, placement.py)
+NO_MERGE_SECTIONS = ("magia",)
+
+
 async def route(llm, data: dict, plant_pl: str, points: list[dict], prefer=None, log=None) -> dict[int, str | None]:
     say = log or (lambda m: None)
     routes = {p["pid"]: default_route(data, p) for p in points}
+    points = [p for p in points if p.get("sekcja") not in NO_MERGE_SECTIONS]   # magia -> wlasny rozdzial
     if llm is None or not points:
         return require_core_parts(data, routes, points, say)
     slots = merge_slots(data)

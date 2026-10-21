@@ -22,10 +22,11 @@ from app.worker import activity
 
 log = logging.getLogger(__name__)
 TZ = ZoneInfo(settings.timezone)
-EVENT_KINDS = ("plant_research", "plant_apply", "plant_merge", "plant_place", "plant_photos", "translate", "enrich", "export",
+EVENT_KINDS = ("plant_research", "plant_magic", "plant_apply", "plant_merge", "plant_place", "plant_photos", "translate", "enrich", "export",
                "scan", "harvest")
 JOB_TEXT = {
-    "plant_research": "zbiera wiedzę o roślinach", "plant_apply": "zapisuje zebraną wiedzę do Kwiatownika",
+    "plant_research": "zbiera wiedzę o roślinach", "plant_magic": "szuka dawnej magii i zabobonów roślin",
+    "plant_apply": "zapisuje zebraną wiedzę do Kwiatownika",
     "plant_merge": "wplata wiedzę z sieci w rozdziały roślin",
     "plant_place": "rozkłada wiedzę z sieci po rozdziałach roślin", "plant_organize": "porządkuje wiedzę o roślinach",
     "plant_photos": "pobiera zdjęcia z Wikimedia Commons", "plants_sync": "porządkuje rejestr roślin",
@@ -125,6 +126,10 @@ def _event_for_job(job: Job) -> dict | None:
             text = (f"Zebrano {n} sprawdzonych informacji" + (f" o: {plants_txt}" if plants_txt else "")
                     + " – trafią na stronę przy najbliższej publikacji")
             ev_kind = "wiedza"
+    elif kind == "plant_magic" and int(st.get("zweryfikowane") or 0):
+        text = (f"Odnaleziono {st['zweryfikowane']} sprawdzonych informacji o dawnej magii i zabobonach roślin"
+                + (f": {plants_txt}" if plants_txt else ""))
+        ev_kind = "wiedza"
     elif kind == "plant_photos" and st.get("applied"):
         text, ev_kind = f"Nowe zdjęcia z Wikimedia Commons dla {st['applied']} roślin", "zdjecia"
     elif kind == "plant_merge" and st.get("merged"):

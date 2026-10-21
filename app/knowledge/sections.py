@@ -13,7 +13,8 @@ SECTIONS: dict[str, str] = {
     "barwienie": "Barwienie (tkaniny, welna, wlosy, pisanki) i inne zastosowania rzemieslnicze",
     "kosmetyka": "Zastosowanie w kosmetyce",
     "historia": "Historia, etymologia nazwy, dawne zastosowania",
-    "kultura": "Wierzenia, obrzedy, legendy i tradycje ludowe roznych krajow",
+    "kultura": "Legendy, symbolika, swieta i tradycje ludowe roznych krajow (bez magii)",
+    "magia": "Magia i zabobony: czary, amulety, uroki, wrozby, magia milosna, rosliny czarownic, magiczne leczenie",
     "nazwy_ludowe": "Nazwy ludowe i regionalne",
     "bezpieczenstwo": "Toksycznosc, przeciwwskazania, interakcje, mozliwe pomylki",
     "uprawa": "Uprawa i rozmnazanie",
@@ -24,7 +25,7 @@ SECTION_TITLES_PL: dict[str, str] = {
     "sklad": "Skład i substancje czynne", "zastosowanie_lecznicze": "Ziołolecznictwo i medycyna ludowa",
     "medycyna_wschodu": "Medycyna chińska, kampo, ajurweda",
     "barwienie": "Barwienie i rzemiosło", "kosmetyka": "Kosmetyka", "historia": "Historia i nazwa",
-    "kultura": "Wierzenia i tradycje", "nazwy_ludowe": "Nazwy ludowe", "bezpieczenstwo": "Bezpieczeństwo",
+    "kultura": "Wierzenia i tradycje", "magia": "Magia i zabobony", "nazwy_ludowe": "Nazwy ludowe", "bezpieczenstwo": "Bezpieczeństwo",
     "uprawa": "Uprawa", "ciekawostki": "Ciekawostki",
 }
 

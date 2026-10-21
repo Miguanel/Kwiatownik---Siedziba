@@ -182,6 +182,7 @@ class PlantFact(SQLModel, table=True):
     reason: str | None = None                         # powod odrzucenia / uwagi weryfikatora
     extracted_by: str | None = None
     verified_by: str | None = None
+    meta_json: str | None = None                      # magia: {"rodzaj", "kraj", "epoka", "tradycja", "toksyczne"}
     created_at: datetime = Field(default_factory=_now)
 
 
@@ -417,4 +418,26 @@ class RecipeLead(SQLModel, table=True):
     found_url: str | None = None
     search_log: str | None = None                # JSON: zapytania i sprawdzone strony z powodami
     model: str | None = None
+    created_at: datetime = Field(default_factory=_now)
+
+
+class MagicLead(SQLModel, table=True):
+    """Trop (azymut) magii roslin: lokalna nazwa rosliny, nazwa praktyki albo jej odpowiednik w innej kulturze,
+    wypisany przez LLM ze strony o magii. Kazdy trop staje sie kolejnym zapytaniem (app/knowledge/magic.py)."""
+    id: int | None = Field(default=None, primary_key=True)
+    plant_id: str | None = Field(default=None, index=True)     # None = trop ogolny (przeszukiwanie od praktyki)
+    term: str                                    # termin w oryginalnym pismie
+    language: str
+    kind: str = "praktyka"                       # nazwa | praktyka | analogia
+    rodzaj: str | None = None                    # rodzaj praktyki (magic_lexicon.RODZAJE)
+    note: str | None = None                      # czego szukac (po polsku)
+    origin_url: str | None = None                # strona, na ktorej trop znaleziono
+    depth: int = 1                               # 1 = z zapytania tezaurusa, 2 = z tropu itd.
+    parent_id: int | None = None
+    parent_yield: int = 0                        # ile informacji dala strona, z ktorej pochodzi trop
+    fingerprint: str = Field(index=True)
+    status: str = Field(default="nowy", index=True)   # nowy | sprawdzony | wyczerpany | odrzucony
+    attempts: int = 0
+    facts: int = 0                               # ile nowych informacji dal ten trop
+    last_at: datetime | None = None
     created_at: datetime = Field(default_factory=_now)

@@ -215,6 +215,24 @@ MIEJSCA: tuple[Place, ...] = (
           ("nazw", "nazywan", "okresla", "dialekt", "gwar", "zwan"),
           "nazwy ludowe i regionalne w roznych jezykach"),
 )
+
+
+def _magic_places() -> tuple[Place, ...]:
+    """Rozdzial "Magia i zabobony" (po "Wiedzy tajemnej"): podrozdzial na kazdy rodzaj praktyki z tezaurusa magii.
+    Rozdzial spoza szablonu Kwiatownika - wstawki niosa jego tytul i ikone (jak rozdzialy z "Ukladu strony")."""
+    from app.knowledge.magic_lexicon import CHAPTER, RODZAJE
+    cid, ctitle, cicon, after = CHAPTER
+    return tuple(Place(f"{cid}/{key}", title, icon, False, {"magia": 1.5}, words, desc,
+                       chapter_title=ctitle, chapter_icon=cicon, chapter_after=after)
+                 for key, (title, icon, desc, words) in RODZAJE.items())
+
+
+MAGIC_PLACES = _magic_places()
+MIEJSCA = MIEJSCA + MAGIC_PLACES
+MAGIC_KIND_BONUS = 3.5     # rodzaj praktyki z metadanych informacji (LLM przy zbieraniu) -> jego podrozdzial
+# rozdzialy spoza szablonu Kwiatownika, ktore ma kazda instalacja (nie z pliku Ukladu strony): id -> (tytul, ikona, po)
+EXTRA_CHAPTERS = {MAGIC_PLACES[0].chapter_key: (MAGIC_PLACES[0].chapter_title, MAGIC_PLACES[0].chapter_icon,
+                                                MAGIC_PLACES[0].chapter_after)}
 PLACE_BY_ID = {p.id: p for p in MIEJSCA}
 # slowa jednoznaczne: jedno trafienie przesadza o miejscu mocniej niz sekcja, do ktorej trafil punkt
 STRONG = {
@@ -237,6 +255,7 @@ FALLBACK = {
     "kosmetyka": "zastosowanie/kosmetyka", "medycyna_wschodu": "natura/profil", "uprawa": "zastosowanie/ogrod",
     "bezpieczenstwo": "bezpieczenstwo/przeciwwskazania", "zastosowanie_lecznicze": "zastosowanie/medycyna",
     "sklad": "surowce/sklad", "opis": "rozpoznawanie/budowa", "czesci_rosliny": "surowce/inne",
+    "magia": "magia/zabobony",
 }
 
 # czesc rosliny -> podrozdzial tej czesci w "Surowcach" (wagi sekcji)
@@ -298,9 +317,21 @@ def leftover_points(data: dict) -> list[dict]:
             fakty = [f for f in p.get("fakty") or [] if f]
             if not p.get("tekst") or not p.get("zrodla") or not fakty or set(fakty) <= used:
                 continue
-            out.append({"pid": len(out) + 1, "sekcja": sec.get("klucz"), "czesc": p.get("czesc"),
-                        "tekst": str(p["tekst"]), "zrodla": list(p.get("zrodla") or []), "fakty": fakty})
+            row = {"pid": len(out) + 1, "sekcja": sec.get("klucz"), "czesc": p.get("czesc"),
+                   "tekst": str(p["tekst"]), "zrodla": list(p.get("zrodla") or []), "fakty": fakty}
+            kind = magic_kind(data, fakty)
+            if kind:
+                row["rodzaj"] = kind
+            out.append(row)
     return out
+
+
+def magic_kind(data: dict, fakty: list[str]) -> str | None:
+    """Rodzaj praktyki magicznej punktu - z metadanych jego informacji w wiedza.fakty (najczestszy)."""
+    meta = {f.get("id"): f.get("magia") for f in (data.get("wiedza") or {}).get("fakty") or []
+            if isinstance(f, dict) and isinstance(f.get("magia"), dict)}
+    kinds = [meta[f].get("rodzaj") for f in fakty if meta.get(f) and meta[f].get("rodzaj")]
+    return max(set(kinds), key=kinds.count) if kinds else None
 
 
 # ------------------------------------------------------------------ miejsca czesci rosliny
@@ -394,6 +425,8 @@ def score_point(data: dict, point: dict, places: list[Place], merged: dict[str, 
             s -= REJECTED
         if pl.id in ("surowce/inne", "surowce/sklad") and own_part is not None:
             s -= 1.0                                   # punkt o konkretnej czesci -> raczej podrozdzial tej czesci
+        if point.get("rodzaj") and pl.id == f"magia/{point['rodzaj']}":
+            s += MAGIC_KIND_BONUS
         out[pl.id] = round(s, 2)
     return out
 

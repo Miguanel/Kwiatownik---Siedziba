@@ -1,0 +1,152 @@
+{% extends "base.html" %}
+{% block content %}
+{% include "agents_style.html" %}
+<style>
+  .mg-kind { display: flex; align-items: center; gap: 8px; }
+  .mg-kind i { font-style: normal; font-size: 1.1em; }
+  .mg-fact { border-left: 3px solid #d7ecd9; padding: 4px 0 4px 10px; margin: 6px 0; }
+  .mg-fact.s-rejected { border-color: #f0c9c9; opacity: .75; }
+  .mg-fact.s-new { border-color: #f3e2a6; }
+  .mg-meta { font-size: .84em; color: #6b7568; }
+  .mg-quote { font-size: .84em; color: #4d574a; margin: 2px 0 0; word-break: break-word; }
+  .mg-pill { display: inline-block; background: #eef0e8; border-radius: 10px; padding: 1px 8px; font-size: .84em; margin: 2px 2px 0 0; }
+  .mg-pill.tox { background: #f6d5d5; }
+  .mg-form { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; }
+  .mg-form label { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  .mg-form input[type=number] { width: 64px; }
+  .mg-form select { max-width: min(100%, 260px); }
+  .mg-term { font-weight: 600; word-break: break-word; }
+  .mg-list { margin: 0; padding-left: 18px; font-size: .9em; }
+  .tag.s-nowy { background: #fff1c2; } .tag.s-sprawdzony { background: #d7ecd9; }
+  .tag.s-wyczerpany { background: #eee; } .tag.s-odrzucony { background: #f6d5d5; }
+  .mg-tbl td { vertical-align: top; }
+  @media (max-width: 640px) { .mg-tbl .hide-s { display: none; } }
+</style>
+<h1>Magia roślin</h1>
+<p class="muted ag-intro">Dawne magiczne i obrzędowe użycia roślin: czary i zabobony, amulety, uroki, wróżby, magia miłosna,
+  rośliny czarownic, klątwy, zamawianie chorób. Siedziba pyta w {{ settings.magic_langs.split(',') | length }} językach
+  (nazwa rośliny + pojęcia z tezaurusa), idzie za <b>tropami</b> (lokalne nazwy roślin i praktyk, odpowiedniki w innych
+  kulturach — każdy trop to nowe zapytanie, do głębokości {{ settings.magic_max_depth }}), przeszukuje stare księgi
+  i archiwa oraz strony o samych praktykach (jedna strona = wiedza o wielu roślinach). Każda informacja ma cytat ze źródła,
+  przechodzi weryfikację drugim modelem i trafia do rozdziału <b>„Magia i zabobony”</b> na stronie rośliny.
+  Opis, nie przepis: bez ilości i dawek, rośliny trujące z ostrzeżeniem.</p>
+{% if msg %}<div class="ag-msg">{{ msg }}</div>{% endif %}
+
+<div class="ag-bar">
+  <form method="post" action="/magia/szukaj" class="mg-form">
+    <label>Szukaj magii dla <input name="limit" type="number" min="1" max="30" value="{{ settings.magic_plants }}"> roślin</label>
+    <label>albo tylko: <select name="roslina"><option value="">(Siedziba sama wybierze)</option>
+      {% for pid, nm in plants %}<option value="{{ pid }}">{{ nm or pid }}</option>{% endfor %}</select></label>
+    <label>+ przegląd od praktyki: <input name="sweeps" type="number" min="0" max="10" value="{{ settings.magic_sweeps }}"> zapytań</label>
+    <button>Szukaj</button>
+  </form>
+</div>
+
+<div class="ag-tiles">
+  <div class="ag-tile"><b>{{ total_facts }}</b>informacji o magii</div>
+  {% for k, lab in fact_labels.items() %}<div class="ag-tile"><b>{{ fact_counts.get(k, 0) }}</b>{{ lab }}</div>{% endfor %}
+  <div class="ag-tile"><b>{{ by_plant | length }}</b>roślin z magią (top 15)</div>
+  <div class="ag-tile"><b>{{ lead_counts.get('nowy', 0) }}</b>tropów do sprawdzenia</div>
+  <div class="ag-tile"><b>{{ q_with_page }}/{{ queries }}</b>zapytań ze stroną</div>
+  {% if toxic %}<div class="ag-tile"><b>{{ toxic }}</b>o roślinach trujących</div>{% endif %}
+</div>
+
+<div class="ag-grid">
+  <div class="ag-card">
+    <h2>Rodzaje praktyk</h2>
+    {% for k, r in rodzaje.items() %}{% set n = by_kind.get(k, 0) %}
+    <div class="ag-row"><span class="mg-kind"><i class="ra {{ r[1] }}"></i>{{ r[0] }}</span>
+      <span class="ag-track"><i style="width:{{ (100 * n / top) | round(0) }}%"></i></span><b>{{ n }}</b></div>
+    {% endfor %}
+  </div>
+  <div class="ag-card">
+    <h2>Skąd i z kiedy</h2>
+    <p class="mg-meta">Kraje i regiony:</p>
+    <div>{% for k, n in by_country %}<span class="mg-pill">{{ k }} · {{ n }}</span>{% else %}<span class="muted">jeszcze nic</span>{% endfor %}</div>
+    <p class="mg-meta">Epoki:</p>
+    <div>{% for k, n in by_age %}<span class="mg-pill">{{ k }} · {{ n }}</span>{% else %}<span class="muted">jeszcze nic</span>{% endfor %}</div>
+    <p class="mg-meta">Języki źródeł:</p>
+    <div>{% for k, n in by_lang %}<span class="mg-pill">{{ k }} · {{ n }}</span>{% else %}<span class="muted">jeszcze nic</span>{% endfor %}</div>
+  </div>
+  <div class="ag-card">
+    <h2>Rośliny z największą wiedzą magiczną</h2>
+    <ol class="mg-list">{% for pid, n in by_plant %}<li><a href="/plants/{{ pid }}">{{ names.get(pid, pid) }}</a> – {{ n }}</li>
+      {% else %}<li class="muted">jeszcze nic – uruchom szukanie wyżej</li>{% endfor %}</ol>
+  </div>
+</div>
+
+<h2>Tropy (azymuty)</h2>
+<p class="muted">Lokalne nazwy roślin, nazwy praktyk i ich odpowiedniki w innych kulturach, wypisane z przeczytanych stron.
+  Każdy trop to kolejne zapytanie w jego języku. Głębokość 1 = z zapytania tezaurusa, 2 = trop z tropu itd.</p>
+<div class="ag-tiles">
+  {% for k, lab in lead_labels.items() %}
+  <a class="ag-tile" href="/magia?trop={{ k }}" style="text-decoration:none;color:inherit;{% if trop == k %}outline:2px solid #2f5d3a{% endif %}">
+    <b>{{ lead_counts.get(k, 0) }}</b>{{ lab }}</a>
+  {% endfor %}
+  <a class="ag-tile" href="/magia?trop=wszystkie" style="text-decoration:none;color:inherit;{% if trop not in lead_labels %}outline:2px solid #2f5d3a{% endif %}">
+    <b>{{ lead_counts.values() | sum }}</b>wszystkie</a>
+</div>
+<div class="ag-tbl">
+  <table class="mg-tbl">
+    <thead><tr><th>Trop</th><th>Roślina</th><th class="hide-s">Rodzaj</th><th class="num">Głęb.</th><th class="num hide-s">Dał</th><th>Status</th><th></th></tr></thead>
+    <tbody>
+    {% for ld in leads %}
+    <tr>
+      <td><span class="mg-term">{{ ld.term }}</span> <span class="tag">{{ ld.language }}</span> <span class="mg-meta">{{ kind_labels.get(ld.kind, ld.kind) }}</span>
+        {% if ld.note %}<br><span class="mg-meta">{{ ld.note }}</span>{% endif %}
+        {% if ld.origin_url %}<br><a class="mg-meta" href="{{ ld.origin_url }}" target="_blank" rel="noopener">skąd: {{ ld.origin_url.split('/')[2] if '//' in ld.origin_url else ld.origin_url }}</a>{% endif %}</td>
+      <td>{% if ld.plant_id %}<a href="/plants/{{ ld.plant_id }}">{{ names.get(ld.plant_id, ld.plant_id) }}</a>{% else %}<span class="muted">ogólny</span>{% endif %}</td>
+      <td class="hide-s">{{ rodzaje[ld.rodzaj][0] if ld.rodzaj in rodzaje else '' }}</td>
+      <td class="num">{{ ld.depth }}</td>
+      <td class="num hide-s">{{ ld.facts }}</td>
+      <td><span class="tag s-{{ ld.status }}">{{ lead_labels.get(ld.status, ld.status) }}</span></td>
+      <td>
+        {% if ld.status == 'nowy' and ld.plant_id %}<form method="post" action="/magia/szukaj"><input type="hidden" name="roslina" value="{{ ld.plant_id }}"><input type="hidden" name="sweeps" value="0"><button>Szukaj</button></form>{% endif %}
+        {% if ld.status != 'odrzucony' %}<form method="post" action="/magia/trop/{{ ld.id }}/status"><input type="hidden" name="status" value="odrzucony"><input type="hidden" name="back" value="{{ trop }}"><button>Odrzuć</button></form>
+        {% else %}<form method="post" action="/magia/trop/{{ ld.id }}/status"><input type="hidden" name="status" value="nowy"><input type="hidden" name="back" value="{{ trop }}"><button>Przywróć</button></form>{% endif %}
+      </td>
+    </tr>
+    {% else %}
+    <tr><td colspan="7" class="muted">Brak tropów w tym widoku. Pojawiają się po pierwszych przeczytanych stronach.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% if lead_total > per %}
+<div class="ag-pager">
+  {% if page > 1 %}<a href="/magia?trop={{ trop }}&page={{ page - 1 }}">&larr; poprzednie</a>{% endif %}
+  <span class="muted">strona {{ page }} z {{ (lead_total + per - 1) // per }}</span>
+  {% if page * per < lead_total %}<a href="/magia?trop={{ trop }}&page={{ page + 1 }}">następne &rarr;</a>{% endif %}
+</div>
+{% endif %}
+
+<h2>Ostatnie znaleziska</h2>
+<div class="ag-card">
+  {% for f, m in recent %}
+  <div class="mg-fact s-{{ f.status }}">
+    <div>{{ f.text }}</div>
+    <div class="mg-meta"><a href="/plants/{{ f.plant_id }}">{{ names.get(f.plant_id, f.plant_id) }}</a>
+      {% if m.rodzaj in rodzaje %}<span class="mg-pill"><i class="ra {{ rodzaje[m.rodzaj][1] }}"></i> {{ rodzaje[m.rodzaj][0] }}</span>{% endif %}
+      {% if m.kraj %}<span class="mg-pill">{{ m.kraj }}</span>{% endif %}{% if m.epoka %}<span class="mg-pill">{{ m.epoka }}</span>{% endif %}
+      {% if m.tradycja %}<span class="mg-pill">{{ m.tradycja }}</span>{% endif %}{% if m.toksyczne %}<span class="mg-pill tox">roślina trująca</span>{% endif %}
+      <span class="tag">{{ fact_labels.get(f.status, f.status) }}</span>
+      · <a href="{{ f.source_url }}" target="_blank" rel="noopener">{{ f.source_name or 'źródło' }}</a> ({{ f.language or '?' }})
+      {% if f.reason and f.status == 'rejected' %}· <i>{{ f.reason }}</i>{% endif %}</div>
+    {% if f.quote %}<p class="mg-quote">„{{ f.quote[:240] }}”</p>{% endif %}
+  </div>
+  {% else %}
+  <p class="muted">Jeszcze nic nie znaleziono.</p>
+  {% endfor %}
+</div>
+
+<details class="ag-card" style="margin-top:14px">
+  <summary><b>Tezaurus, archiwa i przegląd od praktyki</b> <span class="muted">(app/knowledge/magic_lexicon.py)</span></summary>
+  <p class="mg-meta">Pojęcia (nazwa rośliny + słowa w języku; języki w kolejności prób):</p>
+  <ul class="mg-list">{% for c in concepts %}<li><b>{{ c.key }}</b> → {{ rodzaje[c.rodzaj][0] }}: {{ c.langs | join(', ') }}
+    <span class="mg-meta">({{ c.terms | length }} języków)</span></li>{% endfor %}</ul>
+  <p class="mg-meta">Głębokie archiwa (zapytania site:, w nawiasie informacje z nich):</p>
+  <div>{% for d in deep %}<span class="mg-pill">{{ d.name }} · {{ d.lang }} · {{ archives.get(d.domain, 0) }}</span>{% endfor %}</div>
+  <p class="mg-meta">Przegląd od praktyki ({{ sweeps | length }} zapytań, rotacyjnie):</p>
+  <ul class="mg-list">{% for lang, q, r in sweeps %}<li><span class="tag">{{ lang }}</span> {{ q }}</li>{% endfor %}</ul>
+</details>
+{% endblock %}

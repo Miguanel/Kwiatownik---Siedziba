@@ -46,10 +46,32 @@ def skeleton(pid: str, nazwa_pl: str, nazwa_lat: str | None, rodzina: str = "", 
 
 
 def fact_entry(fact) -> dict:
-    """PlantFact (baza Siedziby) -> wpis w pliku rosliny."""
-    return {"id": f"s{fact.id}", "sekcja": fact.section, "czesc": norm_part(fact.part), "tekst": fact.text,
-            "jezyk": fact.language, "zrodlo": {"nazwa": fact.source_name or fact.source_url, "url": fact.source_url},
-            **({"cytat": quote_snippet(getattr(fact, "quote", None))} if quote_snippet(getattr(fact, "quote", None)) else {})}
+    """PlantFact (baza Siedziby) -> wpis w pliku rosliny. Magia: + "magia" {rodzaj, kraj, epoka, tradycja, toksyczne}."""
+    out = {"id": f"s{fact.id}", "sekcja": fact.section, "czesc": norm_part(fact.part), "tekst": fact.text,
+           "jezyk": fact.language, "zrodlo": {"nazwa": fact.source_name or fact.source_url, "url": fact.source_url},
+           **({"cytat": quote_snippet(getattr(fact, "quote", None))} if quote_snippet(getattr(fact, "quote", None)) else {})}
+    meta = magic_meta(getattr(fact, "meta_json", None))
+    if meta:
+        out["magia"] = meta
+    return out
+
+
+def magic_meta(raw: str | None) -> dict:
+    """meta_json informacji -> slownik dla pliku rosliny (tylko znane klucze, krotkie teksty bez HTML)."""
+    try:
+        data = json.loads(raw) if raw else {}
+    except ValueError:
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    out = {}
+    for k in ("rodzaj", "kraj", "epoka", "tradycja"):
+        v = re.sub(r"\s+", " ", str(data.get(k) or "")).strip()[:80]
+        if v and not re.search(r"[<>]", v):
+            out[k] = v
+    if data.get("toksyczne") is True:
+        out["toksyczne"] = True
+    return out
 
 
 def quote_snippet(quote: str | None, limit: int = 240) -> str:

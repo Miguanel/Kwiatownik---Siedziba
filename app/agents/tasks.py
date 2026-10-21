@@ -34,6 +34,9 @@ KINDS: dict[str, Kind] = {
                       "dzialanie lecznicze, surowce, substancje czynne, medycyna ludowa roznych krajow"),
     "bezpieczenstwo": Kind("Toksycznosc i interakcje", "plant_research", ("ostrzezenia", "interakcje"), True,
                            "toksycznosc, przeciwwskazania, interakcje z lekami"),
+    "magia": Kind("Magia, zabobony i obrzedy", "plant_magic", (), True,
+                  "magiczne i obrzedowe uzycia roslin: czary, amulety, uroki, wrozby, rosliny czarownic - tezaurus "
+                  "w wielu jezykach, tropy (lokalne nazwy i praktyki), stare ksiegi i archiwa"),
     "luki": Kind("Uzupelnienie luk w schemacie", "plant_research", (), True,
                  "najwazniejsze puste podrozdzialy rosliny (Siedziba sama dobiera tematy i jezyki)"),
     "nowa_wiedza": Kind("Pierwsze zbieranie wiedzy", "plant_research", (), True,
@@ -63,7 +66,8 @@ KINDS: dict[str, Kind] = {
                           hint="nowa wersja malych sieci (rodzaj strony, typ przepisu, sekcja i czesc rosliny) - bez LLM"),
 }
 # rodzaje, ktore moze zaproponowac ekspert LLM w audycie (dotycza roslin)
-EXPERT_KINDS = ("opowiesci", "wschod", "barwienie", "kosmetyka", "lecznicze", "bezpieczenstwo", "luki", "scal", "zdjecia")
+EXPERT_KINDS = ("opowiesci", "magia", "wschod", "barwienie", "kosmetyka", "lecznicze", "bezpieczenstwo", "luki", "scal",
+                "zdjecia")
 PLANT_KINDS = {k for k, v in KINDS.items() if v.job.startswith("plant")}
 ACTIVE = [JobStatus.queued, JobStatus.running]
 NOT_PRODUCTION = ("agent_", "fb_", "ollama_pull", "nn_init")      # zadania, ktore nie licza sie jako "Siedziba pracuje"
@@ -116,6 +120,8 @@ def execute(state, kind: str, p: dict) -> int:
         if not plants:
             return actions.start_plant_research(state, None, int(p.get("limit") or 3), slots=slots)
         return actions.start_plant_research(state, plants, len(plants), slots=slots)
+    if k.job == "plant_magic":
+        return actions.start_plant_magic(state, plants or None, int(p.get("limit") or 0) or None)
     if k.job in ("plant_apply", "plant_organize", "plant_merge", "plant_place", "plant_photos"):
         fn = {"plant_apply": actions.start_plant_apply, "plant_organize": actions.start_plant_organize,
               "plant_merge": actions.start_plant_merge, "plant_place": actions.start_plant_place,
