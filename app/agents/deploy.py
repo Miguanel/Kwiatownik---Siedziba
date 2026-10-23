@@ -3,7 +3,8 @@
 Kwiatownik2 to strona statyczna na Render, ktora buduje sie sama po kazdym pushu do repozytorium. Siedziba zapisuje
 wiedze o roslinach (data/plants/*.json) i przepisy (data/przepisy/*.json) prosto w kopii roboczej repozytorium.
 Agent:
-  1. sprawdza (git status) zmienione pliki TYLKO w data/przepisy, data/plants i data/changelog.json,
+  1. sprawdza (git status) zmienione pliki TYLKO w data/przepisy, data/plants, data/changelog.json
+     i static/json/paleta_siedziba.json (Paleta Barw - odswiezana tuz przed sprawdzeniem),
   2. liczy, co jest nowego wzgledem ostatniego commita: informacje o roslinach (punkty bloku "wiedza"), nowe rosliny,
      zdjecia, nowe przepisy (po id) - i sprawdza, czy kazdy plik JSON jest poprawny,
   3. publikuje, gdy: >= DEPLOY_MIN_POINTS informacji albo >= DEPLOY_MIN_RECIPES przepisow, albo cokolwiek nowego,
@@ -35,7 +36,7 @@ from app.db import engine
 from app.models import AgentRun, Job, JobStatus
 
 TZ = ZoneInfo(settings.timezone)
-DATA_PATHS = ("data/przepisy", "data/plants", "data/changelog.json")
+DATA_PATHS = ("data/przepisy", "data/plants", "data/changelog.json", "static/json/paleta_siedziba.json")
 CHANGELOG = "data/changelog.json"
 CHANGELOG_KEEP = 200
 # Kopia Kwiatownika2 z Windows (CRLF) = "true"; kopia sklonowana na serwerze Linux (LF) = "input"
@@ -110,6 +111,8 @@ def readiness() -> tuple[Path | None, str | None]:
 
 def changed_files(repo: Path) -> list[tuple[str, str]]:
     """[(status, sciezka)] zmienionych plikow danych (git status), np. ('M', 'data/plants/lipa.json')."""
+    from app.worker.paleta import refresh_quietly
+    refresh_quietly()                    # Paleta Barw: uzupelnienia z bazy (najczesciej co 10 min, tylko przy zmianie)
     res = git(repo, "status", "--porcelain=v1", "-z", "--untracked-files=all", "--", *DATA_PATHS)
     out = []
     for entry in res.stdout.split("\0"):

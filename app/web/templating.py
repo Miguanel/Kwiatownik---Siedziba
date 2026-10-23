@@ -32,7 +32,7 @@ NAV: list[list[tuple[str, str]]] = [
      ("/agents", "Agenci")],
     [("/sources", "Zrodla"), ("/scrapers", "Scrapery"), ("/discover", "Odkrywanie"),
      ("/encyklopedie", "Encyklopedie"), ("/wzmianki", "Wzmianki"), ("/magia", "Magia")],
-    [("/plants", "Rosliny"), ("/items", "Zebrane"), ("/export", "Eksport")],
+    [("/plants", "Rosliny"), ("/items", "Zebrane"), ("/paleta", "Paleta"), ("/export", "Eksport")],
     [("/llm", "LLM"), ("/nn", "Sieci")],
     [("/site", "Strona"), ("/uklad", "Uklad strony"), ("/posts", "Fanpage")],
     [("/docs", "API")],

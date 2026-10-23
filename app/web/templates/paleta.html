@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block content %}
+{% include "agents_style.html" %}
+<style>
+  .pl-dot { display: inline-block; width: 12px; height: 12px; border-radius: 50%; vertical-align: -1px; margin-right: 6px;
+            box-shadow: inset 0 0 0 1px rgba(0,0,0,.2); }
+  .pl-tbl td { vertical-align: top; }
+  .pl-tbl .num { text-align: right; white-space: nowrap; }
+  .pl-miss { color: #8a5a00; }
+  .pl-note { font-size: .88em; color: #4d574a; margin: 2px 0 0; }
+  .pl-src a { word-break: break-word; }
+  @media (max-width: 700px) { .pl-tbl .hide-s { display: none; } }
+</style>
+<h1>Paleta barw</h1>
+<p class="muted ag-intro">Paleta Barw Zielarza w Kwiatowniku (zakładka <b>Paleta</b>) dobiera zioła do farbowania włosów.
+  Ręczny plik <code>static/json/paleta.json</code> (kolory, siła barwnika, proporcje) zostaje nietknięty. Siedziba dopisuje
+  do <code>static/json/paleta_siedziba.json</code> <b>zweryfikowane</b> informacje o farbowaniu i pielęgnacji <b>włosów</b>
+  (sekcje „barwienie” i „kosmetyka”, ostrzeżenia z „bezpieczeństwo”) ze źródłami. Strona pokazuje je przy ziołach w atlasie
+  i w recepturze. Plik odświeża się sam przed każdym sprawdzeniem commitu (Wdrożeniowiec) i trafia do repozytorium razem
+  z resztą danych.</p>
+{% if msg %}<div class="ag-msg">{{ msg }}</div>{% endif %}
+
+{% if not repo %}
+<div class="ag-card"><p>Nie znaleziono Kwiatownika2 z plikiem <code>static/json/paleta.json</code>. Ustaw <code>DEPLOY_REPO_DIR</code>
+  (w Dockerze <code>/kwiatownik2</code>) albo uruchom Siedzibę obok folderu Kwiatownik2.</p></div>
+{% else %}
+<div class="ag-bar">
+  <form method="post" action="/paleta/eksport"><button>Odśwież paletę w Kwiatowniku</button></form>
+  {% if all_pids %}
+  <form method="post" action="/paleta/szukaj"><input type="hidden" name="rosliny" value="{{ all_pids[:20] | join(',') }}">
+    <button title="Szukanie podrozdziałów Rzemiosło i Kosmetyka">Szukaj wiedzy o barwieniu ({{ all_pids[:20] | length }} roślin)</button></form>
+  {% endif %}
+</div>
+
+<div class="ag-tiles">
+  <div class="ag-tile"><b>{{ herbs | length }}</b>ziół w palecie</div>
+  <div class="ag-tile"><b>{{ all_pids | length }}</b>roślin Siedziby dopasowanych</div>
+  <div class="ag-tile"><b>{{ (out.uzupelnienia | length) if out else 0 }}</b>ziół z uzupełnieniami</div>
+  <div class="ag-tile"><b>{{ missing | length }}</b>bez rośliny w Siedzibie</div>
+  {% if out and out.zaktualizowano %}<div class="ag-tile"><b>{{ out.zaktualizowano[:16] | replace('T', ' ') }}</b>ostatnie przeliczenie (UTC)</div>{% endif %}
+</div>
+
+<div class="ag-card">
+  <h2>Zioła palety</h2>
+  <div style="overflow-x:auto">
+  <table class="pl-tbl">
+    <thead><tr><th>Zioło</th><th>Roślina w Siedzibie</th><th class="num hide-s">o barwieniu / kosmetyce</th>
+      <th class="num">o włosach</th><th class="num hide-s">czeka na weryfikację</th><th class="num">w palecie</th></tr></thead>
+    <tbody>
+    {% for z in herbs %}{% set c = counts.get(z.id, {}) %}{% set u = (out.uzupelnienia.get(z.id) if out and out.uzupelnienia else None) %}
+    <tr>
+      <td><span class="pl-dot" style="background:{{ z.kolor }}"></span><b>{{ z.nazwa }}</b><br><i class="muted">{{ z.lat }}</i></td>
+      <td>{% for pid in mapping.get(z.id, []) %}<a href="/plants/{{ pid }}">{{ plants.get(pid) or pid }}</a>{% if not loop.last %}, {% endif %}
+          {% else %}<span class="pl-miss">brak</span>{% endfor %}</td>
+      <td class="num hide-s">{{ c.wszystkie or 0 }}</td>
+      <td class="num">{{ c.o_wlosach or 0 }}</td>
+      <td class="num hide-s">{{ c.do_weryfikacji or 0 }}</td>
+      <td class="num">{{ c.w_palecie or 0 }}</td>
+    </tr>
+    {% if u %}<tr><td colspan="6">
+      {% for t in u.uwagi %}<p class="pl-note">• {{ t }}</p>{% endfor %}
+      {% for t in u.ostrzezenia %}<p class="pl-note">⚠ {{ t }}</p>{% endfor %}
+      <p class="pl-note pl-src">{% for zr in u.zrodla %}<a href="{{ zr.url }}" target="_blank" rel="noopener nofollow">{{ zr.nazwa }}</a>{% if zr.jezyk %} ({{ zr.jezyk }}){% endif %}{% if not loop.last %} · {% endif %}{% endfor %}</p>
+    </td></tr>{% endif %}
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% if missing %}<p class="muted">Zioła bez rośliny w Siedzibie ({{ missing | map(attribute='nazwa') | join(', ') }}) nie dostaną
+    uzupełnień, dopóki ich gatunek nie pojawi się w rejestrze roślin (nowy plik w Kwiatownik2/data/plants albo składnik przepisu).</p>{% endif %}
+</div>
+{% endif %}
+{% endblock %}
