@@ -2,6 +2,7 @@
 tlumaczenie na polski -> pominiecie kulinarnych -> sprawdzenie, czy przepis juz istnieje -> opracowanie
 (tradycyjne systemy) -> eksport."""
 import json
+import re
 from urllib.parse import urlparse
 from contextlib import nullcontext
 from datetime import datetime, timezone
@@ -388,7 +389,26 @@ def recheck_filters() -> int:
     return changed
 
 
+def _plant_loader():
+    """load(id) -> dane pliku rosliny z Kwiatownika (z pamiecia na czas jednego eksportu)."""
+    from app.knowledge import plantfile
+    cache: dict[str, dict | None] = {}
+
+    def load(pid: str) -> dict | None:
+        if not isinstance(pid, str) or not re.fullmatch(r"[a-z0-9_]{1,80}", pid):
+            return None                                # id z przepisu (od LLM) - tylko nazwa pliku, bez sciezek
+        if pid not in cache:
+            try:
+                cache[pid] = plantfile.read_plant(Path(settings.kwiatownik_plants_dir), pid)[0]
+            except (OSError, ValueError):
+                cache[pid] = None
+        return cache[pid]
+    return load
+
+
 def build_export_records() -> tuple[list[dict], list[int]]:
+    from app.pipeline.traditions import annotate
+    load_plant = _plant_loader()
     ok = [ItemStatus.approved, ItemStatus.exported] + ([] if settings.export_require_approval else [ItemStatus.translated])
     with Session(engine) as s:
         names = {x.id: x.name for x in s.exec(select(Source)).all()}
@@ -399,7 +419,8 @@ def build_export_records() -> tuple[list[dict], list[int]]:
         for p in primaries:
             group = [p] + list(s.exec(select(Item).where(Item.duplicate_of == p.id).order_by(Item.id)).all())
             srcs = [source_entry(names.get(g.source_id, "?"), g.url, g.title, g.language, g.created_at) for g in group]
-            records.append(with_sources(strip_invented(json.loads(p.data_json)), srcs))
+            # Wu Xing / Galen: dymek-ciekawostka liczony z pliku rosliny (bez LLM), tylko przepisy lecznicze
+            records.append(with_sources(annotate(strip_invented(json.loads(p.data_json)), load_plant), srcs))
             ids.append(p.id)
     return records, ids
 

@@ -18,7 +18,8 @@ from collections import Counter, deque
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-from app.llm.base import (AuthError, InvalidOutputError, LLMError, LLMProvider, LLMResult, QuotaExceededError,
+from app.llm.base import (GEN_SECONDS, AuthError, InvalidOutputError, LLMError, LLMProvider, LLMResult,
+                          QuotaExceededError,
                           RateLimiter, RateLimitError, RequestTooLargeError, ServerError, seconds_to_quota_reset)
 from app.llm.scoring import SCORERS
 
@@ -229,10 +230,15 @@ class ModelRouter:
                                     "cache": True})
                 return LLMResult(text, provider, model, 0.0, [], cached=True)
         job = _beat()                                  # zadanie czeka na model = zyje (wykrywanie zawieszonych)
+        # czekanie w kolejce do modelu (np. jedno miejsce w Ollamie) i dlugie generowanie to nie zawieszenie:
+        # znak zycia co minute, zeby straznik nie przerywal zadan czekajacych na model
+        hb = asyncio.create_task(_heartbeat(job)) if job is not None else None
         try:
             res = await self._complete_all(prompt, system, json_mode, avoid, prefer, prefer_timeout, cloud_only,
                                            prefer_only)
         finally:
+            if hb is not None:
+                hb.cancel()
             _beat(job)
         if key:
             self.cache.put(key, res.text, res.provider, res.model)
@@ -281,6 +287,7 @@ class ModelRouter:
             if wait:
                 await asyncio.sleep(wait)
             start = time.monotonic()
+            GEN_SECONDS.set(None)
             self.inflight[entry.key] += 1
             try:
                 text = await self.providers[entry.provider].generate(entry.model, prompt, system, json_mode)
@@ -292,13 +299,13 @@ class ModelRouter:
                 if isinstance(exc, RateLimitError) and not isinstance(exc, QuotaExceededError):
                     limited.add(entry.key)
                 self.recent.append({"ts": time.time(), "model": entry.key, "ok": False,
-                                    "s": round(time.monotonic() - start, 2), "error": type(exc).__name__})
+                                    "s": _took(start), "error": type(exc).__name__})
                 continue
             finally:
                 self.inflight[entry.key] -= 1
                 if self.inflight[entry.key] <= 0:
                     del self.inflight[entry.key]
-            took = round(time.monotonic() - start, 2)
+            took = _took(start)
             self.recent.append({"ts": time.time(), "model": entry.key, "ok": True, "s": took})
             self._on_success(entry, took)
             return LLMResult(text, entry.provider, entry.model, took, attempts)
@@ -319,6 +326,7 @@ class ModelRouter:
                 or self.provider_pause.get(provider_name, 0) > now:
             return None
         start = time.monotonic()
+        GEN_SECONDS.set(None)
         self.inflight[key] += 1
         try:
             gen = provider.generate(model, prompt, system, json_mode)
@@ -345,7 +353,7 @@ class ModelRouter:
             self.inflight[key] -= 1
             if self.inflight[key] <= 0:
                 del self.inflight[key]
-        took = round(time.monotonic() - start, 2)
+        took = _took(start)
         self.recent.append({"ts": time.time(), "model": key, "ok": True, "s": took})
         return LLMResult(text, provider_name, model, took, [])
 
@@ -454,6 +462,19 @@ class ModelRouter:
         await asyncio.gather(*(p.aclose() for p in self.providers.values()))
 
 
+def _took(start: float) -> float:
+    """Czas generowania bez czekania w kolejce dostawcy (GEN_SECONDS z LLMProvider.generate); atrapy dostawcow
+    w testach go nie ustawiaja - wtedy caly czas od startu."""
+    gen = GEN_SECONDS.get()
+    return gen if gen is not None else round(time.monotonic() - start, 2)
+
+
+async def _heartbeat(job_id: int, every: float = 60.0) -> None:
+    while True:
+        await asyncio.sleep(every)
+        _beat(job_id)
+
+
 def _beat(job_id: int | None = None) -> int | None:
     """Znak zycia zadania, ktore pyta model (biezace zadanie z kolejki - contextvar)."""
     try:
@@ -466,8 +487,10 @@ def _beat(job_id: int | None = None) -> int | None:
 
 
 def _validate_json(text: str, entry: ModelEntry) -> None:
-    cleaned = text.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+    from app.llm.base import is_garbage, strip_fences
     try:
-        json.loads(cleaned)
+        data = json.loads(strip_fences(text))
     except ValueError as exc:
         raise InvalidOutputError(f"{entry.key}: niepoprawny JSON") from exc
+    if is_garbage(data):              # np. {"error": "..."} albo wymyslony quiz - nastepny model, bez zapisu w pamieci
+        raise InvalidOutputError(f"{entry.key}: odpowiedz JSON bez zwiazku z zapytaniem")

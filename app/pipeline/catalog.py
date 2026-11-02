@@ -59,15 +59,18 @@ def load_plants(plants_dir: Path) -> dict[str, str]:
     d = Path(plants_dir)
     if not d.exists():
         return out
-    for f in sorted(d.rglob("*.json")):
+    # najpierw pliki w nowym formacie (data/plants/<id>.json), potem archiwum w podfolderach (stary format bez
+    # nazwa_pl) - inaczej np. bulwy/swierzabek_bulwiasty.json zaslanialby wlasciwy plik rosliny
+    for f in sorted(d.glob("*.json")) + sorted(x for x in d.rglob("*.json") if x.parent != d):
         try:
             p = json.loads(f.read_text(encoding="utf-8"))
         except (ValueError, OSError):
             continue
         if isinstance(p, dict):
             pid = p.get("id") or f.stem
-            name = p.get("nazwa_pl") or pid.replace("_", " ")
-            out.setdefault(pid, f"{name} ({p['nazwa_lat']})" if p.get("nazwa_lat") else name)
+            name = p.get("nazwa_pl") or p.get("gatunek") or pid.replace("_", " ")
+            lat = p.get("nazwa_lat") or p.get("nazwa_lacinska")
+            out.setdefault(pid, f"{name} ({lat})" if lat else name)
     return out
 
 

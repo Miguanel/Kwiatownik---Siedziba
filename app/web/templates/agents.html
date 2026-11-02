@@ -83,6 +83,15 @@
 </table></div>
 {% endif %}
 
+{% set rep = plan.powtarzajace_bledy if plan else None %}
+{% if rep %}
+<div class="ag-section"><h2>Wstrzymane z powodu powtarzajacego sie bledu</h2><span class="muted">3 zlecenia z rzedu skonczyly sie tym samym bledem - planista nie ponawia ich przez 24 h; trzeba naprawic przyczyne</span></div>
+<div class="table-wrap"><table>
+  <tr><th>Propozycja</th><th>Blad</th></tr>
+  {% for k, sig in rep.items() %}<tr><td class="nw">{{ k }}</td><td class="why">{{ sig }}</td></tr>{% endfor %}
+</table></div>
+{% endif %}
+
 {% set k = plan.kampania if plan else None %}
 {% if k and k.on %}
 <div class="ag-section"><h2>Kampanie "od A do Z"</h2><span class="muted">planista prowadzi te rosliny i to zrodlo przez caly potok, zanim zacznie nastepne</span></div>

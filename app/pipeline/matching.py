@@ -90,7 +90,8 @@ async def find_match(title: str, ingredients: list[str], candidates: list[Candid
                   f"PRZEPIS B: {c.title}\nSkladniki: {'; '.join(c.ingredients)}")
         try:
             res = await llm.complete(prompt, system=JUDGE_PROMPT, json_mode=True)
-            data = json.loads(res.text.strip().removeprefix("```json").removesuffix("```"))
+            from app.llm.base import json_object
+            data = json_object(res.text)
         except Exception as exc:
             log.warning("LLM nie ocenil podobienstwa: %s", exc)
             continue

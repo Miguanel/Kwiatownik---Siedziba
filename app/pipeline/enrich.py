@@ -1,8 +1,10 @@
 """Opracowanie przepisu w ujeciu tradycyjnych systemow (LLM) - po tlumaczeniu, przed eksportem.
 
 Tlumaczenie (translate.py) oddaje wiernie to, co jest w zrodle. Tutaj LLM DOPISUJE interpretacje w stylu
-Kwiatownika (wzorzec_przepisu.json): Piec Przemian (Wu Xing), triada Kampo, doktryna sygnatur, humory Galena,
-alchemia spagiryczna, chronoterapia - oraz ostrzezenia.
+Kwiatownika (wzorzec_przepisu.json): triada Kampo, doktryna sygnatur, alchemia spagiryczna, chronoterapia - oraz
+ostrzezenia.
+Wu Xing i humory Galena NIE sa juz pisane przez LLM (decyzja 2026-11-02): to tylko dymek-ciekawostka przy przepisie
+leczniczym, liczony algorytmem z profilu energetycznego rosliny (app/pipeline/traditions.py) przy eksporcie.
 Celowo BEZ ajurwedy i wzorca 5 filarow: dla ziol europejskich nie ma ich w zrodlach (model je wymyslal), wiec
 skladniki nie dostaja pol "filar", "tropizm_organowy" ani "smak_ajurweda" - a stare sa usuwane (strip_invented).
 
@@ -18,14 +20,10 @@ from datetime import date
 from app.llm.base import InvalidOutputError
 
 SYSTEMS: dict[str, str] = {
-    "wu_xing": "Pięć Przemian (Wu Xing): Drewno, Ogień, Ziemia, Metal, Woda; cykl odżywiania matka-syn -> "
-               "klasyfikacja_dzialania.matryca_wu_xing {zywiol_leczony, narzad_matczyny_do_wsparcia, porada_matrycy}",
     "kampo": "Triada Kampo: Ki (energia), Ketsu (krew), Sui (płyny) -> klasyfikacja_dzialania.triada_kampo "
              "{cel_glowny, wyjasnienie}",
     "doktryna_sygnatur": "Doktryna Sygnatur (Paracelsus): wygląd/kolor/siedlisko rośliny a leczony organ -> "
                          "klasyfikacja_dzialania.doktryna_sygnatur {sygnatura, interpretacja}",
-    "humory": "Humoralizm Galena: jakości ciepłe/zimne, suche/wilgotne i stopień (I-IV) -> "
-              "klasyfikacja_dzialania.humory_galena {jakosc, stopien, wyjasnienie}",
     "spagiryka": "Alchemia spagiryczna: Sal, Sulphur, Mercurius; separacja, kalcynacja, kohobacja -> "
                  "klasyfikacja_dzialania.alchemia_spageryczna {zasada, wyjasnienie}",
     "chronoterapia": "Chronoterapia (zegar narządów TCM), tradycje zbioru (fazy księżyca, pora dnia) i zakazy "
@@ -34,9 +32,12 @@ SYSTEMS: dict[str, str] = {
 # Pola i systemy, ktorych Siedziba juz nie tworzy (wymyslane przez model) - usuwane tez z zapisanych przepisow
 INVENTED_INGREDIENT_KEYS = ("filar", "tropizm_organowy", "smak_ajurweda")
 INVENTED_KD_KEYS = ("ajurweda",)
+# Systemy liczone algorytmem (traditions.py), nie przez LLM: ich stare bloki z LLM sa usuwane z przepisow Siedziby
+ALGORITHMIC_SYSTEMS = ("wu_xing", "humory")
+ALGORITHMIC_KD_KEYS = ("matryca_wu_xing", "humory_galena")
 NO_DOSAGE = "Źródło nie podaje dawkowania."
-DISCLAIMER = ("Opracowanie jest interpretacją w ujęciu tradycyjnych systemów ziołolecznictwa (m.in. Pięć Przemian, "
-              "Kampo, humory Galena) przygotowaną automatycznie na podstawie przepisu źródłowego. Ma charakter "
+DISCLAIMER = ("Opracowanie jest interpretacją w ujęciu tradycyjnych systemów ziołolecznictwa (m.in. Kampo, "
+              "doktryna sygnatur) przygotowaną automatycznie na podstawie przepisu źródłowego. Ma charakter "
               "edukacyjny i historyczny - nie jest poradą medyczną. Przed stosowaniem, zwłaszcza w ciąży, "
               "u dzieci, przy chorobach przewlekłych i przyjmowanych lekach, skonsultuj się z lekarzem lub farmaceutą.")
 
@@ -46,7 +47,7 @@ Dostajesz przepis juz przetlumaczony na polski. Twoje zadanie: DOPISAC opracowan
 ZASADY:
 - NIE zmieniaj skladnikow, ilosci ani krokow. Nie wymyslaj dawkowania - jesli nie ma go w przepisie,
   w "dawkowanie_standardowe" wpisz null.
-- Opracowanie to interpretacja tradycyjna - pisz "w tradycji...", "wedlug Wu Xing..."; nie obiecuj wyleczenia.
+- Opracowanie to interpretacja tradycyjna - pisz "w tradycji...", "wedlug Kampo..."; nie obiecuj wyleczenia.
 - Bezpieczenstwo ma pierwszenstwo: wymien znane przeciwwskazania, toksycznosc (np. rosliny trujace, alkohol,
   ciaza, dzieci, interakcje np. z lekami przeciwzakrzepowymi), a przy barwieniu - srodki ostroznosci przy
   zaprawach (np. alun, siarczan zelaza/miedzi) i probe uczuleniowa. Jesli nic nie wiesz - napisz to wprost.
@@ -58,10 +59,8 @@ Zwroc TYLKO JSON:
 {"mechanizm_tworzenia": ["np. Ekstrakcja alkoholowa", "Maceracja"],
  "klasyfikacja_dzialania": {
    "skalowanie_toksykologiczne": "...",
-   "matryca_wu_xing": {"zywiol_leczony": "...", "narzad_matczyny_do_wsparcia": "...", "porada_matrycy": "..."} lub null,
    "triada_kampo": {"cel_glowny": "...", "wyjasnienie": "..."} lub null,
    "doktryna_sygnatur": {"sygnatura": "...", "interpretacja": "..."} lub null,
-   "humory_galena": {"jakosc": "...", "stopien": "...", "wyjasnienie": "..."} lub null,
    "alchemia_spageryczna": {"zasada": "...", "wyjasnienie": "..."} lub null},
  "wymogi_szamanskie_i_czasowe": {"chronoterapia": "...", "astrologia_zbioru": "...", "dieta_i_zakazy": "..."} lub null,
  "stosowanie_i_dawkowanie": {"okolicznosci_stosowania": "...", "dawkowanie_standardowe": "... lub null",
@@ -70,18 +69,20 @@ Zwroc TYLKO JSON:
  "bezpieczenstwo_i_interakcje": {"interakcje_z_lekami": "...", "ostrzezenia": "..."},
  "wskazowki_tradycyjne": ["krotka wskazowka przygotowania wg tradycji, np. zbior, maceracja, kohobacja"]}"""
 
-KD_KEYS = {"matryca_wu_xing": ("zywiol_leczony", "narzad_matczyny_do_wsparcia", "porada_matrycy"),
-           "triada_kampo": ("cel_glowny", "wyjasnienie"),
+KD_KEYS = {"triada_kampo": ("cel_glowny", "wyjasnienie"),
            "doktryna_sygnatur": ("sygnatura", "interpretacja"),
-           "humory_galena": ("jakosc", "stopien", "wyjasnienie"),
            "alchemia_spageryczna": ("zasada", "wyjasnienie")}
-KD_SYSTEM = {"matryca_wu_xing": "wu_xing", "triada_kampo": "kampo",
-             "doktryna_sygnatur": "doktryna_sygnatur", "humory_galena": "humory", "alchemia_spageryczna": "spagiryka"}
+KD_SYSTEM = {"triada_kampo": "kampo", "doktryna_sygnatur": "doktryna_sygnatur", "alchemia_spageryczna": "spagiryka"}
 
 
 def parse_systems(value: str | None) -> list[str]:
+    """Systemy dla LLM. wu_xing / humory sa rozpoznawane, ale pomijane (licza je algorytmy w traditions.py);
+    zadna znana nazwa -> wszystkie systemy LLM."""
     names = [x.strip().lower() for x in (value or "").split(",") if x.strip()]
-    return [n for n in names if n in SYSTEMS] or list(SYSTEMS)
+    known = [n for n in names if n in SYSTEMS or n in ALGORITHMIC_SYSTEMS]
+    if not known:
+        return list(SYSTEMS)
+    return [n for n in dict.fromkeys(known) if n in SYSTEMS]
 
 
 def _txt(v, limit: int = 600) -> str | None:
@@ -111,8 +112,9 @@ def strip_invented(rec: dict) -> dict:
     if "skladniki" in out:
         out["skladniki"] = skl
     kd = out.get("klasyfikacja_dzialania")
-    if isinstance(kd, dict) and any(k in kd for k in INVENTED_KD_KEYS):
-        kd = {k: v for k, v in kd.items() if k not in INVENTED_KD_KEYS}
+    drop = INVENTED_KD_KEYS + ALGORITHMIC_KD_KEYS
+    if isinstance(kd, dict) and any(k in kd for k in drop):
+        kd = {k: v for k, v in kd.items() if k not in drop}
         if kd:
             out["klasyfikacja_dzialania"] = kd
         else:
@@ -126,7 +128,8 @@ def strip_invented(rec: dict) -> dict:
             out.pop("mechanizm_tworzenia")
     op = out.get("opracowanie")
     if isinstance(op, dict) and isinstance(op.get("systemy"), list):
-        out["opracowanie"] = {**op, "systemy": [x for x in op["systemy"] if x not in ("ajurweda", "piec_filarow")]}
+        out["opracowanie"] = {**op, "systemy": [x for x in op["systemy"]
+                                                if x not in ("ajurweda", "piec_filarow") + ALGORITHMIC_SYSTEMS]}
     return out
 
 

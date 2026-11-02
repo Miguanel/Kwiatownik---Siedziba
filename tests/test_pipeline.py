@@ -103,25 +103,28 @@ def test_enrichment_keeps_source_fields_and_adds_disclaimer():
     answer = {"mechanizm_tworzenia": ["Ekstrakcja alkoholowa", 7],
               "klasyfikacja_dzialania": {"skalowanie_toksykologiczne": "Średnia moc.",
                                          "matryca_wu_xing": {"zywiol_leczony": "Drewno (Wątroba)", "x": "y"},
-                                         "humory_galena": {"jakosc": "ciepła i sucha", "stopien": "II"}},
+                                         "humory_galena": {"jakosc": "ciepła i sucha", "stopien": "II"},
+                                         "triada_kampo": {"cel_glowny": "Ki", "x": "y"}},
               "skladniki": [{"nazwa": "ziele dziurawca", "filar": "1_bazowy", "smak_ajurweda": "gorzki",
                              "ilosc": "999 kg"}],
               "stosowanie_i_dawkowanie": {"dawkowanie_standardowe": "20 kropli", "skalowanie_pacjenta": "Nie dla dzieci."},
               "bezpieczenstwo_i_interakcje": {"ostrzezenia": "Fotouczulenie.", "interakcje_z_lekami": "Antykoncepcja."},
               "wskazowki_tradycyjne": ["Zbierać w dzień św. Jana."]}
     llm = FakeLLM([answer])
-    out, model = asyncio.run(enrich_recipe(llm, rec, parse_systems("wu_xing,humory,piec_filarow,ajurweda"), "raw text"))
+    out, model = asyncio.run(enrich_recipe(llm, rec, parse_systems("wu_xing,humory,kampo,piec_filarow,ajurweda"), "raw text"))
     assert model == "fake/m"
     assert out["skladniki"][0] == {"nazwa": "Ziele dziurawca", "ilosc": "50 g"}  # bez filaru i smaku ajurwedy
     assert out["sposob_przygotowania"] == rec["sposob_przygotowania"]
     assert out["stosowanie_i_dawkowanie"]["dawkowanie_standardowe"] == NO_DOSAGE          # nie z LLM
     assert out["stosowanie_i_dawkowanie"]["skalowanie_pacjenta"] == "Nie dla dzieci."
-    assert out["klasyfikacja_dzialania"]["matryca_wu_xing"] == {"zywiol_leczony": "Drewno (Wątroba)"}
-    assert out["klasyfikacja_dzialania"]["humory_galena"]["stopien"] == "II"
+    kd = out["klasyfikacja_dzialania"]
+    assert "matryca_wu_xing" not in kd and "humory_galena" not in kd     # Wu Xing / Galen tylko z algorytmu (dymek)
+    assert kd["triada_kampo"] == {"cel_glowny": "Ki"}
     assert out["mechanizm_tworzenia"] == ["Ekstrakcja alkoholowa"]
-    assert out["opracowanie"]["systemy"] == ["wu_xing", "humory"]          # ajurweda i 5 filarow nie istnieja
+    assert out["opracowanie"]["systemy"] == ["kampo"]          # ajurweda i 5 filarow nie istnieja, wu_xing/humory - algorytm
     system, prompt = llm.prompts[0]
-    assert "Nie wymyslaj dawkowania" in system and "Piec Przemian" not in prompt and "Pięć Przemian" in prompt
+    assert "Nie wymyslaj dawkowania" in system and "Pięć Przemian" not in prompt and "Triada Kampo" in prompt
+    assert "matryca_wu_xing" not in system and "humory_galena" not in system
 
 
 def test_translate_type_mapping():
@@ -197,8 +200,8 @@ def test_strip_invented_cleans_old_records():
            "opracowanie": {"systemy": ["wu_xing", "ajurweda", "piec_filarow"]}}
     out = strip_invented(rec)
     assert out["skladniki"] == [{"nazwa": "Nagietek", "link_id": "nagietek_lekarski"}, {"nazwa": "Wosk"}, "sól"]
-    assert out["klasyfikacja_dzialania"] == {"matryca_wu_xing": {"zywiol_leczony": "Ogień"}}
-    assert out["mechanizm_tworzenia"] == ["Maceracja"] and out["opracowanie"]["systemy"] == ["wu_xing"]
+    assert "klasyfikacja_dzialania" not in out          # ajurweda i stary Wu Xing z LLM usuniete
+    assert out["mechanizm_tworzenia"] == ["Maceracja"] and out["opracowanie"]["systemy"] == []
     assert rec["skladniki"][0]["filar"] == "3_minister"          # oryginal nietkniety
 
 
@@ -218,3 +221,24 @@ def test_recipe_store_reads_newest_file_of_each_series(tmp_path):
     used = {f["name"]: f["used"] for f in store.all_files(d)}
     assert used == {"reczne.json": True, "siedziba_przepisy.json": False, "siedziba_przepisy_2026-10-01.json": False,
                     "siedziba_przepisy_2026-10-05.json": True}
+
+
+def test_parse_systems_skips_algorithmic_ones():
+    from app.pipeline.enrich import SYSTEMS, parse_systems
+    assert parse_systems("wu_xing,humory") == []                    # tylko algorytm - LLM nic z tych systemow
+    assert parse_systems("wu_xing,kampo,humory,kampo") == ["kampo"]
+    assert parse_systems("") == list(SYSTEMS) and parse_systems("nieznany") == list(SYSTEMS)
+    assert "wu_xing" not in SYSTEMS and "humory" not in SYSTEMS
+
+
+def test_load_plants_prefers_new_format_over_archive(tmp_path):
+    import json as _json
+    from app.pipeline.catalog import load_plants
+    (tmp_path / "bulwy").mkdir()
+    (tmp_path / "bulwy" / "swierzabek.json").write_text(_json.dumps({"gatunek": "Świerząbek (archiwum)"}), encoding="utf-8")
+    (tmp_path / "bulwy" / "topinambur.json").write_text(_json.dumps({"gatunek": "Topinambur",
+                                                                     "nazwa_lacinska": "Helianthus tuberosus"}), encoding="utf-8")
+    (tmp_path / "swierzabek.json").write_text(_json.dumps({"id": "swierzabek", "nazwa_pl": "Świerząbek bulwiasty",
+                                                           "nazwa_lat": "Chaerophyllum bulbosum"}), encoding="utf-8")
+    assert load_plants(tmp_path) == {"swierzabek": "Świerząbek bulwiasty (Chaerophyllum bulbosum)",
+                                     "topinambur": "Topinambur (Helianthus tuberosus)"}

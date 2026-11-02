@@ -1,4 +1,6 @@
 import asyncio
+import contextvars
+import json
 import re
 import time
 from abc import ABC, abstractmethod
@@ -68,6 +70,49 @@ class AuthError(LLMError):
 class InvalidOutputError(LLMError):
     """Pusta odpowiedz albo niepoprawny JSON - kara bez cooldownu."""
     cooldown_s = 0.0
+
+
+# Czas samego generowania (bez czekania w kolejce na wolne miejsce u dostawcy) - ustawia LLMProvider.generate,
+# czyta router (ranking i "Sr. czas" w panelu nie karza modelu za kolejke innych zadan)
+GEN_SECONDS: contextvars.ContextVar[float | None] = contextvars.ContextVar("llm_gen_seconds", default=None)
+
+
+# ---------- odpowiedzi JSON ----------
+# Odpowiedzi, ktore sa poprawnym JSON-em, ale nie odpowiedzia na zadne nasze zapytanie (slaby model lokalny pisze
+# komunikat bledu albo wymysla quiz). Router odrzuca je jak zly JSON, a pamiec LLM ich nie zapisuje ani nie oddaje.
+_GARBAGE_KEYS = ({"error", "message", "detail", "code"},
+                 {"question", "answer", "answers", "q", "a", "source", "identifier"})
+
+
+def strip_fences(text: str) -> str:
+    return (text or "").strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+
+
+def is_garbage(data) -> bool:
+    if not isinstance(data, dict) or not data:
+        return False
+    keys = {str(k).lower() for k in data}
+    return any(keys <= g for g in _GARBAGE_KEYS)
+
+
+def json_object(text: str) -> dict:
+    """Odpowiedz LLM w trybie JSON -> slownik. Czesc modeli zwraca liste ([{...}]) zamiast obiektu: wtedy pierwszy
+    obiekt listy, a kolejne w kluczu "_lista". Zly JSON, inny ksztalt albo smieci -> InvalidOutputError (blad modelu,
+    ktory wolajacy obsluguja jak inne LLMError - nie wyjatek programu przerywajacy cale zadanie)."""
+    try:
+        data = json.loads(strip_fences(text))
+    except ValueError as exc:
+        raise InvalidOutputError("niepoprawny JSON") from exc
+    if isinstance(data, list):
+        objs = [x for x in data if isinstance(x, dict)]
+        if not objs:
+            raise InvalidOutputError("odpowiedz JSON nie jest obiektem")
+        data = dict(objs[0])
+        if len(objs) > 1:
+            data["_lista"] = objs[1:]
+    if not isinstance(data, dict) or is_garbage(data):
+        raise InvalidOutputError("odpowiedz JSON nie jest oczekiwanym obiektem")
+    return data
 
 
 # ---------- rozpoznawanie limitow ----------
@@ -176,10 +221,13 @@ class LLMProvider(ABC):
     async def generate(self, model: str, prompt: str, system: str | None = None,
                        json_mode: bool = False) -> str:
         async with self.semaphore:
+            t0 = time.monotonic()
             try:
                 text = await self._generate(model, prompt, system, json_mode)
             except httpx.TransportError as exc:  # timeout, brak sieci
                 raise ServerError(f"{self.name}: {type(exc).__name__}") from exc
+            finally:
+                GEN_SECONDS.set(round(time.monotonic() - t0, 2))
         if not text or not text.strip():
             raise InvalidOutputError(f"{self.name}/{model}: pusta odpowiedz")
         return text

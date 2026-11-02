@@ -12,3 +12,5 @@ data/
 tests/
 *.md
 models/
+# pliki robocze sesji Claude (nie do obrazu)
+_claude_tmp/

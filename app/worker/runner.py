@@ -11,6 +11,18 @@ StatusFn = Callable[[int, str], None]   # (job_id, "running" | "done" | "failed"
 LogFn = Callable[[int, str], None]
 
 
+
+def error_place(exc: BaseException) -> str:
+    """' (app/pipeline/x.py:212 w f)' - ostatnie miejsce bledu w kodzie Siedziby (bez bibliotek)."""
+    import traceback
+    frames = [f for f in traceback.extract_tb(exc.__traceback__) if "/app/" in f.filename.replace("\\", "/")]
+    if not frames:
+        return ""
+    f = frames[-1]
+    path = f.filename.replace("\\", "/")
+    return f" ({path[path.rindex('/app/') + 1:]}:{f.lineno} w {f.name})"
+
+
 class _NoLimit:
     async def __aenter__(self):
         return self
@@ -107,7 +119,7 @@ class JobRunner:
                 raise
             except Exception as exc:
                 log.exception("Zadanie %s nieudane", job_id)
-                self.on_log(job_id, f"BLAD: {type(exc).__name__}: {exc}")
+                self.on_log(job_id, f"BLAD: {type(exc).__name__}: {exc}{error_place(exc)}")
                 self.on_status(job_id, "failed")
             finally:
                 self._release(job_id)

@@ -18,6 +18,7 @@ from datetime import date
 from fractions import Fraction
 
 from app.knowledge.sections import norm_text
+from app.llm.base import json_object
 from app.mt.nllb import MTQualityError, MTUnavailable, looks_broken, nllb_code
 from app.pipeline.translate import TYPES, normalize_record
 
@@ -210,11 +211,11 @@ async def llm_classify(llm, rec: dict) -> tuple[str | None, bool | None]:
     prompt = f"TYTUL: {rec['tytul']}\nSKLADNIKI: {', '.join(rec['skladniki_txt'])}\nKROKI: {' '.join(rec['kroki'])[:800]}"
     try:
         res = await llm.complete(prompt, system=CLASSIFY_PROMPT, json_mode=True)
-        data = json.loads(res.text.strip().removeprefix("```json").removesuffix("```"))
+        data = json_object(res.text)                # lista zamiast obiektu ([{...}]) - pierwszy obiekt
+        typ = str(data.get("typ") or "").strip().lower()
+        zk = data.get("ziola_kluczowe")
     except Exception:
         return None, None
-    typ = str(data.get("typ") or "").strip().lower()
-    zk = data.get("ziola_kluczowe")
     return (typ if typ in TYPES else None), (zk if isinstance(zk, bool) else None)
 
 

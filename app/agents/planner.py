@@ -69,6 +69,41 @@ def _failed_keys(s: Session, hours: int = 2) -> set[str]:
     return {params(t).get("klucz") for t in rows} - {None}
 
 
+REPEAT_FAILS = 3              # tyle nieudanych zlecen z rzedu z tym samym bledem -> przerwa dla tej propozycji
+REPEAT_PAUSE_H = 24
+
+
+def error_signature(log: str | None) -> str | None:
+    """Podpis bledu zadania: ostatnia linia 'BLAD:' bez godziny i liczb (np. AttributeError w tym samym miejscu)."""
+    import re
+    lines = [x for x in (log or "").splitlines() if "BLAD:" in x]
+    if not lines:
+        return None
+    return re.sub(r"\d+", "N", lines[-1].split("BLAD:", 1)[1]).strip()[:200]
+
+
+def _repeated_errors(s: Session, n: int = REPEAT_FAILS, hours: int = REPEAT_PAUSE_H) -> dict[str, str]:
+    """{klucz: podpis bledu} propozycji, ktorych ostatnie n zlecen skonczylo sie TYM SAMYM bledem w ciagu `hours`
+    godzin. MAX_AUTO_RETRIES liczy tylko jeden lancuch ponowien; planista zaczynalby nowy co 2 h bez konca."""
+    since = store.now() - timedelta(hours=hours)
+    rows = s.exec(select(AgentTask).where(AgentTask.agent == "planista", col(AgentTask.ordered_at) >= since)
+                  .order_by(col(AgentTask.ordered_at).desc())).all()
+    by_key: dict[str, list[AgentTask]] = {}
+    for t in rows:
+        k = params(t).get("klucz")
+        if k:
+            by_key.setdefault(k, []).append(t)
+    out: dict[str, str] = {}
+    for k, ts in by_key.items():
+        last = ts[:n]
+        if len(last) < n or any(t.status != "failed" or not t.job_id for t in last):
+            continue
+        sigs = {error_signature(j.log) if (j := s.get(Job, t.job_id)) else None for t in last}
+        if len(sigs) == 1 and None not in sigs:
+            out[k] = sigs.pop()
+    return out
+
+
 def _no_effect(s: Session, hours: int) -> dict[str, str]:
     """{klucz: stan listy} zadan planisty z listy "Zadania do zrobienia", ktore niedawno sie wykonaly. Gdy lista
     wyglada tak samo jak przed zleceniem (np. eksport, ktory nic nie zmienia), nie zlecamy go w kolko."""
@@ -109,6 +144,10 @@ def candidates(state, limit_items: int = 200, load: dict | None = None, info: di
     with Session(engine) as s:
         audit = store.last_run("audytor")
         failed = _failed_keys(s)
+        repeated = _repeated_errors(s)              # ten sam blad 3 razy z rzedu -> przerwa 24 h i informacja
+        failed |= set(repeated)
+        if info is not None and repeated:
+            info["powtarzajace_bledy"] = repeated
         done_same = _no_effect(s, NO_EFFECT_HOURS)
         if not _audit_running(s):
             age = (store.now() - store.utc(audit.created_at)) if audit else None
@@ -347,7 +386,7 @@ def run_planner(state, trigger: str = "auto", execute: bool | None = None, force
                 break
         report = {"stan": state_info, "propozycje": [asdict(p) for p in props[:12]], "decyzja": decision.split(": ", 1)[1],
                   "zlecono": ordered, "proby": log_lines, "straznik": events, "llm": load,
-                  "kampania": info.get("kampania"),
+                  "kampania": info.get("kampania"), "powtarzajace_bledy": info.get("powtarzajace_bledy"),
                   "sygnatura": _signature(decision, props, ordered, events)}
         for line in log_lines + ([watchdog.summary(events)] if events else []):
             store.run_log(run_id, line)
@@ -356,7 +395,7 @@ def run_planner(state, trigger: str = "auto", execute: bool | None = None, force
 
     report = {"stan": state_info, "propozycje": [asdict(p) for p in props[:12]], "decyzja": decision.split(": ", 1)[1],
               "zlecono": None, "proby": [], "straznik": events, "llm": load,
-              "kampania": info.get("kampania"),
+              "kampania": info.get("kampania"), "powtarzajace_bledy": info.get("powtarzajace_bledy"),
               "sygnatura": _signature(decision, props, None, events)}
     with Session(engine) as s:                     # to samo co ostatnio -> tylko licznik powtorzen (bez zasmiecania)
         last = s.exec(select(AgentRun).where(AgentRun.agent == "planista").order_by(col(AgentRun.id).desc())).first()

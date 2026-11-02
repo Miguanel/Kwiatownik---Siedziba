@@ -305,14 +305,17 @@ async def build_profile(llm, samples: list[tuple[str, str, list]], recipe_urls: 
                   f"\n\n{sk}" + (f"\n\nYOUR PREVIOUS ANSWER FAILED VALIDATION:\n{feedback}\nFix it." if feedback else ""))
         try:
             res = await llm.complete(prompt, system=SYSTEM_PROMPT, json_mode=True)
-            data = json.loads(res.text.strip().removeprefix("```json").removesuffix("```"))
+            from app.llm.base import json_object
+            data = json_object(res.text)
         except Exception as exc:
             say(f"Runda {rnd}: LLM nie odpowiedzial poprawnie ({exc})")
             continue
-        fields = {k: v for k, v in (data.get("fields") or {}).items() if k in FIELDS and isinstance(v, dict)}
-        cand = ScraperProfile(recipe_url_regex=data.get("recipe_url_regex") or "",
-                              listing_url_regex=data.get("listing_url_regex"),
-                              fact_url_regex=data.get("fact_url_regex") or None, fields=fields, prefer_jsonld=True,
+        raw_fields = data.get("fields") if isinstance(data.get("fields"), dict) else {}
+        fields = {k: v for k, v in raw_fields.items() if k in FIELDS and isinstance(v, dict)}
+        rx = lambda key: data.get(key) if isinstance(data.get(key), str) else None  # noqa: E731 - lista od LLM = brak
+        cand = ScraperProfile(recipe_url_regex=rx("recipe_url_regex") or "",
+                              listing_url_regex=rx("listing_url_regex"),
+                              fact_url_regex=rx("fact_url_regex") or None, fields=fields, prefer_jsonld=True,
                               built_with=f"{res.provider}/{res.model}")
         # wybierz lepszy regex: od LLM albo z wyuczonych wzorcow
         if pattern_rx and score_regex(pattern_rx, recipe_urls, other_urls)["f1"] > \

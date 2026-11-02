@@ -1,7 +1,7 @@
 """Zadania: 'scan' (crawler), 'fetch_list' (lista adresow) i 'build_profile' (LLM buduje scraper)."""
 import asyncio
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlmodel import Session, col, func, select
 
@@ -167,11 +167,43 @@ def _keywords(src: Source) -> list[str]:
     return [k.strip() for k in (src.keywords or "").split(",") if k.strip()]
 
 
+BLOCK_PAUSE_H = (1, 6, 24)   # kolejne blokady strony -> przerwa w skanach (godziny), potem wylaczenie zrodla
+
+
+def _blocked(job_id: int, src: Source) -> None:
+    """Strona odmowila dostepu serii zapytan: przerwa w skanach 1 h, 6 h, 24 h; przy czwartej blokadzie z rzedu
+    zrodlo wylaczone (wlaczasz je recznie). Dane i kolejka adresow zostaja."""
+    now = datetime.now(timezone.utc)
+    n = (src.block_count or 0) + 1
+    src.block_count = n
+    if n > len(BLOCK_PAUSE_H):
+        src.active, src.paused_until = False, None
+        if src.auto_off_at is None:
+            src.auto_off_reason, src.auto_off_at = "strona blokuje Siedzibe (seria odpowiedzi 403/429)", now
+        job_log(job_id, f"Zrodlo wylaczone: strona zablokowala Siedzibe {n}. raz z rzedu. "
+                        "Wlaczysz je recznie na stronie zrodla.")
+        return
+    src.paused_until = now + timedelta(hours=BLOCK_PAUSE_H[n - 1])
+    job_log(job_id, f"Przerwa w skanach tego zrodla: {BLOCK_PAUSE_H[n - 1]} h (blokada nr {n})")
+
+
+def scan_paused(src: Source | None, now: datetime | None = None) -> bool:
+    """Zrodlo na przerwie po blokadzie strony."""
+    if src is None or src.paused_until is None:
+        return False
+    at = src.paused_until if src.paused_until.tzinfo else src.paused_until.replace(tzinfo=timezone.utc)
+    return at > (now or datetime.now(timezone.utc))
+
+
 def _finish(job_id: int, source_id: int, stats: dict) -> None:
     with Session(engine) as s:
         src = s.get(Source, source_id)
         src.last_scan_at = datetime.now(timezone.utc)
         src.pages_scanned = (src.pages_scanned or 0) + stats.get("fetched", 0)
+        if stats.get("blocked"):
+            _blocked(job_id, src)
+        elif stats.get("fetched", 0) - stats.get("errors", 0) > 0 and src.block_count:
+            src.block_count = 0                        # strona znow odpowiada - licznik blokad od nowa
         s.add(src)
         job = s.get(Job, job_id)
         job.stats_json = json.dumps(stats)
@@ -216,6 +248,11 @@ async def _crawl(job_id: int, source_id: int, runner: JobRunner, llm, cfg: Crawl
         if cfg.url_model is not None:
             store.log(f"Ocena adresow przed pobraniem: model z {cfg.url_model.n_pos + cfg.url_model.n_neg} stron "
                       f"tej witryny ({cfg.url_model.n_pos} przydatnych) - podobne adresy ida pierwsze")
+    with Session(engine) as s:
+        paused = scan_paused(s.get(Source, source_id))
+    if paused:
+        store.log("Zrodlo na przerwie po blokadzie strony (403/429) - pomijam pobieranie")
+        return {"fetched": 0, "paused": True}
     if llm is None and not cfg.profile:
         store.log("Uwaga: brak LLM - klasyfikacja tylko heurystykami")
     fetcher = Fetcher(settings.user_agent, settings.request_delay_s, proxy=_proxy(source_id, store))
@@ -272,6 +309,10 @@ async def run_scan(job_id: int, source_id: int, runner: JobRunner, llm=None, max
         stats["rozpoznanie"] = await _crawl(job_id, source_id, runner, llm, cfg, src.base_url)
         frontier = load_frontier(job_id)
         if runner.should_stop(job_id):
+            return
+        if stats["rozpoznanie"].get("blocked") or stats["rozpoznanie"].get("paused"):
+            store.log("Etapy 2-3 pominiete: strona odmawia dostepu")
+            _save_phase_stats(job_id, stats)
             return
     else:
         store.log(f"Etap 1/3 - pominiety: w bazie sa juz probki (przepisy {have['recipe']}, ciekawostki {have['fact']})")

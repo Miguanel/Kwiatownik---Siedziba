@@ -135,7 +135,8 @@ def test_translate_check_and_export(tmp_path, monkeypatch):
     plants.mkdir()
     (przepisy / "przepisy_kulinarne.json").write_text(_json.dumps([{"id": "napar_z_mieta", "tytul": "Napar z mięty",
         "skladniki": [{"nazwa": "Liście mięty"}, {"nazwa": "Wrzątek"}]}]), encoding="utf-8")
-    (plants / "bez_czarny.json").write_text(_json.dumps({"id": "bez_czarny", "nazwa_pl": "Bez czarny"}), encoding="utf-8")
+    (plants / "bez_czarny.json").write_text(_json.dumps({"id": "bez_czarny", "nazwa_pl": "Bez czarny",
+        "profil_energetyczny": {"smak": "Słodki", "termika": "Chłodna", "wilgotnosc": "Osuszająca"}}), encoding="utf-8")
     monkeypatch.setattr(settings, "kwiatownik_przepisy_dir", przepisy)
     monkeypatch.setattr(settings, "kwiatownik_plants_dir", plants)
     monkeypatch.setattr(settings, "export_require_approval", False)
@@ -195,6 +196,19 @@ def test_translate_check_and_export(tmp_path, monkeypatch):
     assert len(out) == 1 and out[0]["tytul"] == "Syrop z kwiatów czarnego bzu" and out[0]["slug"] == "bez_czarny"
     assert [z["url"] for z in out[0]["zrodla"]] == ["https://en.example/elder", "https://de.example/holunder"]
     assert stats["exported"] == 1
+    assert "ciekawostka_tradycyjna" not in out[0]              # syrop kulinarno-medyczny: bez dymka Wu Xing / Galen
+
+    # ten sam przepis jako leczniczy -> dymek liczony z profilu rosliny przy eksporcie (bez LLM)
+    with Session(eng) as s:
+        it = s.get(Item, ids[0])
+        it.data_json = _json.dumps(dict(_json.loads(it.data_json), typ="medyczne_wewnetrzne_syrop"), ensure_ascii=False)
+        s.add(it)
+        s.commit()
+    recs, _ = exp.build_export_records()
+    c = recs[0]["ciekawostka_tradycyjna"]
+    assert c["roslina_id"] == "bez_czarny" and c["czesc"] == "kwiaty"
+    assert c["wu_xing"]["przemiana"] == "Ziemia" and c["galen"]["jakosc"] == "zimne i suche"
+    assert exp._plant_loader()("../bez_czarny") is None         # id z przepisu nie moze wskazac innej sciezki
 
 
 def test_cleanup_discoveries_fixes_domains(tmp_path, monkeypatch):
@@ -412,7 +426,7 @@ def test_translate_skips_culinary_and_enriches(tmp_path, monkeypatch):
         rec = _json.loads(salve_item.data_json)
     assert salve_item.status == ItemStatus.translated
     kd = rec["klasyfikacja_dzialania"]
-    assert kd["matryca_wu_xing"]["zywiol_leczony"] == "Metal (Skóra)" and "triada_kampo" not in kd  # kampo wylaczone
+    assert "matryca_wu_xing" not in kd and "triada_kampo" not in kd  # Wu Xing tylko z algorytmu, kampo wylaczone
     assert all("filar" not in s and "tropizm_organowy" not in s for s in rec["skladniki"])   # nie wymyslamy rol
     assert all("link_id" not in s for s in rec["skladniki"])                                  # bez "link_id": null
     assert rec["stosowanie_i_dawkowanie"]["dawkowanie_standardowe"] == "Źródło nie podaje dawkowania."

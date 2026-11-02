@@ -89,13 +89,21 @@ class Fetcher:
         host = f"{p.scheme}://{p.netloc}"
         if host not in self._robots:
             rp = RobotFileParser()
-            res = await self._raw_get(f"{host}/robots.txt")
-            if res.status in (401, 403):
+            try:
+                res = await self._raw_get(f"{host}/robots.txt")
+                if res.status in (401, 403):
+                    rp.disallow_all = True
+                elif res.ok:
+                    rp.parse(res.text.splitlines())
+                else:
+                    rp.allow_all = True
+            except Exception as exc:  # noqa: BLE001 - np. "unknown url type" (ukrinform.ua): skan nie pada,
+                # a strona, ktorej robots.txt nie da sie odczytac, jest traktowana ostroznie jak zamknieta
+                log.warning("robots.txt %s nieczytelny (%s: %s) - nie pobieram tej strony", host, type(exc).__name__, exc)
+                rp = RobotFileParser()
                 rp.disallow_all = True
-            elif res.ok:
-                rp.parse(res.text.splitlines())
-            else:
-                rp.allow_all = True
+                self._robots[host] = rp
+                return rp
             self._robots[host] = rp
             crawl_delay = rp.crawl_delay(self.user_agent) if res.ok else None
             if crawl_delay:

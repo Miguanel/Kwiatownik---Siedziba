@@ -17,6 +17,15 @@ from pathlib import Path
 log = logging.getLogger(__name__)
 
 
+def _garbage(text: str) -> bool:
+    """Odpowiedz, ktorej nie warto pamietac (smieci od slabego modelu, np. {"error": ...})."""
+    from app.llm.base import is_garbage, strip_fences
+    try:
+        return is_garbage(json.loads(strip_fences(text)))
+    except ValueError:
+        return False
+
+
 class LLMCache:
     def __init__(self, path: Path, days: float = 14.0):
         self.path = Path(path)
@@ -29,6 +38,10 @@ class LLMCache:
             c.execute("CREATE TABLE IF NOT EXISTS odpowiedzi (klucz TEXT PRIMARY KEY, tekst TEXT NOT NULL, "
                       "provider TEXT, model TEXT, czas REAL NOT NULL)")
             c.execute("DELETE FROM odpowiedzi WHERE czas < ?", (time.time() - self.ttl,))
+            bad = [k for k, t in c.execute("SELECT klucz, tekst FROM odpowiedzi") if _garbage(t)]
+            c.executemany("DELETE FROM odpowiedzi WHERE klucz = ?", [(k,) for k in bad])
+        if bad:
+            log.info("Pamiec LLM: usunieto %d odpowiedzi-smieci", len(bad))
 
     def _conn(self) -> sqlite3.Connection:
         c = sqlite3.connect(self.path, timeout=10)
@@ -48,13 +61,15 @@ class LLMCache:
         except sqlite3.Error as exc:
             log.warning("Pamiec LLM: %s", exc)
             return None
-        if row is None or time.time() - row[3] > self.ttl:
+        if row is None or time.time() - row[3] > self.ttl or _garbage(row[0]):
             self.misses += 1
             return None
         self.hits += 1
         return row[0], row[1], row[2]
 
     def put(self, key: str, text: str, provider: str, model: str) -> None:
+        if _garbage(text):
+            return
         try:
             with self._lock, self._conn() as c:
                 c.execute("INSERT OR REPLACE INTO odpowiedzi VALUES (?, ?, ?, ?, ?)",

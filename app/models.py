@@ -53,6 +53,8 @@ class Source(SQLModel, table=True):
     profile_status: str | None = None    # ready | failed | degraded
     auto_off_reason: str | None = None   # zrodlo wylaczone automatycznie za slaba wydajnosc (R10)
     auto_off_at: datetime | None = None  # ...kiedy; wlaczone potem recznie = uzytkownik wie lepiej, nie wylaczamy znow
+    paused_until: datetime | None = None  # strona odmawia dostepu (seria 403/429) - przerwa w skanach do tej chwili
+    block_count: int | None = 0          # ile razy z rzedu strona zablokowala skan (1 h, 6 h, 24 h, potem wylaczenie)
     created_at: datetime = Field(default_factory=_now)
 
 

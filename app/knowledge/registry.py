@@ -71,7 +71,80 @@ def sync_kwiatownik(session: Session, plants_dir: Path) -> int:
             row.origin = p["origin"]
             session.add(row)
     session.commit()
+    from app.config import settings
+    merge_duplicate_species(session, plants_dir, Path(settings.backups_dir) / "plants")
     return added
+
+
+def merge_duplicate_species(session: Session, plants_dir: Path, backup_dir: Path | None = None) -> list[str]:
+    """Plik nowej rosliny, ktory zalozyla Siedziba ("_siedziba_nowa"), dla gatunku, ktory ma juz reczny plik
+    w Kwiatowniku (np. kasztanowiec.json obok kasztanowiec_zwyczajny.json - Aesculus hippocastanum). Wiedza, zapytania
+    i tropy przechodza do recznej rosliny (bez powtorek; zapisane wczesniej informacje wracaja do zapisu - brama
+    sprawdzi je na recznym pliku), stare id zostaje aliasem, przepisy Siedziby wskazuja reczny plik, a plik Siedziby
+    trafia do kopii zapasowej i znika z Kwiatownika. Reczne pliki nigdy nie sa ruszane. Zwraca opisy polaczen."""
+    import shutil
+    from datetime import datetime
+
+    from app.knowledge.sections import fingerprint
+    from app.models import FbIdea, MagicLead, PlantFact, PlantQuery
+    groups: dict[str, list[dict]] = {}
+    for p in kwiatownik_plants(plants_dir):
+        if p["origin"] in ("kwiatownik", "nowa") and _species(p["nazwa_lat"]).count(" ") == 1:
+            groups.setdefault(_species(p["nazwa_lat"]), []).append(p)
+    done: list[str] = []
+    for species, rows in groups.items():
+        mains = [p for p in rows if p["origin"] == "kwiatownik"]
+        dups = [p for p in rows if p["origin"] == "nowa"]
+        if len(mains) != 1 or not dups:
+            continue
+        main = mains[0]["id"]
+        have = {f.fingerprint for f in session.exec(select(PlantFact).where(PlantFact.plant_id == main)).all()}
+        for d in dups:
+            dup = d["id"]
+            moved = dropped = 0
+            for f in session.exec(select(PlantFact).where(PlantFact.plant_id == dup)).all():
+                fp = fingerprint(main, f.text)
+                if f.status != "rejected" and fp not in have:
+                    f.plant_id, f.fingerprint = main, fp
+                    f.status = "verified" if f.status in ("verified", "applied") else f.status
+                    have.add(fp)
+                    moved += 1
+                else:
+                    f.plant_id, f.fingerprint = main, fp + "~" + str(f.id)       # powtorka: zostaje jako odrzucona
+                    if f.status != "rejected":
+                        f.status, f.reason = "rejected", f"powtorka po polaczeniu {dup} z {main}"
+                    dropped += 1
+                session.add(f)
+            for model in (PlantQuery, MagicLead, FbIdea):
+                for r in session.exec(select(model).where(model.plant_id == dup)).all():
+                    r.plant_id = main
+                    session.add(r)
+            for it in session.exec(select(Item).where(col(Item.data_json).contains(f'"{dup}"'))).all():
+                data = json.loads(it.data_json)
+                for sk in data.get("skladniki") or []:
+                    if isinstance(sk, dict) and sk.get("link_id") == dup:
+                        sk["link_id"] = main
+                for k in ("roslina_id", "slug"):
+                    if data.get(k) == dup:
+                        data[k] = main
+                it.data_json = json.dumps(data, ensure_ascii=False)
+                session.add(it)
+            for name in {norm_text(d["nazwa_pl"] or ""), norm_text(dup.replace("_", " "))} - {""}:
+                session.merge(PlantAlias(name=name, plant_id=main))
+            path = Path(plants_dir) / f"{dup}.json"
+            if backup_dir is not None and path.exists():
+                dest = Path(backup_dir) / dup
+                dest.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(path, dest / f"{datetime.now().strftime('%Y%m%d-%H%M%S')}-polaczona-z-{main}.json")
+                path.unlink()
+            row = session.get(Plant, dup)
+            if row is not None:
+                session.delete(row)
+            msg = f"{dup} -> {main} ({species}): przeniesiono {moved} informacji, powtorek {dropped}"
+            log.warning("Polaczono rosliny: %s", msg)
+            done.append(msg)
+    session.commit()
+    return done
 
 
 def _species(lat: str | None) -> str:
@@ -147,8 +220,15 @@ async def discover_new_plants(session: Session, llm, batch: int = 50, log_fn=Non
         chunk = todo[i:i + batch]
         res = await llm.complete("SKLADNIKI:\n" + "\n".join(f"- {n}" for n in chunk), system=IDENTIFY_PROMPT,
                                  json_mode=True)
-        data = json.loads(res.text.strip().removeprefix("```json").removesuffix("```"))
+        from app.llm.base import InvalidOutputError, json_object
+        try:
+            data = json_object(res.text)
+        except InvalidOutputError as exc:          # zla odpowiedz dla tej paczki - kolejne paczki dalej
+            say(f"Skladniki {i + 1}-{i + len(chunk)}: odpowiedz modelu w zlym formacie ({exc}) - pomijam")
+            continue
         for r in data.get("wyniki") or []:
+            if not isinstance(r, dict):
+                continue
             name = _clean_name(r.get("nazwa") or "")
             if name not in chunk:
                 continue

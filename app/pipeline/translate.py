@@ -8,7 +8,7 @@ import re
 import unicodedata
 from datetime import date
 
-from app.llm.base import InvalidOutputError
+from app.llm.base import InvalidOutputError, json_object
 
 
 class NoRecipeError(InvalidOutputError):
@@ -167,10 +167,9 @@ async def translate_recipe(llm, recipe: dict | None, raw_text: str | None, meta:
                            taken_ids: set[str]) -> tuple[dict, str]:
     """Zwraca (rekord Kwiatownika po polsku, 'provider/model'). Rzuca LLMError przy niepowodzeniu."""
     res = await llm.complete(build_prompt(recipe, raw_text, meta, plants), system=SYSTEM_PROMPT, json_mode=True)
-    try:
-        data = json.loads(res.text.strip().removeprefix("```json").removesuffix("```"))
-    except ValueError as exc:
-        raise InvalidOutputError("LLM zwrocil niepoprawny JSON") from exc
+    data = json_object(res.text)            # zly ksztalt -> InvalidOutputError (blad przepisu, nie calego zadania)
+    if data.get("_lista"):                  # kilka przepisow jako lista zamiast "dodatkowe_przepisy"
+        data["dodatkowe_przepisy"] = list(data.get("dodatkowe_przepisy") or []) + data.pop("_lista")
     if data.get("brak_przepisu") is True:
         raise NoRecipeError("w tekscie nie ma konkretnego przepisu (lista lub artykul ogolny)",
                             leads=clean_leads(data.get("wzmianki")))

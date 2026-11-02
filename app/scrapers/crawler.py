@@ -98,6 +98,8 @@ class _QItem:
     from_sitemap: bool = field(compare=False, default=False)
 
 
+BLOCK_STREAK = 10   # tyle odmow dostepu (401/403/429) z rzedu = strona blokuje Siedzibe -> koniec skanu
+
 class SmartCrawler:
     def __init__(self, start_url: str, fetcher: Fetcher, store: CrawlStore, config: CrawlConfig, llm=None):
         self.start_url = normalize_url(start_url) or start_url
@@ -123,6 +125,7 @@ class SmartCrawler:
         self._query_variants: Counter = Counter()
         self._refresh: set[str] = set()      # adresy do ponownego pobrania
         self._refreshing: set[str] = set()   # adresy aktualnie odswiezane (zapis = aktualizacja)
+        self._refused = 0                    # odmowy (401/403/429) z rzedu - bezpiecznik BLOCK_STREAK
 
     def _bonus(self, url: str) -> float:
         learned = self.cfg.url_model.bonus(url) if self.cfg.url_model is not None else 0.0
@@ -221,6 +224,12 @@ class SmartCrawler:
             if self.store.should_stop():
                 self.store.log("Zatrzymano na zadanie uzytkownika")
                 break
+            if self._refused >= BLOCK_STREAK:
+                # strona nas blokuje (np. apotekanet.rs: 20 x 403 co 2 s) - dalsze pukanie nic nie da i jest nieuprzejme
+                self.stats["blocked"] = self._refused
+                self.store.log(f"Strona odmawia dostepu ({self._refused} odpowiedzi 401/403/429 z rzedu) - przerywam "
+                               "skan; kolejka adresow zostaje na pozniej")
+                break
             # pobieranie nie wyprzedza klasyfikacji: gdy LLM jest wolny (limity, model lokalny), dawniej 150 stron
             # pobieralo sie w kilka minut, a potem zadanie "wisialo" godzinami na 150/150, czekajac na klasyfikacje
             await self._throttle()
@@ -292,8 +301,10 @@ class SmartCrawler:
         self.stats["fetched"] += 1
         if not res.ok:
             self.stats["errors"] += 1
+            self._refused = self._refused + 1 if res.status in (401, 403, 429) else 0
             self.store.log(f"[blad] {item.url} - {res.error or res.status}")
             return
+        self._refused = 0
         final_url = normalize_url(res.url) or item.url
         page = await asyncio.to_thread(parse_page, res.text, final_url)  # CPU w osobnym watku
         url = page.canonical if page.canonical and site_key(page.canonical) == self.site else final_url
