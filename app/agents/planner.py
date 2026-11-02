@@ -342,8 +342,12 @@ def run_planner(state, trigger: str = "auto", execute: bool | None = None, force
     info: dict = {}
     props = candidates(state, load=load, info=info)
     cap = store.job_limit(state)
+    runner = getattr(state, "jobs", None)
+    llm_wait = set(runner.waiting_for_llm()) if hasattr(runner, "waiting_for_llm") else set()
     with Session(engine) as s:
-        busy = production_jobs(s)
+        # zadania z LLM czekajace na miejsce w lokalnym modelu (chmura ma limity) nie zajmuja miejsca w kolejce -
+        # planista moze dolozyc prace bez LLM (etap 3 diagnostyki 2026-11-02)
+        busy = [j for j in production_jobs(s) if j.id not in llm_wait]
         pause = paused_until(s)
         active_keys = {params(t).get("klucz") for t in s.exec(select(AgentTask).where(
             col(AgentTask.status).in_(["ordered", "running"]))).all()} - {None}
@@ -352,6 +356,8 @@ def run_planner(state, trigger: str = "auto", execute: bool | None = None, force
                  and p.key not in active_keys]
         if load.get("llm_jobs", 0) >= settings.agents_max_llm_jobs or load.get("cloud_down"):
             props = [p for p in props if not _uses_llm(p)]   # modele zajete - dokladamy tylko zadania bez LLM
+    if llm_wait:                  # zadania z LLM juz czekaja na lokalny model - nie dokladamy kolejnych
+        props = [p for p in props if not _uses_llm(p)]
     quiet = watchdog.job_silence(busy)
     state_info = {"auto": auto, "pracuje": len(busy), "max_naraz": cap,
                   "zadania": [f"#{j.id} {j.kind} ({j.status.value}"

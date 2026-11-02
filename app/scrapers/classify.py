@@ -147,6 +147,27 @@ def is_product_page(page: PageData) -> bool:
     return False
 
 
+# Karta produktu bez JSON-LD (np. aptekacud.pl, apotekanet.rs): przycisk koszyka + cena albo kod EAN-13 w adresie.
+# Kampanie trzech sklepow (afandi.pl, aptekacud.pl, blogrod.pl) konczyly sie limitem 18 h (diagnostyka 2026-11-02).
+CART_RE = re.compile(
+    r"dodaj do koszyka|do koszyka|add to (?:cart|basket|bag)|in den warenkorb|ajouter au panier|añadir al carrito|"
+    r"aggiungi al carrello|vložit do košíku|do košíka|do košíku|в корзину|у кошик|додати в кошик|kosárba|"
+    r"adaugă în coș|adauga in cos|dodaj u košaricu|u korpu|dodaj u korpu|į krepšelį|в количка", re.I)
+PRICE_RE = re.compile(r"\d+[.,]\d{2}\s?(?:zł|pln|€|eur|kč|czk|ft|huf|lei|ron|₴|грн|uah|rsd|din|дин|£|\$|usd|лв|bgn)"
+                      r"|(?:€|£|\$)\s?\d+[.,]\d{2}", re.I)
+EAN_RE = re.compile(r"(?<!\d)\d{13}(?!\d)")
+
+
+def shop_product_signals(page: PageData) -> bool:
+    """Strona wyglada na karte produktu sklepu (bez JSON-LD Product): EAN-13 w adresie albo koszyk + cena."""
+    from urllib.parse import urlparse
+    if EAN_RE.search(urlparse(page.url).path):
+        return True
+    head = page.text[:6000]
+    # artykul blogu sklepu ma wiele naglowkow (i czasem boczny koszyk) - zostaje do zwyklej oceny
+    return len(page.headings) <= 6 and bool(CART_RE.search(head)) and bool(PRICE_RE.search(head))
+
+
 def quantity_hits(text: str) -> int:
     return len(QTY_RE.findall(text or ""))
 
@@ -235,6 +256,10 @@ async def classify(page: PageData, keywords: list[str], llm=None, skip_culinary:
         return Classification("recipe", 1.0, "jsonld", node.get("name") or title, "schema.org/Recipe")
 
     recipe, topic = heuristic_scores(page, keywords)
+    if recipe < 0.45 and shop_product_signals(page):
+        # przepis na stronie sklepu (skladniki, kroki) zostaje - odrzucamy tylko karty produktow
+        _remember(page, title, "other", "heuristic", 0.5)
+        return Classification("other", 0.85, "heuristic", title, "karta produktu w sklepie (koszyk i cena / EAN)")
     if recipe >= 0.45 and skip_culinary and is_culinary(page):
         _remember(page, title, "other", "heuristic", 0.5)
         return Classification("other", 0.8, "heuristic", title, CULINARY_REASON)

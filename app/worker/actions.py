@@ -47,7 +47,7 @@ def _create(state, source_id: int | None, kind: str, total: int | None, work_fac
         s.commit()
         jid = job.id
     runner = state.jobs
-    runner.start(jid, lambda: work_factory(jid, runner, state.llm), bypass_queue=bypass_queue)
+    runner.start(jid, lambda: work_factory(jid, runner, state.llm), bypass_queue=bypass_queue, kind=kind)
     return jid
 
 
@@ -74,12 +74,14 @@ def start_plants_sync(state, retry_of: int | None = None) -> int:
 
 
 def start_plant_research(state, plant_ids: list[str] | None = None, limit: int = 10, slots: list[str] | None = None,
-                         retry_of: int | None = None) -> int:
-    """Zbieranie wiedzy o roslinach (Wikipedia + inne strony) -> weryfikacja -> zapis do plikow Kwiatownika."""
+                         retry_of: int | None = None, auto: bool = False) -> int:
+    """Zbieranie wiedzy o roslinach (Wikipedia + inne strony) -> weryfikacja -> zapis do plikow Kwiatownika.
+    auto=True (zlecenia agentow): rosliny na przerwie po badaniach bez wynikow sa pomijane."""
     return _create(state, None, "plant_research", len(plant_ids) if plant_ids else limit,
-                   lambda jid, runner, llm: run_plant_research(jid, runner, llm, plant_ids, limit, slots=slots),
-                   dedupe=not plant_ids and not slots, params={"plant_ids": plant_ids, "limit": limit, "slots": slots},
-                   retry_of=retry_of)
+                   lambda jid, runner, llm: run_plant_research(jid, runner, llm, plant_ids, limit, slots=slots,
+                                                               respect_pause=auto),
+                   dedupe=not plant_ids and not slots,
+                   params={"plant_ids": plant_ids, "limit": limit, "slots": slots, "auto": auto}, retry_of=retry_of)
 
 
 def start_plant_apply(state, plant_ids: list[str] | None = None, retry_of: int | None = None) -> int:
@@ -311,7 +313,7 @@ def retry_job(state, job_id: int) -> int | None:
         new = start_plants_sync(state, retry_of=job_id)
     elif kind == "plant_research":
         new = start_plant_research(state, p.get("plant_ids"), p.get("limit") or 10, slots=p.get("slots"),
-                                   retry_of=job_id)
+                                   retry_of=job_id, auto=bool(p.get("auto")))
     elif kind == "plant_apply":
         new = start_plant_apply(state, p.get("plant_ids"), retry_of=job_id)
     elif kind == "plant_photos":

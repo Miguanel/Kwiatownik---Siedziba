@@ -69,7 +69,7 @@ class FakeRunner:
     def __init__(self):
         self.started = []
 
-    def start(self, job_id, work, bypass_queue=False):
+    def start(self, job_id, work, bypass_queue=False, kind=None):
         self.started.append(job_id)
 
 
@@ -377,7 +377,7 @@ class LiveRunner(FakeRunner):
         super().__init__()
         self.tasks, self.active, self.stop_flags, self.stops = {}, set(), set(), []
 
-    def start(self, job_id, work, bypass_queue=False):
+    def start(self, job_id, work, bypass_queue=False, kind=None):
         super().start(job_id, work, bypass_queue)
         self.tasks[job_id] = object()
 

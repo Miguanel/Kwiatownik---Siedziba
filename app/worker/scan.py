@@ -219,6 +219,22 @@ def _url_rows(source_id: int) -> list[tuple[str, bool]]:
     return [(u, k == ItemKind.fact or (k == ItemKind.recipe and st != ItemStatus.skipped)) for u, k, st in rows if u]
 
 
+def _shop_off(job_id: int, source_id: int, st: dict) -> None:
+    """Rozpoznanie wykazalo sklep (karty produktow, zero przepisow): zrodlo wylaczone, dane zostaja. Wlaczone potem
+    recznie (auto_off_at ustawione) - nie wylaczamy drugi raz, tylko konczymy ten skan."""
+    why = (f"sklep internetowy: {st.get('shop', 0)} z {st.get('recipe', 0) + st.get('fact', 0) + st.get('other', 0)} "
+           "ocenionych stron to karty produktow, 0 przepisow i ciekawostek")
+    with Session(engine) as s:
+        src = s.get(Source, source_id)
+        if src is not None and src.auto_off_at is None:
+            src.active, src.auto_off_reason, src.auto_off_at = False, why[:300], datetime.now(timezone.utc)
+            s.add(src)
+            s.commit()
+            job_log(job_id, f"Zrodlo wylaczone automatycznie: {why}. Wlaczysz je recznie na stronie zrodla.")
+        else:
+            job_log(job_id, f"Etapy 2-3 pominiete: {why}")
+
+
 def _check_yield(job_id: int, source_id: int) -> str | None:
     """Zrodlo, ktore po AUTO_OFF_PAGES stronach nie dalo przepisu i prawie zadnych ciekawostek, jest wylaczane
     (dane zostaja). Gdy uzytkownik wlaczy je potem recznie, nie wylaczamy go drugi raz."""
@@ -312,6 +328,10 @@ async def run_scan(job_id: int, source_id: int, runner: JobRunner, llm=None, max
             return
         if stats["rozpoznanie"].get("blocked") or stats["rozpoznanie"].get("paused"):
             store.log("Etapy 2-3 pominiete: strona odmawia dostepu")
+            _save_phase_stats(job_id, stats)
+            return
+        if stats["rozpoznanie"].get("shop"):
+            _shop_off(job_id, source_id, stats["rozpoznanie"])
             _save_phase_stats(job_id, stats)
             return
     else:

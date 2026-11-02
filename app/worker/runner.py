@@ -33,6 +33,14 @@ class _NoLimit:
 
 MAX_LIMIT = 6   # najwiecej zadan naraz, jakie mozna ustawic w panelu (/agents)
 
+# Zadania, ktore wiekszosc czasu czekaja na LLM i moga trafic do lokalnej Ollamy (etap 3 diagnostyki 2026-11-02).
+# Gdy chmura (Gemini/Groq) ma limity, zostaje jedno miejsce w Ollamie - wtedy tylko tyle z nich rusza naraz,
+# a reszta miejsc idzie na zadania bez LLM (zdjecia, NLLB, trening sieci, eksport, skan na regulach).
+# Skan nie jest tu liczony: klasyfikuje strony tylko chmura (cloud_only), bez niej - regulami i siecia.
+LLM_HEAVY_KINDS = frozenset({"plant_research", "translate", "enrich", "plant_magic", "plant_merge", "plant_organize",
+                             "plant_place", "leads_search", "build_profile"})
+RECHECK_S = 60.0   # co tyle sekund kolejka sprawdza ponownie, czy chmura juz odpowiada
+
 
 class JobRunner:
     """Limit zadan naraz mozna zmieniac w trakcie pracy (set_limit, 0-6). 0 = wstrzymane: dzialajace koncza
@@ -49,6 +57,9 @@ class JobRunner:
         self.queue: list[int] = []           # czekajace na miejsce (kolejnosc zlecenia)
         self._wake: asyncio.Event | None = None
         self.shutting_down = False
+        self.heavy: set[int] = set()         # zadania z LLM_HEAVY_KINDS (w kolejce i dzialajace)
+        # ile zadan z LLM naraz pozwalaja modele: None = bez dodatkowego limitu (chmura dziala); ustawia main.py
+        self.llm_capacity: Callable[[], int | None] = lambda: None
 
     def set_limit(self, n: int) -> int:
         """Nowy limit zadan naraz (0-6) - dziala od razu: przy wiekszym ruszaja czekajace zadania."""
@@ -61,11 +72,34 @@ class JobRunner:
             self._wake.set()
             self._wake = None
 
+    def llm_cap(self) -> int | None:
+        try:
+            return self.llm_capacity()
+        except Exception:  # noqa: BLE001 - blad oceny modeli nie blokuje kolejki
+            return None
+
     def _may_start(self, job_id: int) -> bool:
         if job_id in self.stop_flags:
             return True                      # zatrzymane w kolejce - wychodzi od razu (status cancelled)
         free = self.max_concurrent - len(self.limited)
-        return free > 0 and job_id in self.queue[:free]
+        if free <= 0:
+            return False
+        cap = self.llm_cap()
+        if cap is None:
+            return job_id in self.queue[:free]
+        # tylko lokalny model: zadania z LLM czekaja na wolne miejsce w nim, zadania bez LLM je wyprzedzaja
+        heavy_running = len(self.limited & self.heavy)
+        eligible = [j for j in self.queue if j not in self.heavy or heavy_running < cap]
+        return job_id in eligible[:free]
+
+    def waiting_for_llm(self) -> list[int]:
+        """Zadania z LLM czekajace w kolejce, bo chmura ma limity, a miejsce w lokalnym modelu jest zajete."""
+        cap = self.llm_cap()
+        if cap is None:
+            return []
+        if len(self.limited & self.heavy) < cap:
+            return []
+        return [j for j in self.queue if j in self.heavy and j not in self.stop_flags]
 
     async def _acquire(self, job_id: int) -> None:
         self.queue.append(job_id)
@@ -73,7 +107,11 @@ class JobRunner:
             while not self._may_start(job_id):
                 if self._wake is None:
                     self._wake = asyncio.Event()
-                await self._wake.wait()
+                wake = self._wake
+                try:                         # limit modeli zmienia sie sam (koniec przerwy chmury) - co minute
+                    await asyncio.wait_for(wake.wait(), RECHECK_S)
+                except asyncio.TimeoutError:
+                    pass
         finally:
             if job_id in self.queue:
                 self.queue.remove(job_id)
@@ -86,9 +124,13 @@ class JobRunner:
             self.limited.discard(job_id)
             self._notify()
 
-    def start(self, job_id: int, work: Callable[[], Awaitable[None]], bypass_queue: bool = False) -> None:
+    def start(self, job_id: int, work: Callable[[], Awaitable[None]], bypass_queue: bool = False,
+              kind: str | None = None) -> None:
         """Dodaje zadanie do kolejki; ruszy, gdy zwolni sie miejsce (status 'queued' -> 'running').
-        bypass_queue=True: rusza od razu, poza limitem (np. pobieranie modelu Ollamy, na ktory czekaja inne)."""
+        bypass_queue=True: rusza od razu, poza limitem (np. pobieranie modelu Ollamy, na ktory czekaja inne).
+        kind z LLM_HEAVY_KINDS: przy samym lokalnym modelu rusza tylko, gdy jest w nim miejsce."""
+        if kind in LLM_HEAVY_KINDS:
+            self.heavy.add(job_id)
         async def wrapper():
             snapshots.current_job.set(job_id)
             try:
@@ -123,6 +165,7 @@ class JobRunner:
                 self.on_status(job_id, "failed")
             finally:
                 self._release(job_id)
+                self.heavy.discard(job_id)
                 activity.clear(job_id)
                 self.active.discard(job_id)
                 self.tasks.pop(job_id, None)

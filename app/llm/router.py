@@ -105,6 +105,30 @@ class ModelRouter:
         self.cache = cache                             # app/llm/cache.LLMCache albo None
         self._load()
 
+    CLOUD_SOON_S = 300.0   # model chmury z przerwa krotsza niz tyle sekund (limit na minute) liczy sie jako dostepny
+
+    def cloud_available(self, now: float | None = None) -> bool:
+        """Czy jakis model chmury (Gemini/Groq) odpowie wkrotce - nie liczac lokalnych modeli zapasowych."""
+        now = now or time.time()
+        for e in self.order:
+            if e.fallback or e.provider not in self.providers:
+                continue
+            if self.provider_pause.get(e.provider, 0) > now + self.CLOUD_SOON_S:
+                continue
+            if e.cooling(now) < self.CLOUD_SOON_S:
+                return True
+        return False
+
+    def llm_capacity(self) -> int | None:
+        """Ile zadan z LLM moze dzialac naraz (etap 3 diagnostyki 2026-11-02). None = bez dodatkowego limitu (chmura
+        dziala albo nie ma zadnych modeli); inaczej liczba miejsc w lokalnych modelach (OLLAMA_CONCURRENCY)."""
+        if not self.order or self.cloud_available():
+            return None
+        local = [p for p in self.providers.values() if getattr(p, "fallback", False)]
+        if not local:
+            return None
+        return sum(max(1, getattr(p, "concurrency", 1)) for p in local)
+
     # ------------------------------------------------------------ odkrywanie
     async def refresh(self) -> list[ModelEntry]:
         names = list(self.providers)

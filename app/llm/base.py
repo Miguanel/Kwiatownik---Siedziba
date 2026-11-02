@@ -203,7 +203,8 @@ class LLMProvider(ABC):
                  client: httpx.AsyncClient | None = None, timeout: float = 120):
         self.api_key = api_key
         self.rpm = rpm
-        self.semaphore = asyncio.Semaphore(max(1, concurrency))
+        self.concurrency = max(1, concurrency)
+        self.semaphore = asyncio.Semaphore(self.concurrency)
         self._client = client
         self._timeout = timeout
 

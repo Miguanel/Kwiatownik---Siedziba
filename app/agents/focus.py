@@ -145,6 +145,11 @@ def _pick_plants(s: Session, groups: dict, member: dict, audit_tasks: list[Agent
             continue
         recent = recently_ordered(s, t.kind, settings.agents_reorder_days)
         new = [str(x) for x in params(t).get("rosliny") or [] if str(x) not in recent and str(x) not in chosen]
+        if _is_research(t.kind):     # etapy 2-3: rosliny na przerwie i z plikiem w niestandardowym ukladzie
+            from app.worker.knowledge import plant_values, research_paused
+            odd = plant_values()[1]
+            rows = {p.id: p for p in s.exec(select(Plant).where(col(Plant.id).in_(new))).all()} if new else {}
+            new = [x for x in new if x not in odd and not (x in rows and research_paused(rows[x]))]
         if new:
             chosen += new[:k - len(chosen)]
             task_ids.append(t.id)
@@ -263,9 +268,16 @@ def build(s: Session, groups: dict, audit_tasks: list[AgentTask]) -> Focus:
     if sid is not None:
         stage = _source_stage(int(sid), groups, active, failed_src)
         too_long = _age_h(sc.get("od")) >= settings.agents_focus_hours
-        if stage == "gotowe" or too_long:
-            why = "domknieta" if stage == "gotowe" else f"limit {settings.agents_focus_hours} h (etap: {stage})"
-            if too_long and stage != "gotowe":
+        if sc.get("etap") != stage:                    # etap 3: pilnujemy postepu kampanii zrodla
+            sc = {**sc, "etap": stage, "etap_od": _iso(store.now())}
+            changes["kampania_zrodla"] = sc
+        stalled = stage not in ("w toku", "gotowe") and settings.agents_focus_stage_hours > 0 \
+            and _age_h(sc.get("etap_od")) >= settings.agents_focus_stage_hours
+        if stage == "gotowe" or too_long or stalled:
+            why = "domknieta" if stage == "gotowe" else \
+                f"limit {settings.agents_focus_hours} h (etap: {stage})" if too_long else \
+                f"brak postepu {settings.agents_focus_stage_hours:g} h (etap: {stage})"
+            if (too_long or stalled) and stage != "gotowe":
                 skipped[str(sid)] = _iso(store.now())
                 changes["kampanie_pominiete_zrodla"] = {k: v for k, v in skipped.items()
                                                         if _age_h(v) < 24 * SKIP_SOURCE_DAYS}

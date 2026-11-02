@@ -45,4 +45,5 @@ def tasks_queue(request: Request):
                       .order_by(Job.id)).all()
     runner = request.app.state.jobs
     return templates.TemplateResponse(request, "tasks_queue.html",
-                                      {"jobs": jobs, "limit": runner.max_concurrent})
+                                      {"jobs": jobs, "limit": runner.max_concurrent,
+                                       "llm_wait": len(runner.waiting_for_llm()), "llm_cap": runner.llm_cap()})

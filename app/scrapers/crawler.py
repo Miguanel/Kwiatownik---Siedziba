@@ -99,6 +99,8 @@ class _QItem:
 
 
 BLOCK_STREAK = 10   # tyle odmow dostepu (401/403/429) z rzedu = strona blokuje Siedzibe -> koniec skanu
+SHOP_SAMPLE = 20    # rozpoznanie: po tylu stronach bez przepisow i ciekawostek, gdy ponad polowa to karty produktow...
+SHOP_SHARE = 0.5    # ...to sklep - koniec rozpoznania (zamiast kampanii do limitu 18 h)
 
 class SmartCrawler:
     def __init__(self, start_url: str, fetcher: Fetcher, store: CrawlStore, config: CrawlConfig, llm=None):
@@ -173,6 +175,18 @@ class SmartCrawler:
             prio = url_priority(url, anchor, depth, self.book, self.keywords, sm) + self._bonus(url)
             heapq.heappush(self.queue, _QItem(-prio, next(self._seq), url, anchor, depth, parent, sm))
 
+    def _judged(self) -> int:
+        return sum(self.stats.get(k, 0) for k in ("recipe", "fact", "other"))
+
+    def _looks_like_shop(self) -> bool:
+        """Etap rozpoznania (stop_when): SHOP_SAMPLE ocenionych stron, 0 przepisow i ciekawostek, ponad polowa to
+        karty produktow - szybka ocena zrodla po kilku minutach zamiast godzin szukania probek."""
+        if not self.cfg.stop_when:
+            return False
+        judged = self._judged()
+        return judged >= SHOP_SAMPLE and not self.stats.get("recipe") and not self.stats.get("fact") \
+            and self.stats.get("product", 0) > SHOP_SHARE * judged
+
     def _targets_reached(self) -> bool:
         goal = self.cfg.stop_when
         return bool(goal) and all(self.stats.get(k, 0) >= v for k, v in goal.items())
@@ -236,6 +250,11 @@ class SmartCrawler:
             if self._targets_reached():
                 self.store.log("Rozpoznanie zakonczone: zebrano probki " + ", ".join(
                     f"{k}={self.stats.get(k, 0)}/{v}" for k, v in self.cfg.stop_when.items()))
+                break
+            if self._looks_like_shop():
+                self.stats["shop"] = self.stats.get("product", 0)
+                self.store.log(f"Rozpoznanie przerwane: to sklep - {self.stats['shop']} z {self._judged()} ocenionych "
+                               "stron to karty produktow, zadnego przepisu ani ciekawostki")
                 break
             item = heapq.heappop(self.queue)
             pattern = url_pattern(item.url)
@@ -402,6 +421,8 @@ class SmartCrawler:
             self.stats["other"] += 1
             if c.reason == CULINARY_REASON:
                 self.stats["culinary"] = self.stats.get("culinary", 0) + 1
+            if c.reason.startswith("karta produktu"):
+                self.stats["product"] = self.stats.get("product", 0) + 1
             self.store.save_result(PageResult(url=url, title=c.title[:300], kind="other", confidence=c.confidence,
                                               method=c.method, reason=c.reason, text="", structured=None,
                                               language=page.lang, pattern=pattern, refresh=url in self._refreshing))

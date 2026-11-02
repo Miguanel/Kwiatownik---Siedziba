@@ -102,6 +102,13 @@ class Settings(BaseSettings):
     knowledge_search_langs: str = "en,de,ru,uk,fr,zh,ja"
     knowledge_gap_slots: int = 4          # ile brakujacych podrozdzialow szukac na rosline w jednym przebiegu
     knowledge_requery_days: int = 45      # to samo zapytanie powtarzaj najwczesniej po tylu dniach
+    # etap 2 (diagnostyka 2026-11-02): mniej powtorzonej pracy LLM
+    knowledge_min_new_chars: int = 200    # nowe akapity zrodla krotsze niz tyle znakow (CJK: 1/3) - bez wywolania LLM
+    knowledge_low_yield_days: str = "7,14,30"   # przerwy w badaniu rosliny po kolejnych badaniach z < 2 informacjami
+    knowledge_gap_close_queries: int = 5  # tyle zapytan o te sama luke bez zadnej informacji -> luka zamknieta...
+    knowledge_gap_close_days: int = 30    # ...na tyle dni ("brak w zrodlach")
+    knowledge_enc_off_queries: int = 10   # encyklopedia z 0 informacji po tylu zapytaniach jest pomijana
+    knowledge_verify_first: int = 15      # tyle niezweryfikowanych informacji rosliny -> najpierw weryfikacja, bez badania
     knowledge_encyclopedias: bool = True  # zagraniczne encyklopedie i bazy (Kotobank, Baidu Baike, PFAF...) - panel /encyklopedie
     knowledge_enc_max: int = 3            # ile encyklopedii na rosline w jednym przebiegu (rotacyjnie)
     knowledge_asia_langs: str = "zh,ja"   # Wikipedie czytane zawsze (poza KNOWLEDGE_WIKI_LANGS), jesli artykul jest
@@ -166,6 +173,7 @@ class Settings(BaseSettings):
     agents_focus: bool = True            # wylaczone = dawny ranking bez kampanii
     agents_focus_plants: int = 3         # ile roslin naraz w kampanii roslin
     agents_focus_hours: int = 18         # kampania, ktora nie domknela sie przez tyle godzin, ustepuje nastepnej
+    agents_focus_stage_hours: float = 3   # kampania zrodla bez zmiany etapu (i bez dzialajacego zadania) tak dlugo - koniec
     agents_translate_wip: int = 60       # tyle przepisow czeka na tlumaczenie = nie zbieraj nowych (skany, pobieranie)
 
     # --- Backend Kwiatownika na Render (liczniki strony, papirus na zywo) ---

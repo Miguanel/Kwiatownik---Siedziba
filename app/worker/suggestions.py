@@ -198,8 +198,12 @@ def build_groups(limit: int = 150) -> list[TaskGroup]:
                                                   f"{x['informacje']} informacji czeka; {x['powod'][:90]}",
                                                   f"/plants/{x['id']}") for x in gs["lista"] if x["zablokowana"]],
                                     len(stop), 47))
-        fresh = [p for p in s.exec(select(Plant).where(col(Plant.last_research_at).is_(None))
-                                   .order_by(col(Plant.mentions).desc(), Plant.nazwa_pl)).all() if p.id not in stop]
+        from app.worker.knowledge import plant_values
+        vals, odd = plant_values()
+        # najcenniejsze dla czytelnikow najpierw (odslony + przepisy), bez plikow w niestandardowym ukladzie
+        fresh = sorted([p for p in s.exec(select(Plant).where(col(Plant.last_research_at).is_(None))).all()
+                        if p.id not in stop and p.id not in odd],
+                       key=lambda p: (-vals.get(p.id, 0), -(p.mentions or 0), p.nazwa_pl))
         groups.append(TaskGroup("plants_new", "plants", "Rosliny bez wiedzy z sieci",
                                 "Siedziba jeszcze nie zbierala o nich informacji (Wikipedia w kilku jezykach + strony "
                                 "z innych krajow). Zweryfikowane informacje trafia do plikow roslin ze zrodlami.",
@@ -207,6 +211,19 @@ def build_groups(limit: int = 150) -> list[TaskGroup]:
                                 [TaskItem(p.id, p.nazwa_pl, (p.nazwa_lat or "") + (" - nowa" if p.origin == "nowa" else ""),
                                           f"/plants/{p.id}", by_kind.get("plant_research")) for p in fresh[:limit]],
                                 len(fresh), 45))
+        from app.worker.knowledge import research_paused
+        paused = [(p, research_paused(p)) for p in s.exec(select(Plant).where(col(Plant.research_after).is_not(None))
+                                                          .order_by(col(Plant.research_after))).all()]
+        paused = [(p, at) for p, at in paused if at]
+        if paused:
+            groups.append(TaskGroup("plants_paused", "plants", "Rosliny na przerwie w badaniach",
+                                    "Ostatnie badania nie daly nowych informacji (Wikipedia i strony przeczytane, luki "
+                                    "bez odpowiedzi w zrodlach). Agenci wroca do nich po przerwie; recznie mozna "
+                                    "zbadac je od razu.",
+                                    [("plant_research", "Zbierz wiedze mimo przerwy")],
+                                    [TaskItem(p.id, p.nazwa_pl, f"przerwa do {at.strftime('%Y-%m-%d')} "
+                                              f"({p.low_yield_runs} badan bez wynikow z rzedu)", f"/plants/{p.id}")
+                                     for p, at in paused[:limit]], len(paused), 30))
         waiting = [(pid, n) for pid, n in s.exec(select(PlantFact.plant_id, func.count())
                                                    .where(PlantFact.status == "verified")
                                                    .group_by(PlantFact.plant_id)).all() if pid not in stop]

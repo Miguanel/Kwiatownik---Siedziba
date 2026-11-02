@@ -165,7 +165,23 @@ class Plant(SQLModel, table=True):
     gate_count: int | None = None
     gate_sig: str | None = None                       # odcisk pliku rosliny w chwili odmowy (zmiana pliku = odblokowanie)
     gate_at: datetime | None = None
+    # malejacy zwrot (etap 2): badania z rzedu, ktore daly < 2 informacje, i najwczesniejszy termin nastepnego
+    low_yield_runs: int | None = 0
+    research_after: datetime | None = None
     created_at: datetime = Field(default_factory=_now)
+
+
+class SourceRead(SQLModel, table=True):
+    """Co Siedziba juz przeczytala dla tej rosliny (etap 2): skroty akapitow strony. Przy nastepnym badaniu do LLM
+    trafiaja tylko akapity nowe albo zmienione - wczesniej caly artykul szedl do modelu przy kazdym badaniu."""
+    id: int | None = Field(default=None, primary_key=True)
+    plant_id: str = Field(index=True)
+    url: str = Field(index=True)
+    paragraphs_json: str = "[]"                       # skroty akapitow juz wyslanych do LLM (albo pominietych)
+    reads: int = 0
+    facts: int = 0
+    first_at: datetime = Field(default_factory=_now)
+    last_at: datetime = Field(default_factory=_now)
 
 
 class PlantFact(SQLModel, table=True):

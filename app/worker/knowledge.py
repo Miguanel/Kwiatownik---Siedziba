@@ -23,14 +23,14 @@ from sqlmodel import Session, col, func, select
 from app.config import settings
 from app.db import engine
 from app.knowledge import gaps as gapmod
-from app.knowledge import gate, merge, organize, photos, placement, plantfile, schema
+from app.knowledge import gate, merge, novelty, organize, photos, placement, plantfile, schema
 from app.knowledge.extract import extract_facts
 from app.knowledge.registry import discover_new_plants, sync_kwiatownik
 from app.knowledge.sections import fingerprint, norm_text, similar
 from app.knowledge.verify import BATCH, verify_facts
 from app.knowledge.wiki import WikiClient
 from app.llm.router import AllModelsFailedError
-from app.models import Item, ItemKind, Job, JobStatus, Plant, PlantAlias, PlantFact, PlantQuery
+from app.models import Item, ItemKind, Job, JobStatus, Plant, PlantAlias, PlantFact, PlantQuery, SourceRead
 from app.worker import activity, snapshots
 from app.worker.jobs import job_log
 from app.worker.runner import JobRunner
@@ -199,6 +199,98 @@ def fact_pages_for(plant: Plant, limit: int = 3) -> list:
     return [it for _, _, it in scored[:limit]]
 
 
+def _seen_paragraphs(plant_id: str, url: str) -> set[str]:
+    with Session(engine) as s:
+        row = s.exec(select(SourceRead).where(SourceRead.plant_id == plant_id, SourceRead.url == url)).first()
+    return novelty.loads(row.paragraphs_json) if row else set()
+
+
+def _remember_read(plant_id: str, url: str, done: list[str], facts: int) -> None:
+    """Zapamietuje akapity zrodla przeczytane dla tej rosliny (etap 2: filtr nowosci)."""
+    now = datetime.now(timezone.utc)
+    with Session(engine) as s:
+        row = s.exec(select(SourceRead).where(SourceRead.plant_id == plant_id, SourceRead.url == url)).first()
+        if row is None:
+            row = SourceRead(plant_id=plant_id, url=url)
+        seen = novelty.loads(row.paragraphs_json) | set(done)
+        row.paragraphs_json = json.dumps(sorted(seen))
+        row.reads = (row.reads or 0) + 1
+        row.facts = (row.facts or 0) + facts
+        row.last_at = now
+        s.add(row)
+        s.commit()
+
+
+def closed_gaps(plant_id: str, now: datetime | None = None) -> set[str]:
+    """Luki (podrozdzialy), o ktore pytano KNOWLEDGE_GAP_CLOSE_QUERIES razy w ostatnich KNOWLEDGE_GAP_CLOSE_DAYS
+    dniach i zadne zapytanie nie dalo informacji - "brak w zrodlach", nie pytamy przez ten czas (np. "Kosmetyka"
+    wracala przy prawie kazdej roslinie: 150 zapytan, 15 trafien)."""
+    n = settings.knowledge_gap_close_queries
+    if n <= 0:
+        return set()
+    since = (now or datetime.now(timezone.utc)) - timedelta(days=settings.knowledge_gap_close_days)
+    with Session(engine) as s:
+        rows = s.exec(select(PlantQuery).where(PlantQuery.plant_id == plant_id,
+                                               col(PlantQuery.slot).not_like("enc:%"))).all()
+    asked: dict[str, int] = {}
+    useful: set[str] = set()
+    for q in rows:
+        at = q.created_at if q.created_at.tzinfo else q.created_at.replace(tzinfo=timezone.utc)
+        if at < since:
+            continue
+        asked[q.slot] = asked.get(q.slot, 0) + 1
+        if (q.facts or 0) > 0:
+            useful.add(q.slot)
+    return {slot for slot, k in asked.items() if k >= n and slot not in useful}
+
+
+def useless_encyclopedias() -> set[str]:
+    """Encyklopedie, ktore po KNOWLEDGE_ENC_OFF_QUERIES zapytaniach (wszystkie rosliny) nie daly zadnej informacji
+    (diagnoza: mpdb, duke, iplant, a-hospital - 70 zapytan, 0 informacji)."""
+    n = settings.knowledge_enc_off_queries
+    if n <= 0:
+        return set()
+    with Session(engine) as s:
+        rows = s.exec(select(PlantQuery.slot, func.count(), func.sum(PlantQuery.facts))
+                      .where(col(PlantQuery.slot).like("enc:%")).group_by(PlantQuery.slot)).all()
+    return {slot.split(":", 1)[1] for slot, k, f in rows if k >= n and not (f or 0)}
+
+
+def _low_yield_days() -> list[int]:
+    try:
+        return [int(x) for x in settings.knowledge_low_yield_days.split(",") if x.strip()]
+    except ValueError:
+        return [7, 14, 30]
+
+
+def note_yield(plant_id: str, facts: int, now: datetime | None = None) -> datetime | None:
+    """Malejacy zwrot: po 2 badaniach z rzedu z < 2 informacjami nastepne najwczesniej po 7, potem 14, potem 30 dniach.
+    Badanie z wynikiem kasuje przerwe. Zwraca termin nastepnego badania (albo None)."""
+    now = now or datetime.now(timezone.utc)
+    days = _low_yield_days()
+    with Session(engine) as s:
+        row = s.get(Plant, plant_id)
+        if row is None:
+            return None
+        if facts >= 2:
+            row.low_yield_runs, row.research_after = 0, None
+        else:
+            row.low_yield_runs = (row.low_yield_runs or 0) + 1
+            k = row.low_yield_runs - 2
+            row.research_after = now + timedelta(days=days[min(k, len(days) - 1)]) if k >= 0 and days else None
+        s.add(row)
+        s.commit()
+        return row.research_after
+
+
+def research_paused(plant: Plant, now: datetime | None = None) -> datetime | None:
+    at = plant.research_after
+    if at is None:
+        return None
+    at = at if at.tzinfo else at.replace(tzinfo=timezone.utc)
+    return at if at > (now or datetime.now(timezone.utc)) else None
+
+
 def _recent_queries(plant_id: str) -> tuple[set[str], set[str]]:
     """(zapytania zadane w ostatnich KNOWLEDGE_REQUERY_DAYS dniach, adresy juz uzyte dla tej rosliny)."""
     since = datetime.now(timezone.utc) - timedelta(days=settings.knowledge_requery_days)
@@ -253,6 +345,15 @@ async def _web_sources(plant: Plant, log, file_data: dict | None = None, slots: 
         wanted = [g for g in gaps if g.path in slots or any(g.path.startswith(x + ".") for x in slots)]
         gaps = wanted or [gapmod.Gap(x, (schema.SLOT_BY_PATH[x].title if x in schema.SLOT_BY_PATH else x),
                                      gapmod.SLOT_TOPIC.get(x, "lecznicze")) for x in slots]
+    closed = closed_gaps(plant.id)
+    if closed and not slots:
+        shut = [g for g in gaps if g.path in closed]
+        gaps = [g for g in gaps if g.path not in closed]
+        if shut:
+            log(f"  luki bez wynikow w zrodlach (nie pytam przez {settings.knowledge_gap_close_days} dni): "
+                + ", ".join(g.title for g in shut[:6]))
+            if not gaps:
+                return out
     if not gaps:
         log("  luki: brak - wszystkie podrozdzialy maja tresc; szukam ogolnie")
         gaps = [gapmod.Gap("zastosowanie.medyczne", "Praktyczne zastosowanie - Medycyna", "lecznicze"),
@@ -330,9 +431,10 @@ async def _encyclopedia_sources(plant: Plant, log, file_data: dict | None = None
     topics = list(dict.fromkeys(g.topic for g in gaps)) or ["lecznicze", "folklor"]
     _, used_urls = _recent_queries(plant.id)
     recent = _recent_encyclopedias(plant.id)
+    off = useless_encyclopedias()                       # 0 informacji po wielu zapytaniach - pomijane
     used_domains = {urlparse(u).netloc for u in used_urls}
-    picks = [e for e in encmod.choose(names, topics, used_domains, settings.knowledge_enc_max + len(recent))
-             if e.key not in recent][:settings.knowledge_enc_max]
+    picks = [e for e in encmod.choose(names, topics, used_domains, settings.knowledge_enc_max + len(recent) + len(off))
+             if e.key not in recent and e.key not in off][:settings.knowledge_enc_max]
     if not picks:
         log("  encyklopedie: wszystkie dostepne byly pytane niedawno (albo brak nazw w ich jezykach)")
         return []
@@ -411,22 +513,41 @@ async def research_plant(plant_id: str, llm, wiki: WikiClient, log, job_id: int 
     with Session(engine) as s:
         plant = s.get(Plant, plant_id)
         s.expunge(plant)
+    enc_urls: set[str] = set()
     if not slots:                                      # szukanie konkretnych podrozdzialow = tylko wyszukiwarka
-        sources += await _encyclopedia_sources(plant, log, file_data, job_id)
+        enc = await _encyclopedia_sources(plant, log, file_data, job_id)
+        enc_urls = {src[0] for src in enc}
+        sources += enc
     sources += await _web_sources(plant, log, file_data, slots)
 
+    # strony "o roslinie" (artykul Wikipedii, haslo encyklopedii) - caly nowy tekst; strony ogolne (wyszukiwarka,
+    # ciekawostki ze skanera) - tylko akapity z nazwa rosliny
+    about = {src[0] for src in sources if src[1].startswith("Wikipedia (")} | enc_urls
+    keys = _name_keys(plant)
     for k, (url, name, lang, text, focus, qid) in enumerate(sources, 1):
+        nv = novelty.select_new(text, _seen_paragraphs(plant_id, url), None if url in about else keys,
+                                settings.knowledge_min_new_chars)
+        if nv.why_skip:                                  # etap 2: nic nowego - bez wywolania LLM
+            stats["skipped"] = stats.get("skipped", 0) + 1
+            if nv.done:
+                _remember_read(plant_id, url, nv.done, 0)
+            log(f"  {name}: pominiete bez LLM ({nv.why_skip})")
+            continue
+        if nv.seen or len(nv.text) < len(text) * 0.9:
+            log(f"  {name}: do LLM {len(nv.text)} z {len(text)} znakow (przeczytane wczesniej: {nv.seen}/{nv.total} "
+                f"akapitow{', nie o tej roslinie: ' + str(nv.off_topic) if nv.off_topic else ''})")
         if job_id:
             activity.set(job_id, f"{plant.nazwa_pl}: zrodlo {k}/{len(sources)} - LLM wyciaga informacje", name)
         try:
-            facts, rejected, model = await extract_facts(llm, plant.nazwa_pl, plant.nazwa_lat, name, lang, text, known,
-                                                         focus)
+            facts, rejected, model = await extract_facts(llm, plant.nazwa_pl, plant.nazwa_lat, name, lang, nv.text,
+                                                         known, focus)
         except AllModelsFailedError:
             raise
         except Exception as exc:                       # zly JSON jednego zrodla nie zatrzymuje reszty
             log(f"  [blad] {name}: {str(exc)[:120]}")
             continue
         added = _store_facts(plant_id, facts, url, name, lang, model)
+        _remember_read(plant_id, url, nv.done, added)
         if qid:
             _query_facts(qid, added)
         known += [f.text for f in facts]
@@ -897,21 +1018,76 @@ def _count(plant_id: str, status: str) -> int:
             PlantFact.plant_id == plant_id, PlantFact.status == status)).one()
 
 
+_VALUES: dict = {"at": 0.0, "key": None, "v": {}, "odd": set()}
+
+
+def plant_values(max_age_s: float = 600.0) -> tuple[dict[str, float], set[str]]:
+    """(wartosc rosliny dla czytelnikow, rosliny z plikiem w niestandardowym ukladzie) - etap 3 diagnostyki.
+    Wartosc = odslony strony rosliny i jej rozdzialow z 60 dni (SiteStat) + 2 x liczba przepisow Kwiatownika, ktore
+    ja wymieniaja. Plik bez "id" (stary uklad: gatunek, Cechy, Ogrodnictwo - jak swierzabek) zawsze wychodzil z niskim
+    pokryciem i wracal do badan w kolko - takie rosliny czekaja na reczna poprawke pliku."""
+    import time
+    from app.exporters import store as xstore
+    from app.models import SiteStat
+    key = (str(settings.kwiatownik_przepisy_dir), str(settings.kwiatownik_plants_dir), str(engine.url))
+    if _VALUES["key"] == key and time.time() - _VALUES["at"] < max_age_s:
+        return _VALUES["v"], _VALUES["odd"]
+    vals: dict[str, float] = {}
+    since = (datetime.now(timezone.utc) - timedelta(days=60)).strftime("%Y-%m-%d")
+    with Session(engine) as s:
+        for kind, key, n in s.exec(select(SiteStat.kind, SiteStat.key, func.sum(SiteStat.n))
+                                   .where(col(SiteStat.kind).in_(["plant_view", "plant_section"]),
+                                          SiteStat.day >= since).group_by(SiteStat.kind, SiteStat.key)).all():
+            pid = (key or "").split(":", 1)[0]
+            if pid:
+                vals[pid] = vals.get(pid, 0) + (n or 0) * (1.0 if kind == "plant_view" else 0.5)
+    folder = Path(settings.kwiatownik_przepisy_dir)
+    for f in xstore.current_files(folder) if folder.exists() else []:
+        try:
+            data = json.loads(f.read_text(encoding="utf-8"))
+        except (ValueError, OSError):
+            continue
+        for r in data.get("przepisy", [data]) if isinstance(data, dict) else data:
+            if not isinstance(r, dict) or r.get("wzmianka"):
+                continue
+            ids = {sk.get("link_id") for sk in r.get("skladniki") or [] if isinstance(sk, dict)}
+            ids |= {r.get("roslina_id"), r.get("slug")}
+            for pid in ids - {None, ""}:
+                vals[str(pid)] = vals.get(str(pid), 0) + 2
+    odd: set[str] = set()
+    pdir = Path(settings.kwiatownik_plants_dir)
+    for f in pdir.glob("*.json") if pdir.exists() else []:
+        try:
+            data = json.loads(f.read_text(encoding="utf-8-sig"))
+        except (ValueError, OSError):
+            continue
+        if isinstance(data, dict) and "id" not in data and "gatunek" in data:
+            odd.add(f.stem)
+    _VALUES.update(at=time.time(), key=key, v=vals, odd=odd)
+    return vals, odd
+
+
 def plants_to_research(limit: int) -> list[str]:
-    """Najpierw rosliny nigdy nie badane (z Kwiatownika, potem nowe z wieloma przepisami), potem te z
-    najwiekszymi lukami w schemacie (najmniejsze pokrycie), na koncu najdawniej badane."""
+    """Najpierw rosliny nigdy nie badane (najcenniejsze dla czytelnikow: odslony + przepisy, potem nowe z wieloma
+    przepisami), potem te z najwiekszymi lukami w schemacie (najmniejsze pokrycie), na koncu najdawniej badane.
+    Pomija rosliny na przerwie (malejacy zwrot) i z plikiem w niestandardowym ukladzie."""
     with Session(engine) as s:
         rows = s.exec(select(Plant)).all()
-    never = sorted([p for p in rows if p.last_research_at is None], key=lambda p: -(p.mentions or 0))
+    vals, odd = plant_values()
+    rows = [p for p in rows if p.id not in odd]
+    never = sorted([p for p in rows if p.last_research_at is None],
+                   key=lambda p: (-vals.get(p.id, 0), -(p.mentions or 0), p.nazwa_pl))
     rest = sorted([p for p in rows if p.last_research_at is not None],
                   key=lambda p: (p.coverage if p.coverage is not None else 0, p.last_research_at))
     stop = gate.blocked_map()
-    return [p.id for p in never + rest if p.id not in _BUSY and p.id not in stop][:limit]
+    return [p.id for p in never + rest if p.id not in _BUSY and p.id not in stop and not research_paused(p)][:limit]
 
 
 async def run_plant_research(job_id: int, runner: JobRunner, llm, plant_ids: list[str] | None = None,
-                             limit: int = 10, wiki: WikiClient | None = None, slots: list[str] | None = None) -> dict:
-    """slots: szukaj tylko tych brakujacych podrozdzialow (np. ["zastosowanie.rzemieslnicze"])."""
+                             limit: int = 10, wiki: WikiClient | None = None, slots: list[str] | None = None,
+                             respect_pause: bool = False) -> dict:
+    """slots: szukaj tylko tych brakujacych podrozdzialow (np. ["zastosowanie.rzemieslnicze"]).
+    respect_pause: zlecenia agentow pomijaja rosliny na przerwie po badaniach bez wynikow (reczne - nie)."""
     if llm is None:
         raise RuntimeError("Zbieranie wiedzy wymaga LLM - ustaw klucze GEMINI/GROQ w .env")
     log = lambda m: job_log(job_id, m)  # noqa: E731
@@ -940,12 +1116,25 @@ async def run_plant_research(job_id: int, runner: JobRunner, llm, plant_ids: lis
                 continue
             if _gate_skip(pid, n, len(ids), log, total):
                 continue
+            pause = research_paused(plant) if respect_pause and not slots else None
+            if pause:
+                log(f"[{n}/{len(ids)}] {title} - ostatnie badania bez nowych informacji, nastepne po "
+                    f"{pause.strftime('%Y-%m-%d')} - pomijam")
+                total["paused"] = total.get("paused", 0) + 1
+                _progress(job_id, n, len(ids))
+                continue
             activity.set(job_id, f"roslina {n}/{len(ids)}", title)
             log(f"[{n}/{len(ids)}] {title}")
             _BUSY.add(pid)
             facts_before = facts_dump(pid)
+            backlog = _count(pid, "new")
+            verify_only = 0 < settings.knowledge_verify_first <= backlog
+            if verify_only:
+                # etap 3: wiedza zebrana wczesniej czeka na weryfikacje - najpierw ona, nowe badanie nastepnym razem
+                log(f"  {backlog} informacji czeka na weryfikacje - najpierw weryfikacja, bez nowego zbierania")
             try:
-                st = await research_plant(pid, llm, wiki, log, job_id, slots=slots)
+                st = {"sources": 0, "facts": 0, "rejected_quotes": 0} if verify_only else \
+                    await research_plant(pid, llm, wiki, log, job_id, slots=slots)
                 vs = await verify_plant(pid, llm, log, job_id)
                 _record_facts(pid, title, facts_before, "zbieranie i weryfikacja informacji")
                 outcome = await apply_plant(pid, log, llm) if settings.knowledge_auto_apply else "nothing"
@@ -972,7 +1161,11 @@ async def run_plant_research(job_id: int, runner: JobRunner, llm, plant_ids: lis
                     row.status = "researched"
                 s.add(row)
                 s.commit()
+            nxt = note_yield(pid, st["facts"]) if not slots and not verify_only else None
+            if nxt:
+                log(f"  malo nowych informacji ({st['facts']}) - nastepne badanie tej rosliny po {nxt.strftime('%Y-%m-%d')}")
             total["plants"] += 1
+            total["skipped_sources"] = total.get("skipped_sources", 0) + st.get("skipped", 0)
             for k in ("sources", "facts"):
                 total[k] += st[k]
             for k in ("verified", "rejected"):

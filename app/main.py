@@ -85,6 +85,9 @@ async def lifespan(app: FastAPI):
     app.state.jobs = make_runner(settings.max_concurrent_jobs)  # kolejka zadan z limitem
     _safe("limit zadan z panelu agentow", lambda: agents_store.apply_job_limit(app.state))
     app.state.llm = _safe("router LLM", build_router)  # router modeli (None = brak kluczy)
+    if app.state.llm is not None and hasattr(app.state.llm, "llm_capacity"):
+        # etap 3: gdy chmura ma limity, zadania z LLM nie zajmuja wszystkich miejsc w kolejce (czekaja na Ollame)
+        app.state.jobs.llm_capacity = app.state.llm.llm_capacity
     tasks = []
     if app.state.llm:
         tasks.append(asyncio.create_task(_refresh_models(app.state)))

@@ -115,11 +115,12 @@ def execute(state, kind: str, p: dict) -> int:
     ids = [int(x) for x in p.get("ids") or [] if str(x).isdigit()]
     if k.job == "plant_research":
         slots = list(p.get("sloty") or k.slots) or None
+        # zlecenia agentow: rosliny na przerwie po badaniach bez wynikow sa pomijane (etap 2)
         if kind == "nowa_wiedza" and not plants:
-            return actions.start_plant_research(state, None, int(p.get("limit") or 3))
+            return actions.start_plant_research(state, None, int(p.get("limit") or 3), auto=True)
         if not plants:
-            return actions.start_plant_research(state, None, int(p.get("limit") or 3), slots=slots)
-        return actions.start_plant_research(state, plants, len(plants), slots=slots)
+            return actions.start_plant_research(state, None, int(p.get("limit") or 3), slots=slots, auto=True)
+        return actions.start_plant_research(state, plants, len(plants), slots=slots, auto=True)
     if k.job == "plant_magic":
         return actions.start_plant_magic(state, plants or None, int(p.get("limit") or 0) or None)
     if k.job in ("plant_apply", "plant_organize", "plant_merge", "plant_place", "plant_photos"):
