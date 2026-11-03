@@ -1,6 +1,7 @@
 """Zadania 'translate', 'enrich' i 'export':
 tlumaczenie na polski -> pominiecie kulinarnych -> sprawdzenie, czy przepis juz istnieje -> opracowanie
 (tradycyjne systemy) -> eksport."""
+import asyncio
 import json
 import re
 from urllib.parse import urlparse
@@ -19,7 +20,7 @@ from app.llm.router import AllModelsFailedError
 from app.models import Item, ItemKind, ItemStatus, Job, Source
 from app.pipeline.catalog import load_kwiatownik_recipes, load_plants
 from app.pipeline.matching import Candidate, find_match
-from app.pipeline.enrich import enrich_recipe, parse_systems, strip_invented
+from app.pipeline.opracowanie import opracuj
 from app.llm.base import InvalidOutputError
 from app.mt.nllb import MTQualityError, MTUnavailable, get_translator
 from app.pipeline.fast_translate import can_fast_translate, fast_translate_recipe
@@ -171,9 +172,9 @@ async def finish_item(item_id: int, rec: dict, model: str, llm, kw_cands: list[C
     match = None if ignore_match else await find_match(rec["tytul"], names, cands, llm)
 
     msg = f"[przetlumaczono] {rec['tytul']} ({model})"
-    if match is None and llm is not None and (settings.enrich_recipes if enrich is None else enrich):
-        rec, note = await _enrich(llm, rec, raw)
-        msg += note
+    if match is None:                 # opracowanie bez LLM: karty roslin + zrodlo (decyzja 2026-11-02)
+        rec = opracuj(rec, _plant_loader(), _source_text(item_id, raw))
+        msg += " + opracowanie z kart roslin"
     with Session(engine) as s:
         item = s.get(Item, item_id)
         new = json.dumps(rec, ensure_ascii=False)
@@ -205,40 +206,33 @@ async def finish_item(item_id: int, rec: dict, model: str, llm, kw_cands: list[C
     return outcome
 
 
-async def _enrich(llm, rec: dict, raw: str | None) -> tuple[dict, str]:
-    """Opracowanie w tradycyjnych systemach; blad nie psuje tlumaczenia - przepis zostaje bez opracowania."""
-    try:
-        rec2, model = await enrich_recipe(llm, rec, parse_systems(settings.enrich_systems), raw)
-        return rec2, f" + opracowanie ({model})"
-    except AllModelsFailedError:
-        return rec, " (bez opracowania - modele maja limit; uzyj 'Opracuj' pozniej)"
-    except (LLMError, ValueError) as exc:
-        return rec, f" (bez opracowania: {str(exc)[:120]})"
+def _source_text(item_id: int, raw: str | None = None) -> str | None:
+    """Tekst zrodla przepisu (strona + dane strukturalne) - sprawdzanie, czy liczby dawkowania sa w zrodle."""
+    with Session(engine) as s:
+        item = s.get(Item, item_id)
+        parts = [raw or (item.raw_text if item else None), item.structured_json if item else None]
+    text = " ".join(p for p in parts if p)
+    return text or None
 
 
-async def enrich_one(item_id: int, llm, log) -> str:
+def enrich_one(item_id: int, log, load_plant=None) -> str:
+    """Opracowanie przepisu z kart roslin (bez LLM): usuwa pola dopisane kiedys przez model, dodaje ostrzezenia
+    i czas zbioru z kart roslin oraz dymek Wu Xing / Galen."""
     with Session(engine) as s:
         item = s.get(Item, item_id)
         if not item or not item.data_json:
             return "skipped"
-        rec, raw = json.loads(item.data_json), item.raw_text
-    try:
-        rec2, model = await enrich_recipe(llm, rec, parse_systems(settings.enrich_systems), raw)
-    except AllModelsFailedError as exc:
-        log(f"[odlozone] #{item_id} {rec.get('tytul', '')[:50]}: modele maja limit ({str(exc)[:120]})")
-        return "postponed"
-    except (LLMError, ValueError) as exc:
-        log(f"[blad opracowania] #{item_id} {rec.get('tytul', '')[:50]}: {exc}")
-        return "error"
+        rec = json.loads(item.data_json)
+    rec2 = opracuj(rec, load_plant or _plant_loader(), _source_text(item_id))
     with Session(engine) as s:
         item = s.get(Item, item_id)
         new = json.dumps(rec2, ensure_ascii=False)
-        snapshots.record_item(item, new, f"opracowanie ({model})")
+        snapshots.record_item(item, new, "opracowanie z kart roslin (bez LLM)")
         item.data_json = new
         item.updated_at = datetime.now(timezone.utc)
         s.add(item)
         s.commit()
-    log(f"[opracowano] {rec2.get('tytul')} ({model})")
+    log(f"[opracowano] {rec2.get('tytul')} (karty roslin, bez LLM)")
     return "enriched"
 
 
@@ -248,7 +242,10 @@ def items_without_enrichment(limit: int | None = None, session: Session | None =
         rows = s.exec(select(Item.id, Item.data_json).where(
             Item.kind == ItemKind.recipe, col(Item.duplicate_of).is_(None), col(Item.data_json).is_not(None),
             col(Item.status).in_(ok)).order_by(Item.id)).all()
-    ids = [iid for iid, dj in rows if "opracowanie" not in json.loads(dj)]
+    def old(dj: str) -> bool:                     # brak opracowania albo dawne opracowanie przez LLM
+        op = json.loads(dj).get("opracowanie")
+        return not (isinstance(op, dict) and str(op.get("jak") or "").startswith("bez LLM"))
+    ids = [iid for iid, dj in rows if old(dj)]
     return ids[:limit] if limit else ids
 
 
@@ -277,29 +274,22 @@ def _only_pending(ids: list[int], kind: str, log) -> list[int]:
 
 async def run_enrich(job_id: int, runner: JobRunner, llm, limit: int | None = None,
                      item_ids: list[int] | None = None, force: bool = False) -> dict:
-    if llm is None:
-        raise RuntimeError("Opracowanie wymaga LLM - ustaw klucze GEMINI/GROQ w .env")
     log = lambda m: job_log(job_id, m)  # noqa: E731
-    ids = list(item_ids) if item_ids else items_without_enrichment(limit or settings.translate_batch)
+    ids = list(item_ids) if item_ids else items_without_enrichment(limit or 500)
     if item_ids and not force:
         ids = _only_pending(ids, "enrich", log)
-    log(f"Do opracowania: {len(ids)} przepisow; systemy: {', '.join(parse_systems(settings.enrich_systems))}")
-    stats = {"enriched": 0, "error": 0, "postponed": 0, "skipped": 0}
-    postponed_in_row = 0
+    log(f"Do opracowania: {len(ids)} przepisow (karty roslin Kwiatownika, bez LLM)")
+    stats = {"enriched": 0, "skipped": 0}
+    load_plant = _plant_loader()                    # karty roslin czytane raz na zadanie
     for n, iid in enumerate(ids, 1):
         if runner.should_stop(job_id):
             log("Zatrzymano")
             break
-        if postponed_in_row >= 2:
-            log(f"Limity modeli wyczerpane - przerywam; {len(ids) - n + 1} przepisow czeka.")
-            break
         activity.set(job_id, f"opracowuje {n}/{len(ids)}", f"#{iid}")
-        outcome = await enrich_one(iid, llm, log)
-        stats[outcome] += 1
-        if outcome != "postponed":                     # odlozone (limity modeli) - ponowienie sprobuje znowu
-            checkpoint(job_id, iid)
-        postponed_in_row = postponed_in_row + 1 if outcome == "postponed" else 0
+        stats[enrich_one(iid, log, load_plant)] += 1
+        checkpoint(job_id, iid)
         _progress(job_id, n, len(ids))
+        await asyncio.sleep(0)                         # bez LLM - nie blokuj panelu przy setkach przepisow
     log("Statystyki: " + ", ".join(f"{k}={v}" for k, v in stats.items()))
     _save_stats(job_id, stats)
     return stats
@@ -407,7 +397,6 @@ def _plant_loader():
 
 
 def build_export_records() -> tuple[list[dict], list[int]]:
-    from app.pipeline.traditions import annotate
     load_plant = _plant_loader()
     ok = [ItemStatus.approved, ItemStatus.exported] + ([] if settings.export_require_approval else [ItemStatus.translated])
     with Session(engine) as s:
@@ -420,7 +409,10 @@ def build_export_records() -> tuple[list[dict], list[int]]:
             group = [p] + list(s.exec(select(Item).where(Item.duplicate_of == p.id).order_by(Item.id)).all())
             srcs = [source_entry(names.get(g.source_id, "?"), g.url, g.title, g.language, g.created_at) for g in group]
             # Wu Xing / Galen: dymek-ciekawostka liczony z pliku rosliny (bez LLM), tylko przepisy lecznicze
-            records.append(with_sources(annotate(strip_invented(json.loads(p.data_json)), load_plant), srcs))
+            # bez pol dopisanych kiedys przez LLM; ostrzezenia, zbior i dymek z kart roslin (decyzja 2026-11-02)
+            records.append(with_sources(opracuj(json.loads(p.data_json), load_plant,
+                                                " ".join(x for x in (p.raw_text, p.structured_json) if x) or None),
+                                        srcs))
             ids.append(p.id)
     return records, ids
 

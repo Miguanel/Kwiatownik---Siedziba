@@ -37,7 +37,7 @@ MAX_LIMIT = 6   # najwiecej zadan naraz, jakie mozna ustawic w panelu (/agents)
 # Gdy chmura (Gemini/Groq) ma limity, zostaje jedno miejsce w Ollamie - wtedy tylko tyle z nich rusza naraz,
 # a reszta miejsc idzie na zadania bez LLM (zdjecia, NLLB, trening sieci, eksport, skan na regulach).
 # Skan nie jest tu liczony: klasyfikuje strony tylko chmura (cloud_only), bez niej - regulami i siecia.
-LLM_HEAVY_KINDS = frozenset({"plant_research", "translate", "enrich", "plant_magic", "plant_merge", "plant_organize",
+LLM_HEAVY_KINDS = frozenset({"plant_research", "translate", "plant_magic", "plant_merge", "plant_organize",
                              "plant_place", "leads_search", "build_profile"})
 RECHECK_S = 60.0   # co tyle sekund kolejka sprawdza ponownie, czy chmura juz odpowiada
 

@@ -19,7 +19,7 @@
 {% endif %}
 <div style="display:flex;gap:8px;margin:12px 0">
   <form method="post" action="/items/{{ item.id }}/translate"><button>{% if polish %}Przetlumacz ponownie{% else %}Przetlumacz i sprawdz{% endif %}</button></form>
-  {% if polish %}<form method="post" action="/items/{{ item.id }}/enrich"><button>{% if polish.opracowanie %}Opracuj ponownie{% else %}Opracuj (5 przemian, kampo...){% endif %}</button></form>{% endif %}
+  {% if polish %}<form method="post" action="/items/{{ item.id }}/enrich"><button title="ostrzezenia i czas zbioru z kart roslin, dymek Wu Xing / Galen - bez LLM">{% if polish.opracowanie %}Opracuj ponownie{% else %}Opracuj{% endif %} (karty roslin)</button></form>{% endif %}
   <form method="post" action="/items/{{ item.id }}/set"><input type="hidden" name="status" value="approved"><button>Zatwierdz</button></form>
   <form method="post" action="/items/{{ item.id }}/set"><input type="hidden" name="status" value="skipped"><button>Odrzuc</button></form>
   <form method="post" action="/items/{{ item.id }}/set"><input type="hidden" name="status" value="raw"><button>Przywroc (raw)</button></form>

@@ -9,7 +9,6 @@ from app.config import settings
 from app.exporters import store
 from app.db import get_session
 from app.models import Item, ItemKind, ItemStatus, Job
-from app.pipeline.enrich import parse_systems
 from app.web.templating import templates
 from app.worker import actions
 from app.worker.archive_import import archive_files
@@ -42,8 +41,8 @@ def export_page(request: Request, session: Session = Depends(get_session)):
     return templates.TemplateResponse(request, "export.html", {
         "counts": counts, "exists": exists, "errors": errors, "to_review": to_review, "jobs": jobs,
         "target": target, "target_exists": target.exists(), "store_files": store.all_files(folder), "require_approval": settings.export_require_approval,
-        "batch": settings.translate_batch, "enrich_on": settings.enrich_recipes,
-        "systems": parse_systems(settings.enrich_systems), "skip_culinary": settings.skip_culinary,
+        "batch": settings.translate_batch, "enrich_on": True,
+        "systems": [], "skip_culinary": settings.skip_culinary,
         "to_enrich": len(items_without_enrichment(session=session)),
         "k1_files": [f.name for f in archive_files(settings.kwiatownik1_przepisy_dir)], "titles": {i.id: json.loads(i.data_json).get("tytul") for i in
                                                       exists + to_review if i.data_json}})
@@ -60,7 +59,7 @@ async def export_import_k1(request: Request):
 
 
 @router.post("/export/enrich")
-async def export_enrich(request: Request, limit: int = Form(20)):
+async def export_enrich(request: Request, limit: int = Form(500)):
     return _back(f"/jobs/{actions.start_enrich(request.app.state, limit=limit)}")
 
 

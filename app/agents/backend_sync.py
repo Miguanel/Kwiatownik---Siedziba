@@ -33,7 +33,7 @@ JOB_TEXT = {
     "scan": "przegląda zagraniczne strony z przepisami", "harvest": "pobiera przepisy z zagranicznej strony",
     "scan_pages": "czyta wybrane strony", "fetch_list": "czyta wybrane strony",
     "build_profile": "uczy się czytać nową stronę z przepisami", "translate": "tłumaczy przepisy na polski",
-    "enrich": "opracowuje przepisy w tradycyjnych systemach", "export": "przygotowuje przepisy do publikacji",
+    "enrich": "uzupelnia przepisy o ostrzezenia z kart roslin", "export": "przygotowuje przepisy do publikacji",
     "import_k1": "przenosi przepisy ze starego Kwiatownika", "agent_audit": "ocenia bazę wiedzy Kwiatownika",
     "agent_deploy": "publikuje nową wersję Kwiatownika", "fb_post": "pisze post na fanpage",
     "fb_ideas": "wyszukuje ciekawostki na fanpage",
@@ -141,7 +141,7 @@ def _event_for_job(job: Job) -> dict | None:
     elif kind == "translate" and st.get("translated"):
         text, ev_kind = f"Przetłumaczono {st['translated']} przepisów z zagranicznych stron", "przepisy"
     elif kind == "enrich" and st.get("enriched"):
-        text, ev_kind = f"Opracowano {st['enriched']} przepisów w tradycyjnych systemach", "przepisy"
+        text, ev_kind = f"Uzupełniono {st['enriched']} przepisów o ostrzeżenia z kart roślin", "przepisy"
     elif kind in ("scan", "harvest"):
         found = int(st.get("recipe") or 0) + sum(int((st.get(k) or {}).get("recipe") or 0)
                                                   for k in ("rozpoznanie", "pobieranie") if isinstance(st.get(k), dict))

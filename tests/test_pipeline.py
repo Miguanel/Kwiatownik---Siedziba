@@ -95,38 +95,6 @@ def test_catalog_loading(tmp_path):
     assert load_plants(tmp_path / "plants") == {"dab": "Dąb (Quercus)"}
 
 
-def test_enrichment_keeps_source_fields_and_adds_disclaimer():
-    from app.pipeline.enrich import NO_DOSAGE, enrich_recipe, parse_systems
-    rec = {"tytul": "Nalewka z dziurawca", "typ": "medyczne_wewnetrzne_nalewka",
-           "skladniki": [{"nazwa": "Ziele dziurawca", "ilosc": "50 g"}, {"nazwa": "Wódka", "ilosc": "250 ml"}],
-           "sposob_przygotowania": ["Krok 1: Zalać ziele wódką."]}
-    answer = {"mechanizm_tworzenia": ["Ekstrakcja alkoholowa", 7],
-              "klasyfikacja_dzialania": {"skalowanie_toksykologiczne": "Średnia moc.",
-                                         "matryca_wu_xing": {"zywiol_leczony": "Drewno (Wątroba)", "x": "y"},
-                                         "humory_galena": {"jakosc": "ciepła i sucha", "stopien": "II"},
-                                         "triada_kampo": {"cel_glowny": "Ki", "x": "y"}},
-              "skladniki": [{"nazwa": "ziele dziurawca", "filar": "1_bazowy", "smak_ajurweda": "gorzki",
-                             "ilosc": "999 kg"}],
-              "stosowanie_i_dawkowanie": {"dawkowanie_standardowe": "20 kropli", "skalowanie_pacjenta": "Nie dla dzieci."},
-              "bezpieczenstwo_i_interakcje": {"ostrzezenia": "Fotouczulenie.", "interakcje_z_lekami": "Antykoncepcja."},
-              "wskazowki_tradycyjne": ["Zbierać w dzień św. Jana."]}
-    llm = FakeLLM([answer])
-    out, model = asyncio.run(enrich_recipe(llm, rec, parse_systems("wu_xing,humory,kampo,piec_filarow,ajurweda"), "raw text"))
-    assert model == "fake/m"
-    assert out["skladniki"][0] == {"nazwa": "Ziele dziurawca", "ilosc": "50 g"}  # bez filaru i smaku ajurwedy
-    assert out["sposob_przygotowania"] == rec["sposob_przygotowania"]
-    assert out["stosowanie_i_dawkowanie"]["dawkowanie_standardowe"] == NO_DOSAGE          # nie z LLM
-    assert out["stosowanie_i_dawkowanie"]["skalowanie_pacjenta"] == "Nie dla dzieci."
-    kd = out["klasyfikacja_dzialania"]
-    assert "matryca_wu_xing" not in kd and "humory_galena" not in kd     # Wu Xing / Galen tylko z algorytmu (dymek)
-    assert kd["triada_kampo"] == {"cel_glowny": "Ki"}
-    assert out["mechanizm_tworzenia"] == ["Ekstrakcja alkoholowa"]
-    assert out["opracowanie"]["systemy"] == ["kampo"]          # ajurweda i 5 filarow nie istnieja, wu_xing/humory - algorytm
-    system, prompt = llm.prompts[0]
-    assert "Nie wymyslaj dawkowania" in system and "Pięć Przemian" not in prompt and "Triada Kampo" in prompt
-    assert "matryca_wu_xing" not in system and "humory_galena" not in system
-
-
 def test_translate_type_mapping():
     base = {"tytul": "X", "skladniki": [{"nazwa": "a"}], "sposob_przygotowania": ["b"]}
     assert normalize_record(dict(base, typ="barwierskie_wlosy"), {}, PLANTS, set())["typ"] == "barwierskie_wlosy"
@@ -221,14 +189,6 @@ def test_recipe_store_reads_newest_file_of_each_series(tmp_path):
     used = {f["name"]: f["used"] for f in store.all_files(d)}
     assert used == {"reczne.json": True, "siedziba_przepisy.json": False, "siedziba_przepisy_2026-10-01.json": False,
                     "siedziba_przepisy_2026-10-05.json": True}
-
-
-def test_parse_systems_skips_algorithmic_ones():
-    from app.pipeline.enrich import SYSTEMS, parse_systems
-    assert parse_systems("wu_xing,humory") == []                    # tylko algorytm - LLM nic z tych systemow
-    assert parse_systems("wu_xing,kampo,humory,kampo") == ["kampo"]
-    assert parse_systems("") == list(SYSTEMS) and parse_systems("nieznany") == list(SYSTEMS)
-    assert "wu_xing" not in SYSTEMS and "humory" not in SYSTEMS
 
 
 def test_load_plants_prefers_new_format_over_archive(tmp_path):

@@ -35,6 +35,9 @@ TASTES = (("kwa", ("kwaśny", "Drewno", "Drewna", "wątrobą")),
           ("słon", ("słony", "Woda", "Wody", "nerkami")),
           ("slon", ("słony", "Woda", "Wody", "nerkami")))
 WEAK = ("lekko", "delikatnie", "nieco", "lekki", "słabo")
+# chinski zegar narzadow (pora najwiekszej aktywnosci) dla narzadow Pieciu Przemian - narzednik -> (dopelniacz, godziny)
+ORGAN_CLOCK = {"wątrobą": ("wątroby", "1–3"), "sercem": ("serca", "11–13"), "śledzioną": ("śledziony", "9–11"),
+               "płucami": ("płuc", "3–5"), "nerkami": ("nerek", "17–19")}
 
 HOT = ("ciepł", "gorąc", "gorac", "rozgrzew", "ogrzew", "grzej")
 COLD = ("chłod", "chlod", "zimn")
@@ -162,9 +165,12 @@ def tradition(rec: dict, plant: dict | None) -> dict | None:
     t = taste(pick(str(prof.get("smak") or ""), part))
     if t:
         smak, przemiana, przemiany, narzad = t
+        clock = ORGAN_CLOCK.get(narzad)
         out["wu_xing"] = {"smak": smak, "przemiana": przemiana,
                           "tekst": f"W tradycji Pięciu Przemian (Wu Xing) smak {smak} łączono z przemianą "
-                                   f"{przemiany} i z {narzad}."}
+                                   f"{przemiany} i z {narzad}."
+                                   + (f" Według chińskiego zegara narządów pora {clock[0]} to godz. {clock[1]}."
+                                      if clock else "")}
     q = galen_quality(pick(str(prof.get("termika") or ""), part), pick(str(prof.get("wilgotnosc") or ""), part))
     if q:
         jak = " i ".join(q)

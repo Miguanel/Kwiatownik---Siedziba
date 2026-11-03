@@ -425,8 +425,10 @@ def test_translate_skips_culinary_and_enriches(tmp_path, monkeypatch):
         salve_item = s.get(Item, salve_id)
         rec = _json.loads(salve_item.data_json)
     assert salve_item.status == ItemStatus.translated
-    kd = rec["klasyfikacja_dzialania"]
-    assert "matryca_wu_xing" not in kd and "triada_kampo" not in kd  # Wu Xing tylko z algorytmu, kampo wylaczone
+    # opracowanie bez LLM (2026-11-02): zadnych pol dopisanych przez model, ostrzezenia z kart roslin
+    assert "klasyfikacja_dzialania" not in rec and "wymogi_szamanskie_i_czasowe" not in rec
+    assert rec["opracowanie"]["jak"].startswith("bez LLM") and "ostrzezenia" in rec["bezpieczenstwo_i_interakcje"]
+    assert rec["mechanizm_tworzenia"] == ["Maść"]
     assert all("filar" not in s and "tropizm_organowy" not in s for s in rec["skladniki"])   # nie wymyslamy rol
     assert all("link_id" not in s for s in rec["skladniki"])                                  # bez "link_id": null
     assert rec["stosowanie_i_dawkowanie"]["dawkowanie_standardowe"] == "Źródło nie podaje dawkowania."

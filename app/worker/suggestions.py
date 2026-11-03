@@ -282,13 +282,13 @@ def build_groups(limit: int = 150) -> list[TaskGroup]:
                                 [("approve", "Zatwierdz"), ("reject", "Odrzuc")],
                                 [TaskItem(str(i.id), json.loads(i.data_json).get("tytul", i.title) if i.data_json else i.title,
                                           i.title or "", f"/items/{i.id}") for i in tr], n_tr, 15))
-        if settings.enrich_recipes:
+        if True:                      # opracowanie bez LLM - zawsze dostepne (ENRICH_RECIPES nieuzywane)
             to_enrich = items_without_enrichment(session=s)
             if to_enrich:
                 rows = s.exec(select(Item).where(col(Item.id).in_(to_enrich[:50]))).all()
-                groups.append(TaskGroup("enrich", "recipes", "Do opracowania",
-                                        "Przetlumaczone przepisy bez opracowania w tradycyjnych systemach "
-                                        "(Piec Przemian, Kampo, ajurweda...) - np. gdy modele mialy limit.",
+                groups.append(TaskGroup("enrich", "recipes", "Do opracowania z kart roslin",
+                                        "Przepisy bez nowego opracowania (albo z dawnym opracowaniem LLM, ktore zostanie "
+                                        "usuniete): ostrzezenia i czas zbioru z kart roslin, dymek Wu Xing / Galen - bez LLM.",
                                         [("enrich", "Opracuj")],
                                         [TaskItem(str(i.id), json.loads(i.data_json).get("tytul", i.title),
                                                   i.title or "", f"/items/{i.id}") for i in rows],

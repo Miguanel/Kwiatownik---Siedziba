@@ -4,7 +4,7 @@
 <p class="muted">Kolejnosc: <b>1. tlumaczenie na polski</b> (LLM, format Kwiatownika, tylko tresc ze zrodla)
   {% if skip_culinary %}- przepisy czysto kulinarne sa pomijane{% endif %} &rarr;
   <b>2. sprawdzenie, czy taki przepis juz istnieje</b> (w Kwiatowniku i wsrod przepisow z innych stron/jezykow) &rarr;
-  {% if enrich_on %}<b>opracowanie</b> w tradycyjnych systemach ({{ systems | join(", ") }}) &rarr;{% endif %}
+  <b>opracowanie bez LLM</b> (ostrzezenia i czas zbioru z kart roslin, dymek Wu Xing / Galen) &rarr;
   <b>3. zatwierdzenie</b>{% if not require_approval %} (wylaczone){% endif %} &rarr; <b>4. eksport</b> do
   <code>{{ target }}</code>{% if target_exists %} <span class="tag done">plik istnieje</span>{% endif %}</p>
 
@@ -43,8 +43,8 @@
     <button>Start</button>
   </form>
   <form class="box" method="post" action="/export/enrich">
-    <b>2b.</b> Opracuj <input name="limit" type="number" value="{{ batch }}" min="1" max="500" style="width:70px">
-    przepisow bez opracowania ({{ to_enrich }}) <button>Start</button>
+    <b>2b.</b> Opracuj z kart roslin (bez LLM) <input name="limit" type="number" value="{{ to_enrich or batch }}" min="1" max="2000" style="width:70px">
+    przepisow bez nowego opracowania ({{ to_enrich }}; dawne opracowania LLM zostana usuniete) <button>Start</button>
   </form>
   {% if require_approval %}
   <form class="box" method="post" action="/export/approve-all" onsubmit="return confirm('Zatwierdzic wszystkie przetlumaczone przepisy?')">

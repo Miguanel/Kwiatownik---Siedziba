@@ -34,10 +34,10 @@ class Settings(BaseSettings):
     # --- Profil zbierania: Kwiatownik = przepisy NIEKULINARNE ---
     skip_culinary: bool = True               # pomijaj zwykle przepisy kulinarne (ciasta, dania, zupy)
     require_key_plants: bool = True          # pomijaj przepisy, w ktorych rosliny nie sa kluczowym skladnikiem
-    # Opracowanie przepisu w tradycyjnych systemach (LLM) po tlumaczeniu. wu_xing i humory nie ida do LLM:
-    # to dymek-ciekawostka liczony algorytmem przy eksporcie (app/pipeline/traditions.py)
-    enrich_recipes: bool = True
-    enrich_systems: str = "kampo,doktryna_sygnatur,spagiryka,chronoterapia"
+    # Opracowanie przepisu przez LLM jest WYLACZONE na stale (2026-11-02: zadnych halucynacji LLM w przepisach).
+    # Opracowanie liczy app/pipeline/opracowanie.py z kart roslin; te dwa ustawienia sa juz nieuzywane.
+    enrich_recipes: bool = False
+    enrich_systems: str = ""
 
     # --- LLM: router sam wykrywa modele u providerow i uklada ranking ---
     llm_providers: str = "gemini,groq"

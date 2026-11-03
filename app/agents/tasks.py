@@ -54,7 +54,7 @@ KINDS: dict[str, Kind] = {
     "pobierz_strone": Kind("Pobranie calej strony", "harvest"),
     "scraper": Kind("Budowa scrapera", "build_profile", llm=True),
     "tlumaczenie": Kind("Tlumaczenie przepisow", "translate"),
-    "opracowanie": Kind("Opracowanie przepisow", "enrich", llm=True),
+    "opracowanie": Kind("Opracowanie przepisow (karty roslin, bez LLM)", "enrich", llm=False),
     "eksport": Kind("Eksport przepisow do Kwiatownika", "export"),
     "ponow": Kind("Ponowienie przerwanego zadania", "retry"),
     "audyt": Kind("Audyt bazy wiedzy", "agent_audit", hint="nowy raport oceny bazy wiedzy Kwiatownika"),
