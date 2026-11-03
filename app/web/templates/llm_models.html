@@ -32,6 +32,20 @@
 <p class="muted">Ollama - pamięć karty (sprawdzane po wolnej odpowiedzi):
   {% for name, v in vram.items() %}<b>{{ name }}</b>: {{ v.procent_vram }}% modelu w VRAM, kontekst {{ v.num_ctx }}{% if v.procent_vram < 90 %} (część liczy na CPU - kontekst zmniejszony){% endif %}{% if not loop.last %} &middot; {% endif %}{% endfor %}</p>
 {% endif %}
+{% if usage %}
+<h3>Zużycie tokenów wg celu</h3>
+<p class="muted">W przybliżeniu (znaki / 4). Budżet dzienny chmury ustawia <code>LLM_DAILY_BUDGET</code>
+  (np. <code>klasyfikacja=150000,zapytania=30000</code>); po jego przekroczeniu dany cel korzysta tylko z modelu lokalnego.</p>
+<div class="table-wrap"><table>
+  <tr><th>Cel</th><th>Dziś: chmura</th><th>Dziś: lokalnie</th><th>Zapytań dziś</th><th>7 dni</th><th>Budżet chmury</th></tr>
+  {% for u in usage %}
+  <tr><td>{{ u.nazwa }}</td><td>{{ "{:,}".format(u.dzis_chmura).replace(",", " ") }}</td>
+    <td>{{ "{:,}".format(u.dzis_lokalnie).replace(",", " ") }}</td><td>{{ u.dzis_zapytania }}</td>
+    <td>{{ "{:,}".format(u.tydzien).replace(",", " ") }}</td>
+    <td>{% if u.budzet %}{{ "{:,}".format(u.budzet).replace(",", " ") }}{% if u.dzis_chmura >= u.budzet %} <span class="tag failed">wyczerpany</span>{% endif %}{% else %}-{% endif %}</td></tr>
+  {% endfor %}
+</table></div>
+{% endif %}
 {% if cache %}
 <p class="muted">Pamięć odpowiedzi LLM (data/llm_cache.db): {{ cache.wpisy }} zapisanych odpowiedzi, od startu {{ cache.trafienia }} zapytań bez wywołania modelu (np. ponowienia po restarcie).</p>
 {% endif %}

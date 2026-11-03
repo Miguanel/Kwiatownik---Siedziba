@@ -595,7 +595,9 @@ def test_phased_scan_probe_profile_harvest(tmp_path, monkeypatch):
         assert job.status == JobStatus.done, job.log
         assert "Etap 1/3" in job.log and "Rozpoznanie zakonczone" in job.log
         assert "Etap 2/3" in job.log and "Etap 3/3 - pobieranie z profilem" in job.log
-        assert s.get(Source, sid).profile_status == "ready" and LLM.profile_calls >= 1
+        src = s.get(Source, sid)
+        # etap 6: strona z typowym kontenerem tresci dostaje selektory z regul, bez LLM
+        assert src.profile_status == "ready" and (LLM.profile_calls >= 1 or "reguly" in (src.scraper_profile or ""))
         assert len(s.exec(select(Item).where(Item.kind == ItemKind.recipe)).all()) == 3
         assert _json.loads(job.stats_json)["profile_ok"] is True
 

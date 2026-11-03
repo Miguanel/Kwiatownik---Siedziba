@@ -85,7 +85,7 @@ class ModelRouter:
     def __init__(self, providers: list[LLMProvider], state_path: Path | None = None,
                  priority: list[str] | None = None, blocklist: list[str] | None = None,
                  max_per_provider: int = 5, max_attempts: int = 0, demote_after: int = 3,
-                 max_wait_s: float = 0.0, cache=None):
+                 max_wait_s: float = 0.0, cache=None, usage=None):
         self.providers = {p.name: p for p in providers}
         self.state_path = state_path
         self.priority = [x.strip() for x in (priority or []) if x.strip()]
@@ -103,6 +103,7 @@ class ModelRouter:
         self.provider_pause: dict[str, float] = {}    # provider -> do kiedy wstrzymany (awaria po stronie API)
         self._prefer_skip: dict[str, float] = {}      # model preferowany -> do kiedy pomijany (po bledzie)
         self.cache = cache                             # app/llm/cache.LLMCache albo None
+        self.usage = usage                             # app/llm/usage.LLMUsage (tokeny wg celu, budzet) albo None
         self._load()
 
     CLOUD_SOON_S = 300.0   # model chmury z przerwa krotsza niz tyle sekund (limit na minute) liczy sie jako dostepny
@@ -253,30 +254,48 @@ class ModelRouter:
                 self.recent.append({"ts": time.time(), "model": f"{provider}:{model}", "ok": True, "s": 0.0,
                                     "cache": True})
                 return LLMResult(text, provider, model, 0.0, [], cached=True)
+        purpose = "inne"
+        local_only = False
+        if self.usage is not None:
+            from app.llm.usage import purpose_of
+            purpose = purpose_of(system, prompt)
+            local_only = self.usage.over_budget(purpose)   # dzienny budzet chmury tego celu wyczerpany
+            if local_only and cloud_only:
+                raise AllModelsFailedError(f"dzienny budzet chmury dla celu '{purpose}' wyczerpany")
         job = _beat()                                  # zadanie czeka na model = zyje (wykrywanie zawieszonych)
         # czekanie w kolejce do modelu (np. jedno miejsce w Ollamie) i dlugie generowanie to nie zawieszenie:
         # znak zycia co minute, zeby straznik nie przerywal zadan czekajacych na model
         hb = asyncio.create_task(_heartbeat(job)) if job is not None else None
         try:
             res = await self._complete_all(prompt, system, json_mode, avoid, prefer, prefer_timeout, cloud_only,
-                                           prefer_only)
+                                           prefer_only, local_only)
         finally:
             if hb is not None:
                 hb.cancel()
             _beat(job)
+        if self.usage is not None:
+            from app.llm.usage import tokens
+            try:
+                self.usage.add(purpose, tokens(prompt, system, res.text), local=res.provider == "ollama")
+            except Exception:  # noqa: BLE001 - licznik nigdy nie psuje zapytania
+                pass
         if key:
             self.cache.put(key, res.text, res.provider, res.model)
         return res
 
     async def _complete_all(self, prompt, system, json_mode, avoid, prefer, prefer_timeout, cloud_only,
-                            prefer_only) -> LLMResult:
+                            prefer_only, local_only: bool = False) -> LLMResult:
         for key in prefer or []:
+            if local_only and not key.startswith("ollama:"):
+                continue
             res = await self._try_preferred(key, prompt, system, json_mode, prefer_timeout)
             if res is not None:
                 return res
         if prefer_only:
             raise AllModelsFailedError("modele preferowane zawiodly (" + ", ".join(prefer or []) + ")")
         skip = {e.key for e in self.order if e.fallback} if cloud_only else set()
+        if local_only:                                 # budzet chmury celu wyczerpany: tylko model lokalny
+            skip = {e.key for e in self.order if not e.fallback}
         if avoid:
             try:
                 return await self._complete(prompt, system, json_mode, set(avoid) | skip)

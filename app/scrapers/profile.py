@@ -267,6 +267,53 @@ def validate_facts(profile: ScraperProfile, fact_samples: list[tuple[str, str, l
             "reason": "" if ok else f"regex P={rx.get('precision')} R={rx.get('recall')}, tresc na {good}/{len(fact_samples)}"}
 
 
+PLUGIN_FIELDS = {
+    "wprm": {"title": {"css": ".wprm-recipe-name", "attr": None},
+             "ingredients": {"css": ".wprm-recipe-ingredient", "attr": None},
+             "steps": {"css": ".wprm-recipe-instruction-text", "attr": None},
+             "yield": {"css": ".wprm-recipe-servings", "attr": None},
+             "notes": {"css": ".wprm-recipe-notes", "attr": None}},
+    "tasty": {"title": {"css": ".tasty-recipes-title", "attr": None},
+              "ingredients": {"css": ".tasty-recipes-ingredients li", "attr": None},
+              "steps": {"css": ".tasty-recipes-instructions li", "attr": None},
+              "notes": {"css": ".tasty-recipes-notes", "attr": None}},
+    "mv": {"title": {"css": ".mv-create-title", "attr": None},
+           "ingredients": {"css": ".mv-create-ingredients li", "attr": None},
+           "steps": {"css": ".mv-create-instructions li", "attr": None},
+           "notes": {"css": ".mv-create-notes", "attr": None}},
+}
+CONTENT_CSS = ("article .entry-content", ".entry-content", ".post-content", ".article-content", ".article-body",
+               "article", "main")
+
+
+def rule_field_sets(samples: list[tuple[str, str, list]]) -> list[tuple[str, dict]]:
+    """Gotowe zestawy selektorow do sprawdzenia (bez LLM): wtyczki obecne na probkach + kontener tresci."""
+    htmls = [h for _, h, _ in samples]
+    out = []
+    for name, fields in PLUGIN_FIELDS.items():
+        marker = next(iter(fields.values()))["css"].split()[0].lstrip(".")
+        if any(marker in h for h in htmls):
+            f = dict(fields)
+            content = _content_css(htmls)
+            if content:
+                f["content"] = {"css": content, "attr": None}
+            out.append((name, f))
+    content = _content_css(htmls)
+    if content:
+        out.append((f"tresc:{content}", {"title": {"css": "h1", "attr": None}, "content": {"css": content, "attr": None}}))
+    return out
+
+
+def _content_css(htmls: list[str]) -> str | None:
+    """Pierwszy kontener artykulu, ktory na wszystkich probkach ma dosc tekstu."""
+    soups = [BeautifulSoup(h, "lxml") for h in htmls]
+    for css in CONTENT_CSS:
+        if soups and all((s.select_one(css) and len(s.select_one(css).get_text(" ", strip=True)) >= ARTICLE_MIN_CHARS)
+                         for s in soups):
+            return css
+    return None
+
+
 async def build_profile(llm, samples: list[tuple[str, str, list]], recipe_urls: list[str], other_urls: list[str],
                         patterns: dict[str, PatternStat], rounds: int = 3, log_fn=None,
                         fact_samples: list[tuple[str, str, list]] | None = None,
@@ -284,8 +331,18 @@ async def build_profile(llm, samples: list[tuple[str, str, list]], recipe_urls: 
         best = (base, rep)
         if rep["passed"] and jsonld_ok == len(samples):
             say("Strona ma komplet danych JSON-LD - profil bez LLM")
-            if llm is None:
-                return _stamp(base, "wzorce+jsonld", rep)
+            return _stamp(base, "wzorce+jsonld", rep)
+        # etap 6: znane wtyczki przepisow (WP Recipe Maker, Tasty, Mediavine Create) i typowe kontenery
+        # artykulu - selektory bez LLM; LLM dopiero, gdy zaden gotowy zestaw nie przejdzie walidacji
+        for name, fields in rule_field_sets(samples):
+            cand = ScraperProfile(recipe_url_regex=pattern_rx, fields=fields, prefer_jsonld=True,
+                                  built_with=f"reguly:{name}")
+            rep = validate(cand, samples, recipe_urls, other_urls)
+            if rep["passed"]:
+                say(f"Selektory z regul ({name}): pokrycie {rep['coverage']:.0%} - profil bez LLM")
+                return _stamp(cand, cand.built_with, rep)
+            if (rep["passed"], rep["coverage"]) > (best[1]["passed"], best[1]["coverage"]):
+                best = (cand, rep)
 
     if llm is None:
         rep = best[1] if best else {"passed": False, "errors": ["brak LLM i brak wyuczonych wzorcow"]}

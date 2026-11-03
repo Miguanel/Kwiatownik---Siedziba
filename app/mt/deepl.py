@@ -94,14 +94,20 @@ class DeepLTranslator:
                         raise MTUnavailable(f"DeepL nieosiagalny: {type(exc).__name__}") from exc
                     time.sleep(2 * (attempt + 1))
                     continue
+                # przerwa (6 h) tylko po odmowie samego tlumaczenia; blad slownika albo licznika /v2/usage
+                # nigdy nie wylacza DeepL
+                strict = path == "/v2/translate"
                 if r.status_code == 456:
-                    self.paused_until = time.time() + QUOTA_PAUSE_S
-                    self.error = "wyczerpany miesieczny limit znakow DeepL"
-                    raise MTUnavailable(self.error)
+                    msg = "wyczerpany miesieczny limit znakow DeepL"
+                    if strict:
+                        self.paused_until, self.error = time.time() + QUOTA_PAUSE_S, msg
+                    raise MTUnavailable(msg)
                 if r.status_code in (401, 403):
-                    self.error = "DeepL odrzucil klucz (DEEPL_API_KEY)"
-                    self.paused_until = time.time() + QUOTA_PAUSE_S
-                    raise MTUnavailable(self.error)
+                    msg = (f"DeepL odrzucil klucz (DEEPL_API_KEY): HTTP {r.status_code} {r.text[:80]}" if strict
+                           else f"DeepL {path}: HTTP {r.status_code} {r.text[:80]}")
+                    if strict:
+                        self.paused_until, self.error = time.time() + QUOTA_PAUSE_S, msg
+                    raise MTUnavailable(msg)
                 if r.status_code == 429 or r.status_code >= 500:
                     if attempt == 2:
                         raise MTUnavailable(f"DeepL przeciazony (HTTP {r.status_code})")
@@ -109,7 +115,8 @@ class DeepLTranslator:
                     continue
                 if r.status_code >= 400:
                     raise MTUnavailable(f"DeepL: HTTP {r.status_code} {r.text[:120]}")
-                self.error = None
+                if strict:
+                    self.error = None
                 return r.json() if r.content else {}
         finally:
             if self._client is None:
@@ -157,8 +164,8 @@ class DeepLTranslator:
                         pass
         except MTUnavailable as exc:
             self.glossary_error = f"slownik {src}->{tgt}: {exc}"[:200]
-            if self.paused_until > time.time():
-                raise
+            self._glossaries[(src, tgt)] = (digest, None, 0)    # bez ponawiania co zapytanie; nowe nazwy = proba
+            log.warning("DeepL: slownik %s->%s niedostepny (%s) - tlumaczenie bez slownika", src, tgt, exc)
             return None
         self.glossary_error = None
         self._glossaries[(src, tgt)] = (digest, gid, len(entries))

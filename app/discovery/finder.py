@@ -83,7 +83,7 @@ class SiteFinder:
 
     async def run(self) -> dict:
         c = self.country
-        self._act("LLM uklada zapytania", f"{c.name} ({c.language})")
+        self._act("ukladam zapytania (szablony z nazw roslin)", f"{c.name} ({c.language})")
         used = self.store.used_queries(c.code)
         used_low = {u.lower().strip() for u in used}
         own = [q for q in dict.fromkeys(self.cfg.extra_queries) if q.lower().strip() not in used_low]

@@ -48,7 +48,10 @@ def test_searxng_parsing_and_merge():
     assert len(res) == 2 and by_url["https://a.example/1"].engines == ["brave", "google"]
 
 
-def test_queries_skip_used_and_fallback():
+def test_queries_skip_used_and_fallback(monkeypatch):
+    from app.config import settings
+    monkeypatch.setattr(settings, "discovery_llm_queries", True)            # sciezka LLM (domyslnie szablony)
+
     class LLM:
         async def complete(self, prompt, system=None, json_mode=False):
             assert "Ukrainian" in prompt and "чай з трав рецепт" in prompt   # uzyte przekazane do LLM
@@ -60,7 +63,24 @@ def test_queries_skip_used_and_fallback():
     q = asyncio.run(make_queries(UA, 5, {"чай з трав рецепт"}, LLM()))
     assert q == ["настоянка з калини", "сироп з бузини"]
     q2 = asyncio.run(make_queries(UA, 2, {"рецепти з трав"}, None))
-    assert q2 == ["народні рецепти лікарські рослини", "настоянка з трав рецепт"]
+    assert len(q2) == 2 and "рецепти з трав" not in q2
+
+
+def test_template_queries_from_plant_names_without_llm(monkeypatch):
+    from app.config import settings
+    from app.discovery.queries import template_queries
+    monkeypatch.setattr(settings, "discovery_llm_queries", False)
+    rows = {"babka": {"pl": "Babka lancetowata", "lat": "Plantago lanceolata",
+                      "names": {"uk": "подорожник ланцетолистий", "en": "Plantago lanceolata"}},
+            "bez": {"pl": "Bez czarny", "lat": "Sambucus nigra", "names": {"uk": "бузина чорна"}}}
+    q = template_queries(UA, 6, {"бузина чорна настоянка рецепт"}, rows)
+    assert len(q) == 6 and len(set(q)) == 6 and "бузина чорна настоянка рецепт" not in q
+    assert "подорожник ланцетолистий мазь своїми руками" in q and any(x in q for x in UA.fallback_queries)
+
+    class NoLLM:
+        async def complete(self, *a, **k):
+            raise AssertionError("bez LLM")
+    assert asyncio.run(make_queries(UA, 3, set(), NoLLM()))                       # LLM wylaczony - szablony
 
 
 class Store:

@@ -76,13 +76,16 @@ async def run_plants_sync(job_id: int, runner: JobRunner, llm=None) -> dict:
         total = s.exec(select(func.count()).select_from(Plant)).one()
     log(f"Rosliny z Kwiatownika: {total} w rejestrze ({added} nowych wpisow)")
     created: list[str] = []
-    if llm is not None:
+    wiki = WikiClient(settings.user_agent)
+    try:
         with Session(engine) as s:
-            activity.set(job_id, "LLM rozpoznaje rosliny w skladnikach przepisow")
+            activity.set(job_id, "rozpoznaje rosliny w skladnikach przepisow (Wikipedia + Wikidata)")
             try:
-                created = await discover_new_plants(s, llm, log_fn=log)
+                created = await discover_new_plants(s, llm, log_fn=log, wiki=wiki)
             except AllModelsFailedError as exc:
                 log(f"Modele maja limit - rozpoznawanie skladnikow przerwane ({str(exc)[:120]})")
+    finally:
+        await wiki.aclose()
     log(f"Nowe rosliny z przepisow: {len(created)}" + (f" ({', '.join(created[:15])})" if created else ""))
     with Session(engine) as s:
         ids = list(s.exec(select(Plant.id)).all())
@@ -157,6 +160,11 @@ def _store_facts(plant_id: str, facts, src_url: str, src_name: str, lang: str, m
     return added
 
 
+def _mt_reason() -> str:
+    mt = get_translator()
+    return ((getattr(mt, "error", None) or "tlumacz niedostepny") if mt else "tlumacz wylaczony")[:160]
+
+
 async def translate_pending_facts(log, limit: int | None = None, plant_ids: list[str] | None = None) -> dict:
     """Tlumaczenie maszynowe cytatow (bez LLM): najpierw informacje czekajace na tlumacza ("untranslated"),
     potem dawne informacje z tekstem napisanym przez LLM (translated_by=None) - ich tekst zastepuje tlumaczenie
@@ -188,6 +196,7 @@ async def translate_pending_facts(log, limit: int | None = None, plant_ids: list
                 continue
             if pl is None and why.startswith("brak tlumacza"):
                 stats["waiting"] += 1
+                stats.setdefault("why", why)
                 continue
             if pl is None or not (12 <= len(pl) <= 700):
                 stats["rejected"] += 1
@@ -219,10 +228,11 @@ async def translate_pending_facts(log, limit: int | None = None, plant_ids: list
                     row.status = "verified"               # zapis wiedzy podmieni tekst w pliku rosliny
             s.add(row)
         s.commit()
-    if any(stats.values()):
+    if any(v for k, v in stats.items() if k != "why"):
         log("Tlumaczenie cytatow wiedzy (bez LLM): "
             f"czekajace {stats['translated']}, dawne teksty LLM zastapione {stats['old_replaced']}, "
-            f"odrzucone {stats['rejected']}" + (f", nadal czeka {stats['waiting']} (tlumacz/budzet)" if stats["waiting"] else ""))
+            f"odrzucone {stats['rejected']}"
+            + (f", nadal czeka {stats['waiting']} ({stats.get('why', 'tlumacz/budzet')[:160]})" if stats["waiting"] else ""))
     return stats
 
 
@@ -638,7 +648,7 @@ async def research_plant(plant_id: str, llm, wiki: WikiClient, log, job_id: int 
         stats["untranslated"] = stats.get("untranslated", 0) + waiting
         stats["rejected_quotes"] += len(rejected) + len(rej_mt)
         log(f"  {name}: {added} nowych informacji"
-            + (f", {waiting} czeka na tlumacza" if waiting else "")
+            + (f", {waiting} czeka na tlumacza ({_mt_reason()})" if waiting else "")
             + (f", odrzucono {len(rejected) + len(rej_mt)} (cytat/tlumaczenie)" if rejected or rej_mt else ""))
     return stats
 

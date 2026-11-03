@@ -106,7 +106,15 @@ class WikiClient:
         await self.client.aclose()
 
     async def _get(self, url: str, params: dict) -> dict:
-        r = await self.client.get(url, params=params | {"format": "json"})
+        # "All connection attempts failed" zdarza sie w Dockerze seriami po kilka sekund - 2 ponowienia z przerwa
+        for attempt in range(3):
+            try:
+                r = await self.client.get(url, params=params | {"format": "json"})
+                break
+            except (httpx.ConnectError, httpx.ConnectTimeout):
+                if attempt == 2:
+                    raise
+                await asyncio.sleep(3 * (attempt + 1))
         r.raise_for_status()
         if self.delay_s:
             await asyncio.sleep(self.delay_s)
@@ -138,6 +146,46 @@ class WikiClient:
                 label = (ent.get("labels", {}).get("pl") or {}).get("value")
                 return WikiPlant(qid, taxon, label, titles, _claim(ent, "P18"), _claim(ent, "P373"),
                                  labels_by_lang(ent.get("labels") or {}), aliases_by_lang(ent.get("aliases") or {}))
+        return None
+
+    async def taxon_for_phrase(self, phrase: str, lang: str = "pl") -> dict | None:
+        """Nazwa skladnika -> gatunek (bez LLM): wyszukiwarka Wikipedii (odmiana slow: "kwiatow czarnego bzu"),
+        element Wikidata strony, takson (P225) - albo takson, z ktorego produkt pochodzi (P1582, np. olej lniany ->
+        len zwyczajny). Zwraca {"qid", "latin", "label", "title"} albo None (to nie roslina / nic nie znaleziono).
+        Wynik musi dzielic z fraza rdzen slowa (4 litery) - przypadkowe trafienia wyszukiwarki odpadaja."""
+        found = await self._get(f"https://{lang}.wikipedia.org/w/api.php", {
+            "action": "query", "list": "search", "srsearch": phrase, "srlimit": 3, "srnamespace": 0})
+        titles = [x["title"] for x in (found.get("query") or {}).get("search", [])][:3]
+        if not titles:
+            return None
+        props = await self._get(f"https://{lang}.wikipedia.org/w/api.php", {
+            "action": "query", "prop": "pageprops", "ppprop": "wikibase_item", "redirects": 1,
+            "titles": "|".join(titles)})
+        qids = {}
+        for page in ((props.get("query") or {}).get("pages") or {}).values():
+            q = (page.get("pageprops") or {}).get("wikibase_item")
+            if q:
+                qids[page.get("title")] = q
+        roots = {w[:4] for w in _norm_words(phrase) if len(w) >= 4}
+        for title in titles:
+            qid = qids.get(title)
+            if not qid or not (roots & {w[:4] for w in _norm_words(title)}):
+                continue
+            ents = await self._get(WIKIDATA_API, {"action": "wbgetentities", "ids": qid, "props": "claims|labels",
+                                                  "languages": lang})
+            ent = (ents.get("entities") or {}).get(qid) or {}
+            taxon = _claim(ent, "P225")
+            if not taxon:
+                src = _item_claim(ent, "P1582")             # produkt naturalny z taksonu
+                if not src:
+                    continue
+                ents = await self._get(WIKIDATA_API, {"action": "wbgetentities", "ids": src, "props": "claims|labels",
+                                                      "languages": lang})
+                ent = (ents.get("entities") or {}).get(src) or {}
+                taxon, qid = _claim(ent, "P225"), src
+            if taxon and len(taxon.split()) >= 2:
+                label = ((ent.get("labels") or {}).get(lang) or {}).get("value") or title
+                return {"qid": qid, "latin": " ".join(taxon.split()[:2]), "label": label, "title": title}
         return None
 
     async def article(self, lang: str, title: str, max_chars: int = 9000) -> WikiArticle | None:
@@ -181,6 +229,21 @@ def labels_by_lang(labels: dict) -> dict[str, str]:
         if not code.startswith("zh") and isinstance(v, dict) and v.get("value"):
             out[code] = v["value"]
     return out
+
+
+def _norm_words(text: str) -> list[str]:
+    import unicodedata
+    t = unicodedata.normalize("NFKD", (text or "").lower().replace("ł", "l"))
+    t = "".join(c for c in t if not unicodedata.combining(c))
+    return re.findall(r"\w+", t)
+
+
+def _item_claim(ent: dict, prop: str) -> str | None:
+    try:
+        v = ent["claims"][prop][0]["mainsnak"]["datavalue"]["value"]
+        return v.get("id") if isinstance(v, dict) else None
+    except (KeyError, IndexError, TypeError):
+        return None
 
 
 def _claim(ent: dict, prop: str) -> str | None:

@@ -53,6 +53,7 @@ GROUPS: dict[str, tuple[str, int, float]] = {
     "nn_train": ("trening_sieci", 0, 57),
     "leads": ("szukanie_przepisu", 5, 54), "leads_extract": ("wzmianki", 0, 45),
     "plants_magic": ("magia", 3, 48),
+    "page_recheck": ("ponowna_ocena", 0, 50),
 }
 
 

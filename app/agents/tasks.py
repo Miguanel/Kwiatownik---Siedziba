@@ -62,6 +62,8 @@ KINDS: dict[str, Kind] = {
                               hint="pelne przepisy (skladniki + kroki) dla wzmianek bez wykonania"),
     "wzmianki": Kind("Wzmianki o przepisach w ciekawostkach", "leads_extract", llm=True,
                      hint="LLM wypisuje przepisy wspomniane w artykulach bez pelnego wykonania"),
+    "ponowna_ocena": Kind("Ponowna ocena stron odrzuconych bez LLM", "page_recheck", llm=True,
+                          hint="strony oznaczone przez siec jako 'nic ciekawego', gdy LLM byl niedostepny"),
     "trening_sieci": Kind("Trening sieci neuronowych", "nn_train",
                           hint="nowa wersja malych sieci (rodzaj strony, typ przepisu, sekcja i czesc rosliny) - bez LLM"),
 }
@@ -151,6 +153,8 @@ def execute(state, kind: str, p: dict) -> int:
         return actions.start_leads_extract(state, int(p.get("limit") or 20))
     if kind == "trening_sieci":
         return actions.start_nn_train(state, [str(i) for i in p.get("ids") or []] or None)
+    if kind == "ponowna_ocena":
+        return actions.start_page_recheck(state, int(p.get("limit") or 50))
     if kind == "audyt":
         return actions.start_agent_audit(state, trigger=p.get("trigger") or "planista")
     if kind == "ponow":

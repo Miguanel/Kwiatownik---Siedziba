@@ -111,15 +111,36 @@ def _human(s: Session, task: str, ds: Dataset, taken: set[str]) -> None:
         taken.add(smp.ref)
 
 
+def is_local_teacher(origin: str) -> bool:
+    """llm:qwen3:8b, llm:SpeakLeash/bielik-4.5b...:Q8_0 = maly model lokalny (Ollama); chmura: llm:openai/gpt-oss-120b."""
+    return origin.startswith("llm:") and origin.count(":") >= 2
+
+
+def teacher_rank(origin: str) -> int:
+    if origin == "jsonld":
+        return 4
+    if origin.startswith("llm:"):
+        return 1 if is_local_teacher(origin) else 3
+    return 2                              # reguly (heuristic)
+
+
 def build_page_kind(s: Session) -> Dataset:
     ds, taken = Dataset(), set()
     _human(s, "page_kind", ds, taken)
+    # etap 7 - czyste etykiety: dla kazdej strony etykieta najlepszego nauczyciela (JSON-LD > LLM w chmurze >
+    # reguly > maly model lokalny), nie najnowsza; maly model lokalny z mniejsza waga
+    best: dict[str, NNSample] = {}
     for smp in s.exec(select(NNSample).where(NNSample.task == "page_kind", NNSample.origin != "czlowiek")
                       .order_by(col(NNSample.id).desc())).all():
         if smp.ref in taken or smp.origin.startswith("nn:") or not smp.weight:
             continue                      # decyzje samej sieci nie sa etykietami (bez uczenia sie od siebie)
-        taken.add(smp.ref)
-        ds.add(smp.text, smp.label, smp.weight, smp.group or _domain(smp.ref), smp.ref, smp.origin)
+        old = best.get(smp.ref)
+        if old is None or teacher_rank(smp.origin) > teacher_rank(old.origin):
+            best[smp.ref] = smp
+    for ref, smp in best.items():
+        taken.add(ref)
+        w = smp.weight * (0.5 if is_local_teacher(smp.origin) else 1.0)
+        ds.add(smp.text, smp.label, w, smp.group or _domain(smp.ref), smp.ref, smp.origin)
     # rozruch: strony z tekstem juz zapisanym w bazie (przepisy i ciekawostki, przepisy kulinarne odrzucone pozniej)
     rows = s.exec(select(Item).where(col(Item.raw_text).is_not(None),
                                      col(Item.kind).in_([ItemKind.recipe, ItemKind.fact]))).all()

@@ -425,7 +425,21 @@ def _nn_groups(by_kind: dict) -> list[TaskGroup]:
                      [TaskItem(str(p.id), f"{TASKS[p.task].title if p.task in TASKS else p.task}: siec "
                                f"'{label_name(p.label)}' ({p.confidence:.0%}) vs LLM '{label_name(p.teacher_label)}'",
                                (p.preview or "")[:120], "/nn") for p in rows], n_conf, 33)
-    return [train, conf]
+    groups = [train, conf]
+    try:
+        from app.worker.recheck import pending_count
+        n_re = pending_count()
+    except Exception:  # noqa: BLE001
+        n_re = 0
+    if n_re:
+        groups.append(TaskGroup("page_recheck", "nn", "Strony odrzucone bez LLM",
+                                "Gdy LLM byl niedostepny, siec oznaczala strony jako 'nic ciekawego' - ta klasa byla "
+                                "zwykle bledna. Siedziba pobierze je jeszcze raz i oceni regulami i LLM; przepisy "
+                                "i ciekawostki wroca do Zebranych.",
+                                [("page_recheck", "Sprawdz 50")],
+                                [TaskItem("all", f"{n_re} stron do ponownej oceny", "", "/nn",
+                                          by_kind.get("page_recheck"))], n_re, 52))
+    return groups
 
 
 def run_task(state, group: str, action: str, ids: list[str]) -> str:
@@ -475,6 +489,9 @@ def run_task(state, group: str, action: str, ids: list[str]) -> str:
     if action == "leads_search":
         jid = actions.start_leads_search(state, int_ids or None)
         return f"Szukanie pelnych przepisow dla {len(int_ids) or 5} wzmianek - zadanie #{jid}."
+    if action == "page_recheck":
+        jid = actions.start_page_recheck(state, 50)
+        return f"Ponowna ocena 50 odrzuconych stron - zadanie #{jid}."
     if action == "leads_extract":
         jid = actions.start_leads_extract(state, 20)
         return f"Przegladanie ciekawostek pod katem wzmianek - zadanie #{jid}."

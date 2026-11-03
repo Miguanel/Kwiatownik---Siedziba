@@ -51,7 +51,8 @@ def save_state(data: dict) -> None:
 
 def task_state(task: str) -> dict:
     st = load_state().get("tasks", {}).get(task) or {}
-    return {"mode": st.get("mode", "wylaczona"), "version": st.get("version")}
+    return {"mode": st.get("mode", "wylaczona"), "version": st.get("version"),
+            "active_classes": list(st.get("active_classes") or [])}
 
 
 def set_task_state(task: str, **fields) -> dict:

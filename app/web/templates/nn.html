@@ -65,6 +65,12 @@
       {% if t.model %}<span class="tag nn">v{{ t.model.version }} {{ t.model.encoder }}</span>{% endif %}</h2>
     <p class="muted">{{ t.spec.replaces }}</p>
     {{ mode_switch(t.key, t.mode, "/nn") }}
+    {% if t.class_quality %}
+    <p class="muted">Klasy w potoku (pewnosc &ge; progu, zgodnosc z LLM, dolna granica):
+      {% for lab, q in t.class_quality.items() %}<b>{{ lab }}</b> {{ q.zgodne }}/{{ q.n }} ({{ (q.dolna * 100)|round|int }}%){% if not loop.last %}, {% endif %}{% endfor %}.
+      {% if t.active_classes %}Siec decyduje sama w: <b>{{ t.active_classes|join(", ") }}</b>{% else %}Zadna klasa nie spelnia jeszcze progu
+      (min. {{ cfg_min_n }} przypadkow, dolna granica {{ (cfg_min_lb * 100)|round|int }}%) - decyduje LLM{% endif %}.</p>
+    {% endif %}
     {% if errors.get(t.key) %}<p class="nn-warn">Siec niedostepna: {{ errors[t.key] }}</p>{% endif %}
     {% if t.model %}
       <div class="nn-kpi">

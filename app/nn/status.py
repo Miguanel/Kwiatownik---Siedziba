@@ -92,7 +92,17 @@ def task_summary(s: Session, task: str, days: int = 7) -> dict:
         "agree": agree, "disagree": disagree, "agreement": agreement,
         "audit": (audit_ok / audit_n) if audit_n else None, "audit_n": audit_n,
         "examples": n_now, "new": new, "conflicts": conflicts, "ready_active": ready, "retrain": retrain,
+        "active_classes": st.get("active_classes") or [], "class_quality": _class_quality(task),
     }
+
+
+def _class_quality(task: str) -> dict:
+    """Zgodnosc klas z LLM w potoku (etap 7) - tylko zadania-decyzje."""
+    try:
+        from app.nn.classes import DECISION_TASKS, class_quality
+        return class_quality(task) if task in DECISION_TASKS else {}
+    except Exception:  # noqa: BLE001 - panel dziala bez tej tabeli
+        return {}
 
 
 def overview(days: int = 7) -> dict:

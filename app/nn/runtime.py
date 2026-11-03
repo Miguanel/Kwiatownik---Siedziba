@@ -134,7 +134,8 @@ class Brain:
         """None = siec nie pracuje (wylaczona / brak modelu). Inaczej decyzja z polami use/consult."""
         if not settings.nn_enabled:
             return None
-        mode = store.task_state(task)["mode"]
+        st = store.task_state(task)
+        mode = st["mode"]
         if mode == "wylaczona":
             return None
         try:
@@ -148,7 +149,9 @@ class Brain:
         label, conf, top = preds[0]
         confident = conf >= lm.threshold and label in lm.allowed
         d = Decision(task, lm.version, label, conf, top, mode, "cien", ms=ms)
-        if mode == "aktywna" and confident:
+        # etap 7: w cieniu siec decyduje sama w klasach, ktore sprawdzily sie w potoku (app/nn/classes.py)
+        per_class = mode == "cien" and confident and label in (st.get("active_classes") or [])
+        if (mode == "aktywna" or per_class) and confident:
             if random.random() < settings.nn_audit_rate:
                 d.decision, d.use, d.consult = "kontrola", False, True
             else:

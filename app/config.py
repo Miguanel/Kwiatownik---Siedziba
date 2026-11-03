@@ -138,6 +138,11 @@ class Settings(BaseSettings):
     magic_include_modern: bool = False    # wspolczesne korespondencje wicca/new age bez dawnych zrodel - odrzucaj
     magic_requery_days: int = 60          # to samo zapytanie o magie najwczesniej po tylu dniach
     backups_dir: Path = BASE_DIR / "data" / "backups"
+    # etap 6: dzienny budzet tokenow LLM w chmurze wg celu, np. "klasyfikacja=150000,zapytania=30000"
+    # (po przekroczeniu cel korzysta tylko z modelu lokalnego); cele: app/llm/usage.py
+    llm_daily_budget: str = ""
+    discovery_llm_queries: bool = False      # zapytania wyszukiwarki z LLM (false = szablony z nazw roslin)
+    new_plants_llm: bool = False             # nowe rosliny ze skladnikow przez LLM (false = Wikipedia + Wikidata)
     db_backup_keep: int = 7                  # ile dziennych kopii bazy trzymac w data/backups/db (0 = bez kopii)
     # Podglad "przed/po" kazdego zapisu pliku JSON (zakladka "Na zywo"); puste = DATA_DIR/snapshots
     snapshots_dir: Path | None = None
@@ -223,6 +228,11 @@ class Settings(BaseSettings):
     nn_target_accuracy: float = 0.95     # siec decyduje sama tylko tam, gdzie w walidacji trafia co najmniej tak czesto
     nn_audit_rate: float = 0.05          # w trybie aktywnym tyle decyzji sieci i tak sprawdza LLM (kontrola losowa)
     nn_fallback_confidence: float = 0.6  # gdy LLM zawiedzie: odpowiedz sieci zamiast regul, jesli pewnosc >= tyle
+    # etap 7: siec decyduje sama w klasach sprawdzonych w potoku (dolna granica Wilsona zgodnosci z LLM)
+    nn_auto_classes: bool = True
+    nn_class_min_n: int = 40
+    nn_class_min_lb: float = 0.93
+    nn_class_drop_lb: float = 0.88
     nn_retrain_min_new: int = 40         # ponowny trening, gdy przybylo co najmniej tyle nowych przykladow...
     nn_retrain_growth: float = 0.20      # ...I zbior urosl o co najmniej tyle (20%) - R12
     nn_retrain_human: int = 15           # ...albo czlowiek oznaczyl tyle przypadkow w panelu /nn

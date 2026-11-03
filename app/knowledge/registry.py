@@ -206,8 +206,29 @@ def _clean_name(name: str) -> str:
     return re.sub(r"\s+", " ", n).strip(" ,.;:-")
 
 
-async def discover_new_plants(session: Session, llm, batch: int = 50, log_fn=None) -> list[str]:
-    """LLM ustala, ktore nieznane skladniki to rosliny -> nowe wpisy Plant(origin='nowa'). Zwraca ich id."""
+# slowa skladnika, ktore nie sa nazwa rosliny (czesci, postac, ilosci, laczniki) - po norm_text
+NOT_NAME = {"kwiat", "kwiaty", "kwiatow", "kwiatki", "kwiatkow", "platki", "platkow", "lisc", "liscie", "lisci",
+            "listki", "listkow", "korzen", "korzenie", "korzeni", "korzenia", "ziele", "ziela", "nasiona", "nasion",
+            "nasienie", "owoce", "owocow", "owoc", "jagody", "jagod", "kora", "kory", "paki", "pakow", "pedy", "pedow",
+            "galazki", "galazek", "lodygi", "lodyg", "klacze", "klacza", "bulwy", "cebula", "cebulki", "sok", "soku",
+            "olej", "oleju", "olejek", "olejku", "nalewka", "nalewki", "napar", "naparu", "odwar", "susz", "suszu",
+            "suszone", "suszonych", "suszony", "suszona", "suszonego", "swieze", "swiezych", "swiezy", "swieza",
+            "swiezego", "mielone", "mielony", "mielonego", "drobno", "posiekane", "posiekanych", "starte", "cale",
+            "garsc", "garsci", "lyzka", "lyzki", "lyzek", "lyzeczka", "lyzeczki", "szklanka", "szklanki", "szczypta",
+            "plasterki", "plasterkow", "kawalek", "kawalki", "z", "ze", "do", "i", "lub", "oraz", "na", "w"}
+
+
+def name_phrase(name: str) -> str:
+    """'2 łyżki suszonych kwiatów czarnego bzu' -> 'czarnego bzu' (to szukamy w Wikipedii)."""
+    words = [w for w in re.findall(r"[^\W\d_]+", name) if norm_text(w) not in NOT_NAME]
+    return " ".join(words).strip()
+
+
+async def discover_new_plants(session: Session, llm, batch: int = 50, log_fn=None, wiki=None,
+                              limit: int = 40) -> list[str]:
+    """Ktore nieznane skladniki to rosliny -> nowe wpisy Plant(origin='nowa'). Zwraca ich id.
+    Domyslnie bez LLM (NEW_PLANTS_LLM=false): Wikipedia + Wikidata (takson P225 albo produkt P1582), do `limit`
+    nazw na przebieg; nazwy bez wyniku zapamietywane jako "nie roslina" (bez ponownego pytania)."""
     say = log_fn or (lambda m: None)
     names = ingredient_candidates(session)
     known = {a.name for a in session.exec(select(PlantAlias)).all()}
@@ -217,6 +238,11 @@ async def discover_new_plants(session: Session, llm, batch: int = 50, log_fn=Non
     by_lat = {(p.nazwa_lat or "").lower(): p.id for p in session.exec(select(Plant)).all() if p.nazwa_lat}
     by_name = {norm_text(p.nazwa_pl): p.id for p in session.exec(select(Plant)).all()}
     created: list[str] = []
+    from app.config import settings
+    if wiki is not None and not (settings.new_plants_llm and llm is not None):
+        return await _discover_by_wiki(session, wiki, todo[:limit], names, by_lat, by_name, say)
+    if llm is None:
+        return []
     for i in range(0, len(todo), batch):
         chunk = todo[i:i + batch]
         res = await llm.complete("SKLADNIKI:\n" + "\n".join(f"- {n}" for n in chunk), system=IDENTIFY_PROMPT,
@@ -254,6 +280,46 @@ async def discover_new_plants(session: Session, llm, batch: int = 50, log_fn=Non
             session.merge(PlantAlias(name=norm_text(name), plant_id=pid))
         session.commit()
         say(f"Skladniki {i + 1}-{i + len(chunk)}: nowe rosliny {len(created)} ({res.provider}/{res.model})")
+    return created
+
+
+async def _discover_by_wiki(session: Session, wiki, todo: list[str], names: Counter, by_lat: dict, by_name: dict,
+                            say) -> list[str]:
+    created: list[str] = []
+    errors = 0
+    for name in todo:
+        phrase = name_phrase(name)
+        found = None
+        try:
+            for q in dict.fromkeys(x for x in (phrase, name) if x and len(x) >= 3):
+                found = await wiki.taxon_for_phrase(q)
+                if found:
+                    break
+        except Exception as exc:  # noqa: BLE001 - siec: bez zapisu "nie roslina", sprobujemy nastepnym razem
+            errors += 1
+            if errors >= 3:
+                say(f"Wikipedia/Wikidata niedostepne ({str(exc)[:80]}) - reszta skladnikow nastepnym razem")
+                break
+            continue
+        pid = None
+        if found:
+            lat, pl = found["latin"], found["label"]
+            pid = by_lat.get(lat.lower()) or by_name.get(norm_text(pl))
+            if pid is None:
+                pid = slugify(pl)
+                if session.get(Plant, pid) is None:
+                    session.add(Plant(id=pid, nazwa_pl=pl[:1].upper() + pl[1:], nazwa_lat=lat, origin="nowa",
+                                      mentions=names[name], wikidata=found["qid"]))
+                    created.append(pid)
+                by_lat[lat.lower()], by_name[norm_text(pl)] = pid, pid
+            else:
+                row = session.get(Plant, pid)
+                if row and row.origin == "nowa":
+                    row.mentions = (row.mentions or 0) + names[name]
+                    session.add(row)
+        session.merge(PlantAlias(name=norm_text(name), plant_id=pid))
+        session.commit()
+    say(f"Skladniki przez Wikipedie i Wikidata (bez LLM): sprawdzono {len(todo)}, nowe rosliny {len(created)}")
     return created
 
 

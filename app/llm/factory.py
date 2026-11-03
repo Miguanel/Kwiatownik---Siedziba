@@ -38,7 +38,14 @@ def build_router() -> ModelRouter | None:
         demote_after=settings.llm_demote_after,
         max_wait_s=settings.llm_max_wait_s,
         cache=_cache(),
+        usage=_usage(),
     )
+
+
+def _usage():
+    """Licznik tokenow wg celu + dzienny budzet chmury (LLM_DAILY_BUDGET)."""
+    from app.llm.usage import LLMUsage, parse_budget
+    return LLMUsage(settings.data_dir / "llm_usage.json", parse_budget(settings.llm_daily_budget))
 
 
 def _cache():

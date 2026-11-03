@@ -241,7 +241,11 @@ def _nn_gate(page: PageData, title: str):
         return None
 
 
-async def classify(page: PageData, keywords: list[str], llm=None, skip_culinary: bool | None = None) -> Classification:
+DEFERRED = "odlozone:llm"      # strona niejednoznaczna, LLM niedostepny - do ponownej oceny (zadanie page_recheck)
+
+
+async def classify(page: PageData, keywords: list[str], llm=None, skip_culinary: bool | None = None,
+                   nn_fallback: bool = True) -> Classification:
     if skip_culinary is None:
         from app.config import settings
         skip_culinary = settings.skip_culinary
@@ -296,8 +300,13 @@ async def classify(page: PageData, keywords: list[str], llm=None, skip_culinary:
             return out
         except Exception as exc:  # LLM niedostepny -> siec (gdy dosc pewna) albo heurystyki
             log.warning("Klasyfikacja LLM nieudana dla %s: %s", page.url, exc)
+            llm_failed = True
+    else:
+        llm_failed = False
 
-    if nn is not None and nn.fallback_ok:
+    # etap 7: siec jako zapas tylko dla przepisu / ciekawostki (trafia dalej do LLM-owych etapow); "nic ciekawego"
+    # z zapasu bylo w 86% bledne (2/14 zgodnosci z LLM) - takie strony czekaja na ponowna ocene zamiast przepadac
+    if nn is not None and nn.fallback_ok and nn_fallback and nn.label != "other":
         from app.nn.runtime import brain
         from app.nn.tasks import label_name
         brain.teach(nn, None, None, decision="zapas")
@@ -308,4 +317,6 @@ async def classify(page: PageData, keywords: list[str], llm=None, skip_culinary:
         return Classification("recipe", recipe, "heuristic", title, "prawdopodobny przepis")
     if topic >= 0.5 and len(page.text) > 1200:
         return Classification("fact", round(topic * 0.6, 2), "heuristic", title, "artykul tematyczny")
+    if llm_failed:
+        return Classification("other", 0.3, DEFERRED, title, "niejednoznaczne, LLM niedostepny - do ponownej oceny")
     return Classification("other", 0.5, "heuristic", title, "niejednoznaczne")

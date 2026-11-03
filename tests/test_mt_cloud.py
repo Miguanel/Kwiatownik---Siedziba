@@ -80,3 +80,21 @@ def test_usage_book_days_months_and_chain_records(tmp_path):
     chain.translate(["abcdefgh"], "de", purpose="wiedza")
     assert b2.month("deepl/x") == 4 and b2.month("deepl/x", "wiedza") == 4
     assert chain.status()["engines"][0]["usage"]["miesiac"] == 4
+
+
+def test_glossary_error_never_pauses_deepl_and_same_language_skips_engines():
+    from app.mt.deepl import DeepLTranslator
+
+    def handler(req: httpx.Request):
+        if req.url.path.startswith("/v2/glossar"):
+            return httpx.Response(403, text="glossaries not allowed")
+        body = json.loads(req.content)
+        return httpx.Response(200, json={"translations": [{"text": "PL:" + t} for t in body["text"]]})
+    d = DeepLTranslator("k:fx", client=httpx.Client(transport=httpx.MockTransport(handler)),
+                        glossary=lambda src: {"Kamille": "rumianek"})
+    assert d.translate(["Kamille"], "de") == ["PL:Kamille"] and d.available() and d.error is None
+    assert "slownik de->pl" in d.status()["glossary_error"]
+    book = UsageBook(None)
+    chain = ChainTranslator([d], usage=book)
+    assert chain.translate(["Rumianek"], "pl") == ["Rumianek"] and chain.last_name.startswith("bez tlumaczenia")
+    assert book.summary() == {}                                            # nic nie wyslano

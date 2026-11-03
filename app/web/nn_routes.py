@@ -105,6 +105,7 @@ def nn_page(request: Request, msg: str = ""):
            "job_limit": getattr(getattr(request.app.state, "jobs", None), "max_concurrent", 1),
            "auto": schedule.auto_settings(), "auto_due": schedule.due()[1], "hours_choices": schedule.HOURS_CHOICES}
     ctx.update(_predictions())
+    ctx.update(cfg_min_n=settings.nn_class_min_n, cfg_min_lb=settings.nn_class_min_lb)
     return templates.TemplateResponse(request, "nn.html", ctx)
 
 

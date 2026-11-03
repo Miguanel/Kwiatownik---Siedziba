@@ -23,7 +23,8 @@ def _models_ctx(request: Request) -> dict:
     ollama = r.providers.get("ollama") if r else None
     return {"models": r.snapshot() if r else [], "errors": r.discovery_errors if r else {},
             "configured": r is not None, "vram": getattr(ollama, "vram", {}) or {},
-            "cache": r.cache.stats() if r and getattr(r, "cache", None) else None}
+            "cache": r.cache.stats() if r and getattr(r, "cache", None) else None,
+            "usage": r.usage.table() if r and getattr(r, "usage", None) else []}
 
 
 # ---------------- panel (HTML / HTMX) ----------------

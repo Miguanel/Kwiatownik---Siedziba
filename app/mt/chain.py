@@ -46,6 +46,9 @@ class ChainTranslator:
     def translate(self, texts: list[str], src_lang: str, tgt_lang: str = "pl", purpose: str = "przepis") -> list[str]:
         """purpose: "przepis" (wszystkie tlumacze) albo "wiedza" (tylko wysokiej jakosci, z budzetem limitu DeepL,
         chyba ze KNOWLEDGE_MT_LOCAL=true)."""
+        if (src_lang or "")[:2].lower() == (tgt_lang or "pl")[:2].lower():
+            self.last_name = "bez tlumaczenia (ten sam jezyk)"       # zrodlo po polsku: nic do wysylania
+            return list(texts)
         errors = []
         for e in self.engines:
             if purpose != "przepis" and not self.knowledge_local and getattr(e, "quality", "niska") != "wysoka":

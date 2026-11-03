@@ -255,6 +255,14 @@ def start_nn_init(state, retry_of: int | None = None) -> int:
                    params={}, retry_of=retry_of, bypass_queue=True)
 
 
+def start_page_recheck(state, limit: int = 50, retry_of: int | None = None) -> int:
+    """Ponowna ocena stron odrzuconych przez siec bez LLM (etap 7)."""
+    from app.worker.recheck import run_page_recheck
+    return _create(state, None, "page_recheck", limit,
+                   work_factory=lambda jid, runner, llm: run_page_recheck(jid, runner, llm, limit),
+                   params={"limit": limit}, retry_of=retry_of)
+
+
 def start_leads_extract(state, limit: int = 20, retry_of: int | None = None) -> int:
     """Wzmianki o przepisach w ciekawostkach (LLM) -> lista "Przepisy do odnalezienia"."""
     return _create(state, None, "leads_extract", limit,
@@ -368,6 +376,8 @@ def retry_job(state, job_id: int) -> int | None:
         new = start_export(state, p.get("translate_first", 0), retry_of=job_id)
     elif kind == "leads_extract":
         new = start_leads_extract(state, p.get("limit") or 20, retry_of=job_id)
+    elif kind == "page_recheck":
+        new = start_page_recheck(state, p.get("limit") or 50, retry_of=job_id)
     elif kind == "leads_search":
         new = start_leads_search(state, p.get("lead_ids"), p.get("limit") or 5, retry_of=job_id)
     elif kind == "nn_train":

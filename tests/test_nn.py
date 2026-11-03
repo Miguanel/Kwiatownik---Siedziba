@@ -147,7 +147,7 @@ def test_train_fact_networks_then_review_and_resolve(nn_env):
         s.commit()
     row, note = train_task("fact_section", "ngram")
     assert row.version == 1 and row.status == "biezaca" and "pierwsza" in note
-    assert store.task_state("fact_section") == {"mode": "cien", "version": 1}
+    assert store.task_state("fact_section") == {"mode": "cien", "version": 1, "active_classes": []}
     assert store.model_dir("fact_section", 1).joinpath("weights.npz").exists()
     m = json.loads(row.metrics_json)
     assert m["accuracy"] > 0.9 and m["groups"] >= 5 and m["confusion"]

@@ -38,7 +38,7 @@ class IdeasLLM:
             r.text = json.dumps({"oceny": [
                 {"id": i, "ciekawosc": 9 if n == 0 else 6, "zaskoczenie": 8, "zrozumialosc": 8,
                  "ryzyko": "leczy" in prompt.split(f"ID {i}:")[1].split("\n")[0], "zajawka": f"Zajawka {i}",
-                 "miesiace": [10] if n == 0 else []} for n, i in enumerate(ids)]})
+                 "miesiace": [date.today().month] if n == 0 else []} for n, i in enumerate(ids)]})
         else:
             r.provider, r.model = "gemini", "autor"
             r.text = json.dumps({"tresc": "Ady, ludziska! Siedziba, bez czarny i śliwa tarnina. "

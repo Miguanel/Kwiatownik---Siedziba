@@ -117,4 +117,10 @@ async def nn_schedule_loop(state, every_s: float = 600, first_s: float = 180) ->
             run_if_due(state)                         # w petli zdarzen: start zadania wymaga asyncio.create_task
         except Exception:  # noqa: BLE001 - petla w tle nigdy nie umiera
             log.exception("Automatyczny trening sieci: blad sprawdzania")
+        if settings.nn_auto_classes:
+            try:
+                from app.nn.classes import update_active_classes
+                await asyncio.to_thread(update_active_classes)
+            except Exception:  # noqa: BLE001
+                log.exception("Klasy sieci decydowane samodzielnie: blad przeliczenia")
         await asyncio.sleep(every_s)
