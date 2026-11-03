@@ -497,12 +497,15 @@ async def merge_slot(llm, plant_pl: str, latin: str | None, slot: Slot, original
 # ------------------------------------------------------------------ calosc
 async def build_merged(llm, data: dict, plant_pl: str, latin: str | None = None, prefer=None, log=None,
                        today: str | None = None, redo_other_models: bool = False,
-                       budget_s: float | None = None, prefer_timeout: float | None = None) -> dict | None:
+                       budget_s: float | None = None, prefer_timeout: float | None = None,
+                       write_with_llm: bool = True) -> dict | None:
     """Blok "scalone" dla pliku rosliny (None, gdy nie ma czego scalac).
     redo_other_models: podrozdzialy scalone wczesniej innym modelem niz preferowane (np. Gemini, gdy Bielik
     jeszcze sie pobieral) sa scalane ponownie - teraz preferowanym (Bielik).
     budget_s: limit czasu na rosline dla modeli preferowanych (potem chmura); prefer_timeout: limit jednego
-    zapytania do modelu preferowanego (model za wolny -> pomijany przez 30 min)."""
+    zapytania do modelu preferowanego (model za wolny -> pomijany przez 30 min).
+    write_with_llm=False: teksty podrozdzialow sklada kod (deterministic) - LLM tylko przydziela punkty do
+    podrozdzialow; dawne scalenia napisane przez LLM sa przy tym skladane od nowa."""
     say = log or (lambda m: None)
     points = collect_points(data)
     if not points:
@@ -533,12 +536,14 @@ async def build_merged(llm, data: dict, plant_pl: str, latin: str | None = None,
         preferred = {m.split(":", 1)[1] if ":" in m else m for m in (prefer or [])}
         by_other = redo_other_models and preferred and not any(
             str(old.get("model") or "").endswith(m) for m in preferred) if old else False
-        if old and old.get("wejscie") == key and old.get("tresc") and not by_other:
+        old_by_llm = bool(old) and not str(old.get("model") or "").startswith("bez LLM")
+        if old and old.get("wejscie") == key and old.get("tresc") and not by_other and \
+                (write_with_llm or not old_by_llm):
             pola[path] = old
             stats["z_pamieci"] += 1
             continue
-        tresc, _rejected, how = await merge_slot(llm, plant_pl, latin, slot, original, pts, use_prefer, log,
-                                                 timeout=prefer_timeout)
+        tresc, _rejected, how = await merge_slot(llm if write_with_llm else None, plant_pl, latin, slot, original,
+                                                 pts, use_prefer, log, timeout=prefer_timeout)
         if not any(t["zrodla"] for t in tresc):
             continue                                   # LLM uznal, ze nic z sieci tu nie pasuje
         stats["llm" if how.startswith("llm:") else "bez_llm"] += 1

@@ -51,7 +51,10 @@ def test_parse_facts_checks_quotes_doses_modern_and_kinds():
                   {"termin": "x", "jezyk": "de"}, {"termin": "Hexenkraut", "jezyk": "deutsch"},
                   {"termin": "вінок на Купала", "jezyk": "uk", "typ": "cos"}]})
     facts, leads, rejected = mg.parse_facts(raw, SRC)
-    assert [f.meta["rodzaj"] for f in facts] == ["ochrona", "milosna", "zabobony"]
+    # "um Hexen und böse Geister abzuwehren" to to samo zdanie co pierwszy cytat - jedna informacja
+    assert [f.meta["rodzaj"] for f in facts] == ["ochrona", "milosna"] and all(f.text == "" for f in facts)
+    assert facts[0].quote == "In der Johannisnacht hängte man Johanniskraut über die Stalltür, um Hexen und böse " \
+                             "Geister abzuwehren."
     assert facts[0].meta == {"rodzaj": "ochrona", "kraj": "Niemcy", "epoka": "XIX w."} and facts[0].section == "magia"
     assert "kraj" not in facts[1].meta
     assert any("dawki" in r for r in rejected) and any("wspolczesna" in r for r in rejected)
@@ -59,7 +62,7 @@ def test_parse_facts_checks_quotes_doses_modern_and_kinds():
     assert [(ld["termin"], ld["typ"]) for ld in leads] == [("Johannisnacht", "praktyka"), ("Іванове зілля", "nazwa"),
                                                            ("вінок на Купала", "praktyka")]
     facts, _, _ = mg.parse_facts(raw, SRC, include_modern=True)
-    assert len(facts) == 4
+    assert len(facts) == 3
 
 
 def test_sweep_needs_plant_and_index_finds_it():
@@ -68,7 +71,7 @@ def test_sweep_needs_plant_and_index_finds_it():
          "tekst": "Dziurawiec wieszano nad drzwiami obory, aby odpędzić czarownice.",
          "cytat": "hängte man Johanniskraut über die Stalltür"},
         {"rodzaj": "ochrona", "tekst": "Wieszano rośliny nad drzwiami obory przeciw czarownicom.",
-         "cytat": "hängte man Johanniskraut über die Stalltür"}]})
+         "cytat": "Mädchen warfen Kränze aus Johanniskraut"}]})
     facts, _, rejected = mg.parse_facts(raw, SRC, sweep=True)
     assert len(facts) == 1 and facts[0].latin.startswith("Hypericum") and any("bez nazwy" in r for r in rejected)
     idx = mg.PlantIndex([("dziurawiec", "Dziurawiec zwyczajny", "Hypericum perforatum", {"de": "Echtes Johanniskraut"}),
@@ -191,7 +194,16 @@ def test_agents_know_magic():
 # ------------------------------------------------------------------ zadanie na atrapach
 HTML = ("<html lang='de'><body><article><h1>Johanniskraut im Volksglauben</h1><p>" + SRC + " " +
         "Das Echte Johanniskraut (Hypericum perforatum) galt als Hexenkraut und Zauberpflanze. " * 6 +
+        "Auch das Eisenkraut schützte die Häuser vor Hexen und Zauberern. " + "{extra}" +
         "</p></article></body></html>")
+
+
+EXTRA = ["Am Johannistag band man Johanniskraut an die Hoftür gegen Blitzschlag.",
+         "Bauern steckten Johanniskraut hinter die Balken der Scheune, damit keine Hexe eindringt.",
+         "Die Mägde flochten Johanniskraut in Kränze für das Vieh auf der Weide.",
+         "In Thüringen legte man Johanniskraut unter das Kopfkissen kranker Kinder.",
+         "Schäfer trugen Johanniskraut im Hut als Schutz vor dem bösen Blick.",
+         "Gegen Gewitter verbrannte man getrocknetes Johanniskraut im Herdfeuer."]
 
 
 class FakeFetcher:
@@ -201,7 +213,8 @@ class FakeFetcher:
     async def get(self, url, html_only=True):
         from app.scrapers.fetcher import FetchResult
         self.urls.append(url)
-        return FetchResult(url, 200, text=HTML, content_type="text/html")
+        extra = EXTRA[(len(self.urls) - 1) % len(EXTRA)] + " "
+        return FetchResult(url, 200, text=HTML.replace("{extra}", extra), content_type="text/html")
 
     async def aclose(self):
         pass
@@ -220,8 +233,10 @@ class FakeLLM:
                 "Świętojańskie wiązki tego ziela wisiały nad progiem gospodarstw w Turyngii.",
                 "Dawniej uważano, że roślina zerwana przed świtem ma największą siłę ochronną.",
                 "Gospodynie wplatały pędy w wieńce chroniące spiżarnie przed urokami sąsiadek."][(n - 1) % 6]
-        ans = {"fakty": [{"rodzaj": "ochrona", "tekst": text,
-                          "cytat": "hängte man Johanniskraut über die Stalltür", "kraj": "Niemcy", "epoka": "XIX w."}],
+        src = prompt.split("TEKST ZRODLA:")[-1]
+        quote = next((e for e in EXTRA if e in src), "hängte man Johanniskraut über die Stalltür")
+        ans = {"fakty": [{"rodzaj": "ochrona", "tekst": text, "cytat": quote,
+                          "kraj": "Niemcy", "epoka": "XIX w."}],
                "tropy": [{"termin": f"Hexenkraut{n}", "jezyk": "de", "typ": "nazwa", "opis": "nazwa ludowa"},
                          {"termin": f"Kupala{n}", "jezyk": "uk", "typ": "analogia"}]}
         return SimpleNamespace(text=json.dumps(ans, ensure_ascii=False), provider="fake", model="m")
@@ -283,7 +298,7 @@ def test_sweep_maps_facts_to_plants(eng, monkeypatch):
                               "cytat": "hängte man Johanniskraut über die Stalltür"},
                              {"roslina": "Eisenkraut", "lacina": "Verbena officinalis", "rodzaj": "ochrona",
                               "tekst": "Werbena chroniła przed czarownicami według wierzeń niemieckich.",
-                              "cytat": "um Hexen und böse Geister abzuwehren"}],
+                              "cytat": "Auch das Eisenkraut schützte die Häuser vor Hexen"}],
                    "tropy": [{"termin": "Kräuterbuschen", "jezyk": "de", "typ": "praktyka"}]}
             return SimpleNamespace(text=json.dumps(ans, ensure_ascii=False), provider="fake", model="m")
     st, touched = asyncio.run(wm.sweep(SweepLLM(), FakeFetcher(), ["b"], lambda m: None, limit=1))

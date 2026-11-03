@@ -25,6 +25,8 @@ from app.db import engine
 from app.knowledge import gaps as gapmod
 from app.knowledge import gate, merge, novelty, organize, photos, placement, plantfile, schema
 from app.knowledge.extract import extract_facts
+from app.knowledge.quotes import finish_facts, supported_label, translate_quotes
+from app.mt.nllb import get_translator
 from app.knowledge.registry import discover_new_plants, sync_kwiatownik
 from app.knowledge.sections import fingerprint, norm_text, similar
 from app.knowledge.verify import BATCH, verify_facts
@@ -122,32 +124,106 @@ def _known_texts(plant_id: str, file_data: dict | None) -> list[str]:
     return texts
 
 
-def _store_facts(plant_id: str, facts, src_url: str, src_name: str, lang: str, model: str) -> int:
-    """Zapis nowych informacji (bez powtorzen: ten sam odcisk albo bardzo podobne zdanie)."""
+def _store_facts(plant_id: str, facts, src_url: str, src_name: str, lang: str, model: str,
+                 status: str = "new") -> int:
+    """Zapis nowych informacji (bez powtorzen: ten sam odcisk, ten sam cytat albo bardzo podobne zdanie).
+    status "untranslated" = tekst to jeszcze cytat w oryginale (tlumacz niedostepny) - translate_pending_facts."""
     added = 0
     with Session(engine) as s:
-        existing = s.exec(select(PlantFact.fingerprint, PlantFact.text).where(PlantFact.plant_id == plant_id)).all()
-        prints = {fp for fp, _ in existing}
-        texts = [t for _, t in existing]
+        existing = s.exec(select(PlantFact.fingerprint, PlantFact.text, PlantFact.quote)
+                          .where(PlantFact.plant_id == plant_id)).all()
+        prints = {fp for fp, _, _ in existing}
+        texts = [t for _, t, _ in existing]
+        quotes = {norm_text(q) for _, _, q in existing if q}
         new_rows = []
         for f in facts:
             fp = fingerprint(plant_id, f.text)
-            if fp in prints or any(similar(f.text, t) >= 0.6 for t in texts):
+            if fp in prints or norm_text(f.quote or "") in quotes or any(similar(f.text, t) >= 0.6 for t in texts):
                 continue
             row = PlantFact(plant_id=plant_id, section=f.section, part=f.part, text=f.text, quote=f.quote,
                             source_url=src_url, source_name=src_name, language=lang, fingerprint=fp,
-                            extracted_by=model)
+                            extracted_by=model, status=status, translated_by=getattr(f, "translated_by", None))
             s.add(row)
             new_rows.append(row)
             prints.add(fp)
             texts.append(f.text)
+            quotes.add(norm_text(f.quote or ""))
             added += 1
         s.commit()
-        ids = [r.id for r in new_rows]
+        ids = [r.id for r in new_rows if r.status == "new"]
     if ids:
         from app.nn.hooks import review_facts
         review_facts(ids, model)        # siec sprawdza sekcje i czesc rosliny (tryb ustawiany w /nn)
     return added
+
+
+async def translate_pending_facts(log, limit: int | None = None, plant_ids: list[str] | None = None) -> dict:
+    """Tlumaczenie maszynowe cytatow (bez LLM): najpierw informacje czekajace na tlumacza ("untranslated"),
+    potem dawne informacje z tekstem napisanym przez LLM (translated_by=None) - ich tekst zastepuje tlumaczenie
+    cytatu. Zapisane juz w plikach (applied) wracaja do "verified", zeby zapis wiedzy podmienil tekst w pliku.
+    Tlumacz niedostepny / budzet DeepL na wiedze wyczerpany -> koniec, reszta nastepnym razem."""
+    limit = settings.knowledge_retranslate_per_run if limit is None else limit
+    stats = {"translated": 0, "old_replaced": 0, "rejected": 0, "waiting": 0}
+    if limit <= 0:
+        return stats
+    mt = get_translator()
+    with Session(engine) as s:
+        q = select(PlantFact).where(col(PlantFact.quote).is_not(None))
+        if plant_ids:
+            q = q.where(col(PlantFact.plant_id).in_(plant_ids))
+        pending = s.exec(q.where(PlantFact.status == "untranslated").order_by(PlantFact.id).limit(limit)).all()
+        old = s.exec(q.where(col(PlantFact.translated_by).is_(None),
+                             col(PlantFact.status).in_(["new", "verified", "applied"]))
+                     .order_by(PlantFact.id).limit(max(0, limit - len(pending)))).all()
+        rows = list(pending) + list(old)
+        for r in rows:
+            s.expunge(r)
+    if not rows:
+        return stats
+    results = await asyncio.to_thread(translate_quotes, mt, [(r.language or "", r.quote) for r in rows])
+    with Session(engine) as s:
+        for r, (pl, why, engine_name) in zip(rows, results):
+            row = s.get(PlantFact, r.id)
+            if row is None:
+                continue
+            if pl is None and why.startswith("brak tlumacza"):
+                stats["waiting"] += 1
+                continue
+            if pl is None or not (12 <= len(pl) <= 700):
+                stats["rejected"] += 1
+                if row.status == "untranslated":
+                    row.status, row.reason = "rejected", (why or "dlugosc tlumaczenia")[:300]
+                else:
+                    row.translated_by = "kontrola"        # zostaje stary tekst; nie probujemy ponownie
+                    row.reason = ((row.reason + "; ") if row.reason else "") + (why or "dlugosc")[:150]
+                s.add(row)
+                continue
+            was = row.status
+            row.text, row.translated_by = pl, engine_name or "mt"
+            row.fingerprint = fingerprint(row.plant_id, pl)
+            if row.section == "magia" and row.meta_json:
+                try:
+                    meta = json.loads(row.meta_json)
+                    for key in ("kraj", "epoka", "tradycja"):
+                        if key in meta and not supported_label(meta[key], pl):
+                            meta.pop(key)
+                    row.meta_json = json.dumps(meta, ensure_ascii=False) if meta else None
+                except ValueError:
+                    pass
+            if was == "untranslated":
+                row.status = "new"
+                stats["translated"] += 1
+            else:
+                stats["old_replaced"] += 1
+                if was == "applied":
+                    row.status = "verified"               # zapis wiedzy podmieni tekst w pliku rosliny
+            s.add(row)
+        s.commit()
+    if any(stats.values()):
+        log("Tlumaczenie cytatow wiedzy (bez LLM): "
+            f"czekajace {stats['translated']}, dawne teksty LLM zastapione {stats['old_replaced']}, "
+            f"odrzucone {stats['rejected']}" + (f", nadal czeka {stats['waiting']} (tlumacz/budzet)" if stats["waiting"] else ""))
+    return stats
 
 
 def _names(plant: Plant) -> dict[str, str]:
@@ -489,6 +565,9 @@ async def research_plant(plant_id: str, llm, wiki: WikiClient, log, job_id: int 
             row.wikidata, row.wiki_titles_json = wp.qid, json.dumps(wp.titles, ensure_ascii=False)
             if wp.labels:
                 row.names_json = json.dumps(wp.labels, ensure_ascii=False)
+            if wp.aliases:
+                row.aliases_json = json.dumps(wp.aliases, ensure_ascii=False)
+            row.names_checked_at = datetime.now(timezone.utc)
             if not row.nazwa_lat and wp.taxon:
                 row.nazwa_lat = wp.taxon
             s.add(row)
@@ -546,15 +625,21 @@ async def research_plant(plant_id: str, llm, wiki: WikiClient, log, job_id: int 
         except Exception as exc:                       # zly JSON jednego zrodla nie zatrzymuje reszty
             log(f"  [blad] {name}: {str(exc)[:120]}")
             continue
-        added = _store_facts(plant_id, facts, url, name, lang, model)
-        _remember_read(plant_id, url, nv.done, added)
+        # tekst po polsku = tlumaczenie maszynowe doslownego cytatu (bez LLM), po kontroli
+        ready, pending, rej_mt = await asyncio.to_thread(finish_facts, facts, lang, get_translator())
+        added = _store_facts(plant_id, ready, url, name, lang, model)
+        waiting = _store_facts(plant_id, pending, url, name, lang, model, status="untranslated")
+        _remember_read(plant_id, url, nv.done, added + waiting)
         if qid:
-            _query_facts(qid, added)
-        known += [f.text for f in facts]
+            _query_facts(qid, added + waiting)
+        known += [f.text for f in ready]
         stats["sources"] += 1
         stats["facts"] += added
-        stats["rejected_quotes"] += len(rejected)
-        log(f"  {name}: {added} nowych informacji" + (f", odrzucono {len(rejected)} (cytat/liczby)" if rejected else ""))
+        stats["untranslated"] = stats.get("untranslated", 0) + waiting
+        stats["rejected_quotes"] += len(rejected) + len(rej_mt)
+        log(f"  {name}: {added} nowych informacji"
+            + (f", {waiting} czeka na tlumacza" if waiting else "")
+            + (f", odrzucono {len(rejected) + len(rej_mt)} (cytat/tlumaczenie)" if rejected or rej_mt else ""))
     return stats
 
 
@@ -592,7 +677,8 @@ async def verify_plant(plant_id: str, llm, log, job_id: int = 0) -> dict:
 async def _organized(cand: dict, name: str, latin: str | None, llm, log) -> dict:
     """Agregator: surowe informacje z kopii -> sekcje/punkty/zrodla (LLM + kontrola kodem, inaczej deterministycznie)."""
     facts = cand["wiedza"].get("fakty") or []
-    layout, how = await organize.organize(llm, name, latin, facts, log)
+    # 2026-11-03: LLM nie redaguje tekstow wiedzy (KNOWLEDGE_LLM_EDITING=false) - uklad deterministyczny
+    layout, how = await organize.organize(llm if settings.knowledge_llm_editing else None, name, latin, facts, log)
     points = sum(len(sec["punkty"]) for sec in layout["sekcje"])
     log(f"  agregator ({how}): {len(facts)} informacji -> {points} punktow w {len(layout['sekcje'])} sekcjach")
     return plantfile.with_layout(cand, layout, how)
@@ -609,6 +695,7 @@ async def _merged(cand: dict, name: str, latin: str | None, llm, log) -> dict:
         redo = False
     try:
         sc = await merge.build_merged(llm, cand, name, latin, prefer=prefer, log=log, redo_other_models=redo,
+                                      write_with_llm=settings.knowledge_llm_editing,
                                       budget_s=settings.merge_plant_budget_s or None,
                                       prefer_timeout=settings.merge_timeout_s or None)
     except AllModelsFailedError:
@@ -1102,6 +1189,10 @@ async def run_plant_research(job_id: int, runner: JobRunner, llm, plant_ids: lis
     log(f"Rosliny do opracowania: {len(ids)}; jezyki Wikipedii: {settings.knowledge_languages} "
         f"(max {settings.knowledge_wiki_langs}), inne strony: {settings.knowledge_web_pages}")
     try:
+        await translate_pending_facts(log, plant_ids=ids or None)
+    except Exception as exc:  # noqa: BLE001 - tlumaczenie cytatow nie zatrzymuje badan
+        log(f"Tlumaczenie cytatow wiedzy: blad ({str(exc)[:120]})")
+    try:
         for n, pid in enumerate(ids, 1):
             if runner.should_stop(job_id):
                 log("Zatrzymano")
@@ -1183,8 +1274,13 @@ async def run_plant_research(job_id: int, runner: JobRunner, llm, plant_ids: lis
 
 
 async def run_plant_apply(job_id: int, runner: JobRunner, llm=None, plant_ids: list[str] | None = None) -> dict:
-    """Zapis zweryfikowanych informacji do plikow roslin (np. gdy KNOWLEDGE_AUTO_APPLY=false)."""
+    """Zapis zweryfikowanych informacji do plikow roslin (np. gdy KNOWLEDGE_AUTO_APPLY=false).
+    Najpierw tlumaczenie cytatow (czekajace i dawne teksty LLM) - podmienione teksty trafiaja do plikow."""
     log = lambda m: job_log(job_id, m)  # noqa: E731
+    try:
+        await translate_pending_facts(log, plant_ids=plant_ids or None)
+    except Exception as exc:  # noqa: BLE001
+        log(f"Tlumaczenie cytatow wiedzy: blad ({str(exc)[:120]})")
     with Session(engine) as s:
         ids = plant_ids or list(s.exec(select(PlantFact.plant_id).where(PlantFact.status == "verified")
                                        .distinct()).all())

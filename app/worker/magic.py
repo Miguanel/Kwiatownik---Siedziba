@@ -19,6 +19,8 @@ from app.config import settings
 from app.db import engine
 from app.knowledge import magic as mg
 from app.knowledge.magic_lexicon import CONCEPT_BY_KEY, CONCEPTS, FAMOUS_GENERA
+from app.knowledge.quotes import finish_facts
+from app.mt.nllb import get_translator
 from app.knowledge.sections import fingerprint, norm_text, similar
 from app.llm.router import AllModelsFailedError
 from app.models import MagicLead, Plant, PlantFact, PlantQuery
@@ -134,25 +136,31 @@ def lead_done(lead_id: int | None, found: bool, facts: int = 0) -> None:
             s.commit()
 
 
-def store_facts(plant_id: str, facts: list[mg.MagicFact], url: str, name: str, lang: str, model: str) -> list[int]:
-    """Zapis nowych informacji o magii (bez powtorzen: ten sam odcisk albo bardzo podobne zdanie)."""
+def store_facts(plant_id: str, facts: list[mg.MagicFact], url: str, name: str, lang: str, model: str,
+                status: str = "new") -> list[int]:
+    """Zapis nowych informacji o magii (bez powtorzen: ten sam odcisk, ten sam cytat albo bardzo podobne zdanie).
+    status "untranslated" = tekst to jeszcze cytat w oryginale (kw.translate_pending_facts)."""
     ids = []
     with Session(engine) as s:
-        existing = s.exec(select(PlantFact.fingerprint, PlantFact.text).where(PlantFact.plant_id == plant_id)).all()
-        prints = {fp for fp, _ in existing}
-        texts = [t for _, t in existing]
+        existing = s.exec(select(PlantFact.fingerprint, PlantFact.text, PlantFact.quote)
+                          .where(PlantFact.plant_id == plant_id)).all()
+        prints = {fp for fp, _, _ in existing}
+        texts = [t for _, t, _ in existing]
+        quotes = {norm_text(q) for _, _, q in existing if q}
         rows = []
         for f in facts:
             fp = fingerprint(plant_id, f.text)
-            if fp in prints or any(similar(f.text, t) >= 0.6 for t in texts):
+            if fp in prints or norm_text(f.quote or "") in quotes or any(similar(f.text, t) >= 0.6 for t in texts):
                 continue
             row = PlantFact(plant_id=plant_id, section="magia", part=f.part, text=f.text, quote=f.quote,
                             source_url=url, source_name=name, language=lang, fingerprint=fp, extracted_by=model,
-                            meta_json=json.dumps(f.meta, ensure_ascii=False) if f.meta else None)
+                            meta_json=json.dumps(f.meta, ensure_ascii=False) if f.meta else None, status=status,
+                            translated_by=f.translated_by)
             s.add(row)
             rows.append(row)
             prints.add(fp)
             texts.append(f.text)
+            quotes.add(norm_text(f.quote or ""))
         s.commit()
         ids = [r.id for r in rows]
     return ids
@@ -260,7 +268,11 @@ async def research_plant_magic(plant_id: str, llm, fetcher, backends, log, job_i
             lead_done(mq.lead_id, True)
             log(f"  [blad] {domain}: {str(exc)[:120]}")
             continue
-        ids = store_facts(plant_id, facts, url, domain, (page.lang or mq.lang)[:5], model)
+        flang = (page.lang or mq.lang)[:5]
+        facts, waiting, rej_mt = await asyncio.to_thread(finish_facts, facts, flang, get_translator(), mg.DOSAGE_RE)
+        rejected += rej_mt
+        ids = store_facts(plant_id, facts, url, domain, flang, model)
+        ids += store_facts(plant_id, waiting, url, domain, flang, model, status="untranslated")
         kw._query_facts(qid, len(ids))
         lead_done(mq.lead_id, True, len(ids))
         depth = (mq.depth + 1) if mq.kind == "trop" else 1
@@ -359,6 +371,12 @@ async def sweep(llm, fetcher, backends, log, job_id: int = 0, limit: int = 2) ->
                 log(f"  [blad] {domain}: {str(exc)[:120]}")
                 continue
             stats["strony"] += 1
+            flang = (page.lang or mq.lang)[:5]
+            facts, waiting, _rej_mt = await asyncio.to_thread(finish_facts, facts, flang, get_translator(),
+                                                              mg.DOSAGE_RE)
+            for f in waiting:
+                f.meta["_czeka"] = True
+            facts += waiting
             by_plant: dict[str, list[mg.MagicFact]] = {}
             outside = 0
             for f in facts:
@@ -369,7 +387,10 @@ async def sweep(llm, fetcher, backends, log, job_id: int = 0, limit: int = 2) ->
                     outside += 1
             n_new = 0
             for pid, fs in by_plant.items():
-                ids = store_facts(pid, fs, url, domain, (page.lang or mq.lang)[:5], model)
+                ready = [f for f in fs if not f.meta.pop("_czeka", False)]
+                later = [f for f in fs if f not in ready]
+                ids = store_facts(pid, ready, url, domain, flang, model)
+                ids += store_facts(pid, later, url, domain, flang, model, status="untranslated")
                 if ids:
                     touched.add(pid)
                     n_new += len(ids)

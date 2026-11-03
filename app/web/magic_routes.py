@@ -16,7 +16,8 @@ from app.web.templating import templates
 
 router = APIRouter()
 LEAD_STATUS = {"nowy": "do sprawdzenia", "sprawdzony": "sprawdzone", "wyczerpany": "bez wyniku", "odrzucony": "odrzucone"}
-FACT_STATUS = {"new": "do weryfikacji", "verified": "zweryfikowane", "applied": "w Kwiatowniku", "rejected": "odrzucone"}
+FACT_STATUS = {"untranslated": "czeka na tlumacza", "new": "do weryfikacji", "verified": "zweryfikowane",
+               "applied": "w Kwiatowniku", "rejected": "odrzucone"}
 KIND_LABELS = {"nazwa": "nazwa ludowa", "praktyka": "praktyka", "analogia": "odpowiednik"}
 
 

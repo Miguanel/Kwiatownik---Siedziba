@@ -1,9 +1,35 @@
+# etap 5: logi kontenerow z limitem (bez tego plik logu Dockera rosnie bez konca)
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   siedziba:
     build: .
     container_name: siedziba
     restart: unless-stopped
     stop_grace_period: 30s          # czas na zapisanie stanu zadan przy zatrzymaniu (potem kill)
+    logging: *logging
+    # Docker sprawdza, czy panel odpowiada (status "healthy" w docker ps / Docker Desktop)
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5)"]
+      interval: 60s
+      timeout: 10s
+      start_period: 120s
+      retries: 3
+    # bezpieczenstwo: procesy nie moga zdobyc nowych uprawnien; zbedne uprawnienia jadra odebrane
+    # (prawa do zapisu w ./data i ../Kwiatownik2 zostaja - to jest potrzebne do pracy)
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - NET_RAW
+      - MKNOD
+      - AUDIT_WRITE
+      - SYS_CHROOT
+      - SETFCAP
+      - NET_BIND_SERVICE
     ports:
       # panel tylko z tego komputera (bez logowania - nie wystawiac w sieci); z innego komputera: tunel SSH
       - "${PANEL_BIND:-127.0.0.1}:8000:8000"
@@ -42,6 +68,7 @@ services:
   ollama:
     image: ollama/ollama:latest
     container_name: siedziba-ollama
+    logging: *logging
     ports:
       # port na komputerze 11435 (11434 zajmuje zwykle Ollama zainstalowana w Windows); Siedziba laczy sie
       # wewnatrz Dockera przez http://ollama:11434, wiec ten port jest tylko do podgladu z przegladarki
@@ -62,6 +89,7 @@ services:
   searxng:
     image: searxng/searxng:latest
     container_name: siedziba-searxng
+    logging: *logging
     ports:
       - "127.0.0.1:8081:8080"
     volumes:
@@ -76,6 +104,7 @@ services:
   nllb-init:
     image: python:3.11-slim
     profiles: ["mt"]
+    logging: *logging
     volumes:
       - ./models:/models
     environment:
@@ -99,6 +128,7 @@ services:
   vpn-ua:
     image: qmcgaw/gluetun:latest
     container_name: siedziba-vpn-ua
+    logging: *logging
     profiles: ["vpn"]
     cap_add:
       - NET_ADMIN

@@ -151,6 +151,8 @@ class Plant(SQLModel, table=True):
     wikidata: str | None = None                       # np. "Q25408"
     wiki_titles_json: str | None = None               # {"pl": "Krwawnik pospolity", "en": "Achillea millefolium"}
     names_json: str | None = None                     # nazwy w jezykach z Wikidata {"zh": "蓍", "ja": "セイヨウノコギリソウ"}
+    aliases_json: str | None = None                   # inne nazwy z Wikidata {"en": ["chamomile", ...]} - tlumaczenie
+    names_checked_at: datetime | None = None          # kiedy pobrano nazwy (app/knowledge/plant_names.py)
     coverage: int | None = None                       # % podrozdzialow schematu z trescia (reczna albo z sieci)
     gaps_json: str | None = None                      # brakujace podrozdzialy (sciezki) - cel kolejnych skanow
     last_merge_at: datetime | None = None             # ostatnie scalenie wiedzy z rozdzialami
@@ -201,6 +203,9 @@ class PlantFact(SQLModel, table=True):
     extracted_by: str | None = None
     verified_by: str | None = None
     meta_json: str | None = None                      # magia: {"rodzaj", "kraj", "epoka", "tradycja", "toksyczne"}
+    # kto napisal tekst po polsku: "deepl/...", "nllb/...", "cytat" (zrodlo po polsku), "kontrola" (tlumaczenie
+    # cytatu odrzucone - zostaje stary tekst) albo None (stary tekst LLM sprzed 2026-11-03 / czeka na tlumacza)
+    translated_by: str | None = None
     created_at: datetime = Field(default_factory=_now)
 
 

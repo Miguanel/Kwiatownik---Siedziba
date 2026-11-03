@@ -15,7 +15,7 @@ from app.web.templating import templates
 from app.worker import actions
 
 router = APIRouter()
-STATUSES = ("new", "verified", "applied", "rejected")
+STATUSES = ("untranslated", "new", "verified", "applied", "rejected")
 
 
 def _redirect(url: str) -> RedirectResponse:

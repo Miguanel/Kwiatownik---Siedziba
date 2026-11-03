@@ -23,7 +23,6 @@ import json
 import re
 from dataclasses import dataclass, field
 
-from app.knowledge.extract import numbers_supported, quote_in_text
 from app.knowledge.magic_lexicon import (CONCEPT_BY_KEY, CONCEPTS, DEEP_SOURCES, RODZAJ_KEYS, RODZAJE, STEMS,
                                          concept_order, magic_score)
 from app.knowledge.sections import PARTS, norm_part, norm_text
@@ -41,13 +40,12 @@ wybierasz informacje o MAGICZNYCH i obrzedowych zastosowaniach JEDNEJ rosliny: c
 amulety i ochrona przed zlem, uroki i ich odczynianie, magia milosna, wrozby i sny, obrzedy doroczne, rosliny \
 czarownic, klatwy (czarna magia), magiczne leczenie i zamawianie, duchy i demony.
 ZASADY:
-- Tylko to, co JEST w tekscie i dotyczy TEJ rosliny (albo jej czesci). Nie dopisuj nic od siebie.
-- "tekst": 1-2 zdania po polsku, wlasnymi slowami. Jesli zrodlo mowi GDZIE, KIEDY i KTO (kraj/region, epoka,
-  grupa ludzi, autor dawnej ksiegi) - zawrzyj to w zdaniu, np. "Na Podlasiu w XIX w. wierzono, ze...".
-- OPISUJ, NIE INSTRUUJ: zadnych ilosci, proporcji, dawek, krokow przygotowania ani sposobu uzycia mieszanin,
-  ktore sie je, pije, pali, wdycha albo wciera w skore. Rosliny trujace (pokrzyk, lulek, bielun, mandragora, tojad,
-  szalej, cis...) - tylko historyczny opis i "toksyczne": true.
-- "cytat": dokladny fragment zrodla w oryginalnym jezyku (znak w znak, max 250 znakow), ktory to potwierdza.
+- Tylko to, co JEST w tekscie i dotyczy TEJ rosliny (albo jej czesci). NIE piszesz wlasnych zdan i NIE tlumaczysz.
+- "cytat": 1-2 PELNE zdania skopiowane z tekstu zrodla znak w znak, w oryginalnym jezyku, max 350 znakow
+  (najlepiej te, ktore mowia tez GDZIE, KIEDY i KTO). To jest cala informacja - polski tekst powstanie z cytatu.
+- POMIJAJ fragmenty z iloscia, proporcja, dawka, krokami przygotowania albo sposobem uzycia mieszanin, ktore sie
+  je, pije, pali, wdycha albo wciera w skore. Rosliny trujace (pokrzyk, lulek, bielun, mandragora, tojad,
+  szalej, cis...) - tylko fragmenty z historycznym opisem i "toksyczne": true.
 - "rodzaj": jeden z: """ + ", ".join(f"{k} ({v[2][:70]})" for k, v in RODZAJE.items()) + """
 - "kraj": kraj lub region tradycji (po polsku) albo null; "epoka": np. "starożytność", "średniowiecze",
   "XVI w.", "XIX w.", "współczesność" albo null; "tradycja": krotko skad wiedza, np. "wierzenia ludowe",
@@ -63,7 +61,7 @@ ZASADY:
     swietojanskiego: "Johanniskranz" de, "вінок на Купала" uk).
   Kazdy trop: {"termin": "w oryginalnym pismie, max 60 znakow", "jezyk": "kod ISO 639-1", "typ": "...",
   "opis": "krotko po polsku, czego szukac"}.
-Zwroc TYLKO JSON: {"fakty": [{"rodzaj": "...", "czesc": null, "tekst": "...", "cytat": "...", "kraj": null,
+Zwroc TYLKO JSON: {"fakty": [{"rodzaj": "...", "czesc": null, "cytat": "...", "kraj": null,
 "epoka": null, "tradycja": null, "toksyczne": false}], "tropy": [...]}
 Brak magicznych informacji o tej roslinie -> {"fakty": [], "tropy": []}."""
 
@@ -84,6 +82,7 @@ class MagicFact:
     text: str
     quote: str
     meta: dict = field(default_factory=dict)       # rodzaj, kraj, epoka, tradycja, toksyczne
+    translated_by: str | None = None
     plant: str | None = None                       # tylko przeszukiwanie "od praktyki": nazwa z tekstu
     latin: str | None = None
 
@@ -147,35 +146,36 @@ def parse_facts(raw: str, source_text: str, include_modern: bool = False,
     if not isinstance(data, dict):
         return [], [], ["odpowiedz modelu w zlym formacie"]
     facts, rejected = [], []
+    from app.knowledge.quotes import snap_quote
+    seen: set[str] = set()
     for f in (data.get("fakty") or [])[:MAX_FACTS * (3 if sweep else 1)]:
         if not isinstance(f, dict):
             continue
-        text = re.sub(r"\s+", " ", str(f.get("tekst") or "")).strip()
         quote = re.sub(r"\s+", " ", str(f.get("cytat") or "")).strip()
-        if not (20 <= len(text) <= 600):
-            rejected.append(f"dlugosc: {text[:60]}")
+        span = snap_quote(quote, source_text)
+        if not span or len(span) < 20:
+            rejected.append(f"cytatu nie ma w zrodle: {quote[:60]}")
             continue
-        if not quote_in_text(quote, source_text):
-            rejected.append(f"cytatu nie ma w zrodle: {text[:60]}")
+        if DOSAGE_RE.search(span):
+            rejected.append(f"ilosci/dawki (opis, nie przepis): {span[:60]}")
             continue
-        if not numbers_supported(text, quote):
-            rejected.append(f"liczby spoza cytatu: {text[:60]}")
+        if norm_text(span) in seen:
             continue
-        if DOSAGE_RE.search(text):
-            rejected.append(f"ilosci/dawki (opis, nie przepis): {text[:60]}")
-            continue
+        seen.add(norm_text(span))
         meta = {"rodzaj": norm_rodzaj(f.get("rodzaj")), "kraj": _clean(f.get("kraj"), 60),
                 "epoka": _clean(f.get("epoka"), 40), "tradycja": _clean(f.get("tradycja"), 80),
                 "toksyczne": f.get("toksyczne") is True}
         meta = {k: v for k, v in meta.items() if v not in (None, False)}
         if not include_modern and is_modern(meta):
-            rejected.append(f"wspolczesna magia bez dawnego zrodla: {text[:60]}")
+            rejected.append(f"wspolczesna magia bez dawnego zrodla: {span[:60]}")
             continue
-        mf = MagicFact("magia", norm_part(f.get("czesc")), text, quote[:300], meta)
+        # tekst po polsku: tlumaczenie maszynowe cytatu (app/knowledge/quotes.finish_facts), etykiety kraj/epoka/
+        # tradycja zostaja tylko, gdy wynikaja z przetlumaczonego cytatu
+        mf = MagicFact("magia", norm_part(f.get("czesc")), "", span, meta)
         if sweep:
             mf.plant, mf.latin = _clean(f.get("roslina"), 80), _clean(f.get("lacina"), 80)
             if not mf.plant and not mf.latin:
-                rejected.append(f"bez nazwy rosliny: {text[:60]}")
+                rejected.append(f"bez nazwy rosliny: {span[:60]}")
                 continue
         facts.append(mf)
     return facts, parse_leads(data.get("tropy")), rejected

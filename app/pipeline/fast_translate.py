@@ -1,7 +1,8 @@
 """Szybkie tlumaczenie przepisu BEZ LLM: struktura ze strony (profil scrapera / JSON-LD) + NLLB + reguly.
 
-Kiedy dziala: przepis ma dane strukturalne (tytul, skladniki, kroki) i znany jezyk obslugiwany przez NLLB.
-Surowe artykuly (bez struktury, czesto kilka przepisow w jednym tekscie) nadal idzie przez LLM.
+Kiedy dziala: przepis ma dane strukturalne (tytul, skladniki, kroki) - ze strony (JSON-LD, profil scrapera) albo
+wskazane doslownie przez LLM w surowym artykule (app/pipeline/extract.py) - i jezyk obslugiwany przez tlumacza.
+Tlumaczy wylacznie tlumacz maszynowy (DeepL / NLLB); wynik sprawdza kod (app/pipeline/checks.py).
 
 Kroki:
 1. jednostki amerykanskie -> metryczne (w oryginale angielskim, oryginal zostaje w nawiasie),
@@ -20,6 +21,7 @@ from fractions import Fraction
 from app.knowledge.sections import norm_text
 from app.llm.base import json_object
 from app.mt.nllb import MTQualityError, MTUnavailable, looks_broken, nllb_code
+from app.pipeline.checks import ForeignNames, check_translation
 from app.pipeline.translate import TYPES, normalize_record
 
 MAX_BROKEN_SHARE = 0.2           # wiecej zepsutych fragmentow -> cale tlumaczenie przez LLM
@@ -227,7 +229,7 @@ async def classify_type(llm, title: str, names: list[str], steps: list[str],
     try:
         from app.nn.runtime import brain
         from app.nn.tasks import recipe_input
-        nn = brain.gate("recipe_type", recipe_input(title, names, steps), ref)
+        nn = await asyncio.to_thread(brain.gate, "recipe_type", recipe_input(title, names, steps), ref)
     except Exception:  # noqa: BLE001 - siec nigdy nie zatrzymuje tlumaczenia
         nn = None
     if nn is not None and nn.use and nn.label in TYPES:
@@ -261,9 +263,18 @@ def can_fast_translate(recipe: dict | None, language: str | None) -> bool:
                 and recipe.get("steps") and nllb_code(language))
 
 
+WHERE = {"title": "tytul", "description": "opis", "notes": "uwagi", "yield": "porcje", "ingredients": "skladnik",
+         "steps": "krok"}
+
+
+def _one(found: set[str]) -> str | None:
+    return next(iter(found)) if len(found) == 1 else None
+
+
 async def fast_translate_recipe(mt, llm, recipe: dict, meta: dict, plants: dict[str, str],
-                                taken_ids: set[str]) -> tuple[dict, str]:
-    """(rekord Kwiatownika, 'nllb/<model>'). Rzuca MTUnavailable / MTQualityError -> sciezka LLM."""
+                                taken_ids: set[str], foreign: ForeignNames | None = None) -> tuple[dict, str]:
+    """(rekord Kwiatownika, 'deepl/...' albo 'nllb/<model>'). Rzuca MTUnavailable (brak tlumacza) albo
+    MTQualityError (tlumaczenie zepsute albo nie przeszlo kontroli kodem - powod "kontrola: ...")."""
     lang = (meta.get("language") or "")[:2].lower()
     if not can_fast_translate(recipe, lang):
         raise MTUnavailable("brak danych strukturalnych albo nieobslugiwany jezyk")
@@ -277,15 +288,20 @@ async def fast_translate_recipe(mt, llm, recipe: dict, meta: dict, plants: dict[
     broken = sum(1 for (_, _, s), o in zip(flat, outs) if looks_broken(s, o))
     if flat and broken / len(flat) > MAX_BROKEN_SHARE:
         raise MTQualityError(f"tlumaczenie maszynowe zepsute w {broken}/{len(flat)} fragmentach")
+    report = check_translation(
+        [(WHERE[k] + (f" {i + 1}" if k in ("ingredients", "steps") else ""), s, o) for (k, i, s), o in zip(flat, outs)],
+        lang, foreign, plants)
+    if not report.ok():
+        raise MTQualityError(report.summary())
     tr: dict[str, list[str]] = {k: list(v) for k, v in fields.items()}
     for (k, i, s), o in zip(flat, outs):
-        tr[k][i] = o if not looks_broken(s, o) else s
+        tr[k][i] = o
 
     index = PlantIndex(plants)
     skl, names = [], []
     for orig, pl in zip(fields["ingredients"], tr["ingredients"]):
         qty, name = split_quantity(pl)
-        link = index.match(name, orig)
+        link = index.match(name, orig) or (_one(foreign.found(orig, lang)) if foreign else None)
         skl.append({"nazwa": name[:1].upper() + name[1:] if name else pl, "ilosc": qty, **({"link_id": link} if link else {})})
         names.append(pl)
     text_pl = " ".join([tr["title"][0], tr["description"][0], *names, *tr["steps"]])
@@ -304,7 +320,8 @@ async def fast_translate_recipe(mt, llm, recipe: dict, meta: dict, plants: dict[
     if zk is False:
         data["ziola_kluczowe"] = False
     rec = normalize_record(data, meta, plants, taken_ids)
-    model = f"nllb/{mt.model_dir.name}"
+    model = getattr(mt, "last_name", None) or getattr(mt, "label", None) or f"nllb/{mt.model_dir.name}"
     rec["siedziba"] = {"item_id": meta.get("item_id"), "jezyk_oryginalu": meta.get("language"),
-                       "przetlumaczono": date.today().isoformat(), "model": model, "typ_ustalono": how}
+                       "przetlumaczono": date.today().isoformat(), "model": model, "typ_ustalono": how,
+                       "kontrola": "ok" if not report.warnings else "; ".join(str(w) for w in report.warnings[:5])}
     return rec, model

@@ -88,6 +88,9 @@ def build_candidate(original: dict | None, base: dict, facts: list, today: str |
     cand = copy.deepcopy(original) if original is not None else copy.deepcopy(base)
     wiedza = cand.get("wiedza") if isinstance(cand.get("wiedza"), dict) else {}
     old = [f for f in (wiedza.get("fakty") or []) if isinstance(f, dict)]
+    by_id = {f"s{f.id}": f for f in facts if getattr(f, "translated_by", None)}
+    # informacja juz w pliku, ale z nowym tekstem (tlumaczenie cytatu zamiast dawnego tekstu LLM) -> nowy wpis
+    old = [fact_entry(by_id[f.get("id")]) if f.get("id") in by_id else f for f in old]
     have = {f.get("id") for f in old}
     new = [fact_entry(f) for f in facts if f"s{f.id}" not in have]
     all_facts = (old + new)[-MAX_FACTS_PER_PLANT:]

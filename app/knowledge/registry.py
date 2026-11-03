@@ -174,7 +174,8 @@ def species_changed(session: Session, row: Plant, new_lat: str) -> dict:
             f.status, f.reason = "rejected", f"dotyczy innego gatunku ({row.nazwa_lat}), nie {new_lat}"
             out["odrzucono"] += 1
         session.add(f)
-    row.wikidata = row.wiki_titles_json = row.names_json = row.photos_json = None
+    row.wikidata = row.wiki_titles_json = row.names_json = row.aliases_json = row.photos_json = None
+    row.names_checked_at = None
     row.photos_at = row.last_research_at = None
     row.coverage, row.gaps_json, row.status = None, None, "idle"
     row.note = (f"gatunek w pliku zmienil sie z {row.nazwa_lat} na {new_lat}: przeniesiono {out['przeniesiono']} "

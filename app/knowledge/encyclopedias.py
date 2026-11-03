@@ -209,7 +209,8 @@ async def _page(fetcher, url: str, enc: Encyclopedia, names: dict[str, str], fou
     if not about_plant(page.text, enc, names):
         found.reason = f"{url}: strona nie o tej roslinie"
         return False
-    found.url, found.text = res.url, page.text
+    from app.scrapers.clean import clean_text
+    found.url, found.text = res.url, clean_text(page.text)
     return True
 
 

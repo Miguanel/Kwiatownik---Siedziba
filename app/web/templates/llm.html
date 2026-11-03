@@ -22,16 +22,40 @@
   <span class="muted">postep zobaczysz w zakladce Na zywo</span>
 </form>
 
-<h2>Tlumacz maszynowy NLLB (bez LLM)</h2>
+<h2>Tlumacz maszynowy (bez LLM)</h2>
 {% if not mt %}
-<p class="muted">Wylaczony (MT_ENGINE=llm) - przepisy tlumaczy LLM.</p>
+<p class="muted">Wylaczony (MT_ENGINE=llm) - dawny tryb: przepisy tlumaczy LLM.</p>
 {% else %}
-<p class="muted">Przepisy z danymi strukturalnymi (profil scrapera / JSON-LD) tlumaczy lokalnie NLLB-200 - szybko i bez limitow;
-  typ przepisu ustalaja reguly (LLM tylko gdy reguly nie rozstrzygna). Surowe artykuly nadal ida przez LLM.<br>
-  Model: <code>{{ mt.model_dir }}</code> -
-  {% if mt.present %}<span class="tag done">jest</span>{% if mt.loaded %} wczytany ({{ mt.device }}, {{ mt.compute_type }}){% endif %}
-  {% else %}<span class="tag failed">brak</span> - przygotuj go raz: <code>docker compose --profile mt run --rm nllb-init</code>{% endif %}
-  {% if mt.error %}<br><span class="tag failed">{{ mt.error }}</span>{% endif %}</p>
+<p class="muted">Przepisy tlumaczy wylacznie tlumacz maszynowy - po kolei pierwszy dostepny z listy. Z surowych artykulow
+  LLM tylko wskazuje doslowne fragmenty przepisu (kod sprawdza, ze sa na stronie); po tlumaczeniu kod sprawdza liczby,
+  rosliny, obcy alfabet i zapetlenia. Typ przepisu ustalaja reguly (LLM tylko gdy reguly nie rozstrzygna).</p>
+<div class="table-wrap"><table>
+  <tr><th>Tlumacz</th><th>Stan</th><th>Uwagi</th></tr>
+  {% for e in mt.engines %}
+  <tr><td><code>{{ e.name }}</code></td>
+    <td>{% if e.present %}<span class="tag done">jest</span>{% if e.loaded %} gotowy{% endif %}
+        {% else %}<span class="tag failed">brak</span>{% endif %}</td>
+    <td>{% if e.usage %}zuzycie: dzis {{ "{:,}".format(e.usage.dzis).replace(",", " ") }}, w tym miesiacu
+        {{ "{:,}".format(e.usage.miesiac).replace(",", " ") }} znakow (wiedza {{ "{:,}".format(e.usage.wiedza).replace(",", " ") }})<br>{% endif %}
+        {% if e.limit %}limit: {{ "{:,}".format(e.used or 0).replace(",", " ") }} z {{ "{:,}".format(e.limit).replace(",", " ") }}
+        (wiedza do {{ (e.knowledge_share * 100)|round|int }}%)<br>{% endif %}
+        {% if e.engine in ("deepl", "azure") %}wyslano {{ e.chars_sent }} znakow od startu{% if e.paused_until %}; wstrzymany (limit lub klucz){% endif %}
+        {% if e.glossaries %}<br>slownik nazw roslin: {% for pair, n in e.glossaries.items() %}{{ pair }} {{ n }}{% if not loop.last %}, {% endif %}{% endfor %}{% endif %}
+        {% if e.glossary_error %}<br><span class="tag failed">{{ e.glossary_error }}</span>{% endif %}
+        {% else %}<code>{{ e.model_dir }}</code>{% if e.loaded %} ({{ e.device }}, {{ e.compute_type }}){% endif %}
+        {% if not e.present %} - przygotuj raz: <code>docker compose --profile mt run --rm nllb-init</code>{% endif %}{% endif %}
+        {% if e.error %}<br><span class="tag failed">{{ e.error }}</span>{% endif %}</td></tr>
+  {% endfor %}
+</table></div>
+{% if mt.engines|selectattr("engine", "equalto", "azure")|list|length == 0 %}
+<p class="muted">Azure Translator wylaczony: drugi darmowy tlumacz w chmurze (poziom F0, 2 mln znakow miesiecznie) -
+  wpisz <code>AZURE_TRANSLATOR_KEY</code> i <code>AZURE_TRANSLATOR_REGION</code> w .env. Wlacza sie, gdy DeepL
+  wyczerpie limit albo nie zna jezyka.</p>
+{% endif %}
+{% if mt.engines|selectattr("engine", "equalto", "deepl")|list|length == 0 %}
+<p class="muted">DeepL wylaczony: wpisz <code>DEEPL_API_KEY</code> w .env (darmowe konto DeepL API Free, 500 tys. znakow
+  miesiecznie) i uruchom Siedzibe ponownie. Do tego czasu tlumaczy NLLB.</p>
+{% endif %}
 <form hx-post="/mt/test" hx-target="#mt-out" hx-indicator="#spin-mt" style="flex-direction:column">
   <textarea name="text" rows="2" style="width:100%">Pour boiling water over the dried chamomile flowers and steep for 10 minutes.</textarea>
   <label>jezyk zrodla <select name="lang">{% for l in ["en", "de", "uk", "ru", "fr", "cs", "lt", "sk", "hu", "ro", "bg", "it", "es"] %}<option>{{ l }}</option>{% endfor %}</select></label>

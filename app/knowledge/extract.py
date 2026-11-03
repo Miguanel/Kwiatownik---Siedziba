@@ -1,7 +1,8 @@
-"""LLM wyciaga z tekstu zrodla (Wikipedia albo inna strona) pojedyncze informacje o roslinie.
+"""LLM wskazuje w tekscie zrodla (Wikipedia albo inna strona) fragmenty z informacjami o roslinie.
 
-Kazda informacja musi miec "cytat" - fragment zrodla, na ktorym sie opiera. Kod sprawdza, czy cytat
-naprawde wystepuje w tekscie (odrzuca zmyslenia) i czy liczby z informacji sa w cytacie.
+Od 2026-11-03 LLM NIE pisze tekstu informacji: zwraca tylko sekcje, czesc rosliny i "cytat" (doslowny fragment
+zrodla). Kod sprawdza cytat i bierze dokladny fragment zrodla (app/knowledge/quotes.py), a tekst po polsku
+to tlumaczenie maszynowe tego fragmentu (DeepL / NLLB) po kontroli - albo sam fragment, gdy zrodlo jest po polsku.
 """
 import json
 import re
@@ -11,21 +12,20 @@ from app.knowledge.sections import PARTS, SECTIONS, norm_part, norm_text
 
 MAX_FACTS = 14
 
-SYSTEM_PROMPT = """Jestes redaktorem polskiego zielnika "Kwiatownik". Z podanego tekstu zrodla wybierasz \
-konkretne, ciekawe i sprawdzalne informacje o JEDNEJ roslinie i zapisujesz je po polsku.
+SYSTEM_PROMPT = """Jestes redaktorem polskiego zielnika "Kwiatownik". W podanym tekscie zrodla WSKAZUJESZ fragmenty \
+z konkretnymi, ciekawymi i sprawdzalnymi informacjami o JEDNEJ roslinie. NIE piszesz wlasnych zdan i NIE tlumaczysz.
 ZASADY:
-- Tylko informacje, ktore SA w tekscie i dotycza TEJ rosliny (nie innych gatunkow, nie calego rodzaju).
-- Kazda informacja: 1-2 zdania, po polsku, wlasnymi slowami, bez wymyslania szczegolow.
-- "cytat": dokladny fragment tekstu zrodla (w oryginalnym jezyku - takze po chinsku czy japonsku - skopiowany
-  znak w znak, max 250 znakow), ktory to potwierdza.
+- Tylko fragmenty, ktore dotycza TEJ rosliny (nie innych gatunkow, nie calego rodzaju).
+- "cytat": 1-2 PELNE zdania skopiowane z tekstu zrodla znak w znak, w oryginalnym jezyku (takze po chinsku czy
+  japonsku), max 350 znakow. Jedna informacja = jeden fragment; nie lacz zdan z roznych miejsc tekstu.
 - Zrodla chinskie i japonskie: natura (性/寒/温), smak (味), meridiany (归经/帰経) i wskazania -> sekcja
-  "medycyna_wschodu"; nazwy surowcow tlumacz na polski (np. 根 -> korzen).
-- Nie podawaj dawkowania ani porad leczniczych w trybie rozkazujacym - opisuj ("tradycyjnie stosowano...").
-- Pomijaj oczywistosci (np. "jest rosliną"), taksonomie i dane bez znaczenia dla czytelnika.
+  "medycyna_wschodu".
+- Pomijaj fragmenty z dawkowaniem albo poleceniami leczniczymi, oczywistosci (np. "jest rosliną"), taksonomie
+  i dane bez znaczenia dla czytelnika.
 - Szczegolnie cenne: dawne i ludowe zastosowania, wierzenia i obrzedy, nazwy ludowe, barwienie, toksycznosc.
-- "czesc": czesc rosliny, ktorej dotyczy informacja, TYLKO z listy: """ + ", ".join(PARTS) + """ - albo null
+- "czesc": czesc rosliny, ktorej dotyczy fragment, TYLKO z listy: """ + ", ".join(PARTS) + """ - albo null
   (cala roslina, nazwa, toksycznosc itp. -> null).
-Zwroc TYLKO JSON: {"fakty": [{"sekcja": "...", "czesc": "kwiaty lub null", "tekst": "...", "cytat": "..."}]}
+Zwroc TYLKO JSON: {"fakty": [{"sekcja": "...", "czesc": "kwiaty lub null", "cytat": "..."}]}
 Dozwolone sekcje:
 """ + "\n".join(f"- {k}: {v}" for k, v in SECTIONS.items())
 
@@ -34,8 +34,9 @@ Dozwolone sekcje:
 class Fact:
     section: str
     part: str | None
-    text: str
-    quote: str
+    text: str                     # po polsku: tlumaczenie maszynowe cytatu (albo cytat ze zrodla po polsku)
+    quote: str                    # doslowny fragment zrodla
+    translated_by: str | None = None
 
 
 def build_prompt(plant_pl: str, latin: str | None, source_name: str, lang: str, text: str,
@@ -89,30 +90,33 @@ def numbers_supported(fact_text: str, quote: str) -> bool:
 
 
 def parse_facts(raw: str, source_text: str) -> tuple[list[Fact], list[str]]:
-    """Odpowiedz LLM -> (poprawne informacje, powody odrzucenia pozostalych)."""
+    """Odpowiedz LLM -> (informacje z doslownym cytatem ze zrodla, jeszcze bez polskiego tekstu; powody odrzucen)."""
+    from app.knowledge.quotes import snap_quote
     data = json.loads(raw.strip().removeprefix("```json").removesuffix("```"))
     facts, rejected = [], []
     if isinstance(data, list):            # sama lista informacji zamiast {"fakty": [...]}
         data = {"fakty": data}
     if not isinstance(data, dict) or not isinstance(data.get("fakty") or [], list):
         return [], ["odpowiedz modelu w zlym formacie"]
+    seen: set[str] = set()
     for f in (data.get("fakty") or [])[:MAX_FACTS]:
         if not isinstance(f, dict):
             continue
-        text = re.sub(r"\s+", " ", str(f.get("tekst") or "")).strip()
         quote = re.sub(r"\s+", " ", str(f.get("cytat") or "")).strip()
         section = str(f.get("sekcja") or "").strip()
         section = section if section in SECTIONS else "ciekawostki"
-        if not (20 <= len(text) <= 600):
-            rejected.append(f"dlugosc: {text[:60]}")
+        span = snap_quote(quote, source_text)
+        if not span:
+            rejected.append(f"cytatu nie ma w zrodle: {quote[:60]}")
             continue
-        if not quote_in_text(quote, source_text):
-            rejected.append(f"cytatu nie ma w zrodle: {text[:60]}")
+        if len(span) < 20:
+            rejected.append(f"za krotki fragment: {span[:60]}")
             continue
-        if not numbers_supported(text, quote):
-            rejected.append(f"liczby spoza cytatu: {text[:60]}")
+        key = norm_text(span)
+        if key in seen:
             continue
-        facts.append(Fact(section, norm_part(f.get("czesc")), text, quote[:300]))
+        seen.add(key)
+        facts.append(Fact(section, norm_part(f.get("czesc")), "", span))
     return facts, rejected
 
 

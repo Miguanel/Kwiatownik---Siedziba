@@ -55,6 +55,7 @@ class WikiPlant:
     image: str | None = None      # Wikidata P18 - glowne zdjecie gatunku (nazwa pliku na Commons)
     commons_category: str | None = None   # Wikidata P373 - kategoria gatunku na Commons
     labels: dict[str, str] = field(default_factory=dict)   # nazwa gatunku w jezykach (zh, ja, de...) - do wyszukiwania
+    aliases: dict[str, list[str]] = field(default_factory=dict)   # inne nazwy w jezykach (Wikidata "aliases")
 
 
 def split_sections(text: str) -> list[tuple[str, str]]:
@@ -123,7 +124,7 @@ class WikiClient:
             if not ids:
                 continue
             ents = (await self._get(WIKIDATA_API, {"action": "wbgetentities", "ids": "|".join(ids),
-                                                   "props": "sitelinks|claims|labels",
+                                                   "props": "sitelinks|claims|labels|aliases",
                                                    "languages": LABEL_LANGS}))
             for qid in ids:
                 ent = ents.get("entities", {}).get(qid, {})
@@ -136,7 +137,7 @@ class WikiClient:
                           if k.endswith("wiki") and k not in ("commonswiki", "specieswiki") and "_" not in k[:-4]}
                 label = (ent.get("labels", {}).get("pl") or {}).get("value")
                 return WikiPlant(qid, taxon, label, titles, _claim(ent, "P18"), _claim(ent, "P373"),
-                                 labels_by_lang(ent.get("labels") or {}))
+                                 labels_by_lang(ent.get("labels") or {}), aliases_by_lang(ent.get("aliases") or {}))
         return None
 
     async def article(self, lang: str, title: str, max_chars: int = 9000) -> WikiArticle | None:
@@ -153,7 +154,20 @@ class WikiClient:
         return None
 
 
-LABEL_LANGS = "pl|en|de|ru|uk|fr|cs|it|es|ja|zh|zh-hans|zh-cn|ko"
+LABEL_LANGS = ("pl|en|de|ru|uk|fr|cs|it|es|ja|zh|zh-hans|zh-cn|ko|sk|lt|lv|hu|ro|bg|hr|sr|sl|nl|pt|sv|da|nb|fi|"
+               "et|el|tr|be")
+
+
+def aliases_by_lang(aliases: dict) -> dict[str, list[str]]:
+    """Aliasy Wikidata -> {jezyk: [nazwy]} (bez chinskich odmian - te ida w etykietach)."""
+    out: dict[str, list[str]] = {}
+    for code, vals in aliases.items():
+        if code.startswith("zh") or not isinstance(vals, list):
+            continue
+        names = [v.get("value") for v in vals if isinstance(v, dict) and v.get("value")]
+        if names:
+            out[code] = names[:12]
+    return out
 
 
 def labels_by_lang(labels: dict) -> dict[str, str]:

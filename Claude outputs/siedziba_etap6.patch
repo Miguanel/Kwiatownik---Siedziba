@@ -1,0 +1,854 @@
+diff --git a/app/api/llm.py b/app/api/llm.py
+index 42687f8..7184919 100755
+--- a/app/api/llm.py
++++ b/app/api/llm.py
+@@ -23,7 +23,8 @@ def _models_ctx(request: Request) -> dict:
+     ollama = r.providers.get("ollama") if r else None
+     return {"models": r.snapshot() if r else [], "errors": r.discovery_errors if r else {},
+             "configured": r is not None, "vram": getattr(ollama, "vram", {}) or {},
+-            "cache": r.cache.stats() if r and getattr(r, "cache", None) else None}
++            "cache": r.cache.stats() if r and getattr(r, "cache", None) else None,
++            "usage": r.usage.table() if r and getattr(r, "usage", None) else []}
+ 
+ 
+ # ---------------- panel (HTML / HTMX) ----------------
+diff --git a/app/config.py b/app/config.py
+index d07c08f..cac4b3d 100755
+--- a/app/config.py
++++ b/app/config.py
+@@ -138,6 +138,11 @@ class Settings(BaseSettings):
+     magic_include_modern: bool = False    # wspolczesne korespondencje wicca/new age bez dawnych zrodel - odrzucaj
+     magic_requery_days: int = 60          # to samo zapytanie o magie najwczesniej po tylu dniach
+     backups_dir: Path = BASE_DIR / "data" / "backups"
++    # etap 6: dzienny budzet tokenow LLM w chmurze wg celu, np. "klasyfikacja=150000,zapytania=30000"
++    # (po przekroczeniu cel korzysta tylko z modelu lokalnego); cele: app/llm/usage.py
++    llm_daily_budget: str = ""
++    discovery_llm_queries: bool = False      # zapytania wyszukiwarki z LLM (false = szablony z nazw roslin)
++    new_plants_llm: bool = False             # nowe rosliny ze skladnikow przez LLM (false = Wikipedia + Wikidata)
+     db_backup_keep: int = 7                  # ile dziennych kopii bazy trzymac w data/backups/db (0 = bez kopii)
+     # Podglad "przed/po" kazdego zapisu pliku JSON (zakladka "Na zywo"); puste = DATA_DIR/snapshots
+     snapshots_dir: Path | None = None
+diff --git a/app/discovery/finder.py b/app/discovery/finder.py
+index 8205e4a..d3d5f68 100755
+--- a/app/discovery/finder.py
++++ b/app/discovery/finder.py
+@@ -83,7 +83,7 @@ class SiteFinder:
+ 
+     async def run(self) -> dict:
+         c = self.country
+-        self._act("LLM uklada zapytania", f"{c.name} ({c.language})")
++        self._act("ukladam zapytania (szablony z nazw roslin)", f"{c.name} ({c.language})")
+         used = self.store.used_queries(c.code)
+         used_low = {u.lower().strip() for u in used}
+         own = [q for q in dict.fromkeys(self.cfg.extra_queries) if q.lower().strip() not in used_low]
+diff --git a/app/discovery/queries.py b/app/discovery/queries.py
+index ff6e4f4..83296c0 100755
+--- a/app/discovery/queries.py
++++ b/app/discovery/queries.py
+@@ -1,6 +1,12 @@
+-"""Zapytania do wyszukiwarek w jezyku danego kraju - generowane przez LLM, bez powtarzania uzytych."""
++"""Zapytania do wyszukiwarek w jezyku danego kraju, bez powtarzania uzytych.
++
++Etap 6 (bez LLM, domyslnie): szablony - nazwa rosliny z katalogu w jezyku kraju (Wikidata: etykiety, aliasy,
++tytuly artykulow) + rodzaj przepisu niekulinarnego w tym jezyku (nalewka, masc, syrop, domowy sposob, barwienie),
++na zmiane z ogolnymi zapytaniami kraju. LLM tylko gdy DISCOVERY_LLM_QUERIES=true.
++"""
+ import json
+ import logging
++import re
+ 
+ from app.discovery.countries import Country
+ 
+@@ -18,9 +24,86 @@ Write queries the way a native speaker would type them into Google in the given
+ Answer ONLY with JSON: {"queries": ["...", "..."]}"""
+ 
+ 
++# rodzaje przepisow niekulinarnych w jezyku wyszukiwania (2 litery kodu jezyka)
++PREPS = {
++    "pl": ["nalewka przepis", "maść domowa", "syrop przepis", "domowy sposób", "barwienie wełny"],
++    "de": ["Tinktur selber machen", "Salbe selber machen", "Sirup Rezept", "Hausmittel", "Wolle färben"],
++    "en": ["tincture recipe", "salve recipe", "syrup recipe", "herbal remedy", "natural dye wool"],
++    "fr": ["teinture mère recette", "baume maison", "sirop recette", "remède de grand-mère", "teinture végétale laine"],
++    "es": ["tintura casera", "pomada casera", "jarabe casero", "remedio casero", "tinte natural lana"],
++    "it": ["tintura madre fai da te", "unguento fatto in casa", "sciroppo ricetta", "rimedio della nonna",
++           "tintura naturale lana"],
++    "uk": ["настоянка рецепт", "мазь своїми руками", "сироп рецепт", "народний рецепт", "фарбування вовни"],
++    "cs": ["tinktura recept", "domácí mast", "sirup recept", "babské rady", "barvení vlny"],
++    "sk": ["tinktúra recept", "domáca masť", "sirup recept", "babské rady", "farbenie vlny"],
++    "hu": ["tinktúra recept", "kenőcs házilag", "szörp recept", "népi gyógymód", "gyapjú festése"],
++    "ro": ["tinctură rețetă", "unguent natural", "sirop rețetă", "remediu naturist", "vopsit lână natural"],
++    "bg": ["тинктура рецепта", "домашен мехлем", "сироп рецепта", "народна медицина", "боядисване на вълна"],
++    "hr": ["tinktura recept", "domaća mast", "sirup recept", "narodni lijek", "bojanje vune"],
++    "sr": ["tinktura recept", "domaći melem", "sirup recept", "narodni lek", "bojenje vune"],
++    "lt": ["tinktūra receptas", "tepalas namuose", "sirupas receptas", "liaudies medicina", "vilnos dažymas"],
++}
++
++
++def plant_names_for(lang: str, rows: dict[str, dict] | None = None) -> list[str]:
++    """Nazwy roslin katalogu w jezyku (etykieta, tytul artykulu), bez nazw lacinskich; po polsku - nazwy katalogu."""
++    if rows is None:
++        try:
++            from app.pipeline.checks import plant_rows
++            rows = plant_rows()
++        except Exception:  # noqa: BLE001 - bez bazy: same zapytania ogolne
++            rows = {}
++    out = []
++    for r in rows.values():
++        if lang == "pl":
++            name = re.sub(r"\s*\(.*?\)", "", r.get("pl") or "")
++        else:
++            name = (r.get("names") or {}).get(lang) or (r.get("titles") or {}).get(lang) or ""
++            name = re.sub(r"\s*\(.*?\)", "", name)
++        name = name.strip()
++        if name and name.lower() != (r.get("lat") or "").lower() and len(name) <= 40:
++            out.append(name)
++    return sorted(dict.fromkeys(out))
++
++
++def template_queries(country: Country, n: int, used_low: set[str], rows: dict[str, dict] | None = None) -> list[str]:
++    lang = (country.language or "")[:2].lower()
++    preps = PREPS.get(lang) or []
++    names = plant_names_for(lang, rows)
++    out: list[str] = []
++    # kolejnosc: rosliny po kolei, kazda z kolejnym rodzajem przepisu; co trzecie - zapytanie ogolne kraju
++    combos = [f"{name} {preps[(i + r) % len(preps)]}" for r in range(len(preps)) for i, name in enumerate(names)] \
++        if preps else []
++    general = list(country.fallback_queries) + preps
++    gi = 0
++    for q in combos:
++        if len(out) >= n:
++            break
++        if q.lower() in used_low or q in out:
++            continue
++        out.append(q)
++        if len(out) % 3 == 2:
++            while gi < len(general):
++                g = general[gi]
++                gi += 1
++                if g.lower() not in used_low and g not in out:
++                    out.append(g)
++                    break
++    for g in general[gi:]:
++        if len(out) >= n:
++            break
++        if g.lower() not in used_low and g not in out:
++            out.append(g)
++    return out[:n]
++
++
+ async def make_queries(country: Country, n: int, used: set[str], llm=None, topic: str | None = None) -> list[str]:
++    from app.config import settings
+     used_low = {u.lower().strip() for u in used}
+     out: list[str] = []
++    if not (settings.discovery_llm_queries and llm is not None):
++        llm = None
++        out = template_queries(country, n + 3, used_low)
+     if llm is not None:
+         prompt = (f"Language: {country.language_name} (country: {country.name}, code {country.code}).\n"
+                   f"Topic: {topic or DEFAULT_TOPIC}\n"
+diff --git a/app/knowledge/registry.py b/app/knowledge/registry.py
+index ee49e7c..ec785f0 100755
+--- a/app/knowledge/registry.py
++++ b/app/knowledge/registry.py
+@@ -206,8 +206,29 @@ def _clean_name(name: str) -> str:
+     return re.sub(r"\s+", " ", n).strip(" ,.;:-")
+ 
+ 
+-async def discover_new_plants(session: Session, llm, batch: int = 50, log_fn=None) -> list[str]:
+-    """LLM ustala, ktore nieznane skladniki to rosliny -> nowe wpisy Plant(origin='nowa'). Zwraca ich id."""
++# slowa skladnika, ktore nie sa nazwa rosliny (czesci, postac, ilosci, laczniki) - po norm_text
++NOT_NAME = {"kwiat", "kwiaty", "kwiatow", "kwiatki", "kwiatkow", "platki", "platkow", "lisc", "liscie", "lisci",
++            "listki", "listkow", "korzen", "korzenie", "korzeni", "korzenia", "ziele", "ziela", "nasiona", "nasion",
++            "nasienie", "owoce", "owocow", "owoc", "jagody", "jagod", "kora", "kory", "paki", "pakow", "pedy", "pedow",
++            "galazki", "galazek", "lodygi", "lodyg", "klacze", "klacza", "bulwy", "cebula", "cebulki", "sok", "soku",
++            "olej", "oleju", "olejek", "olejku", "nalewka", "nalewki", "napar", "naparu", "odwar", "susz", "suszu",
++            "suszone", "suszonych", "suszony", "suszona", "suszonego", "swieze", "swiezych", "swiezy", "swieza",
++            "swiezego", "mielone", "mielony", "mielonego", "drobno", "posiekane", "posiekanych", "starte", "cale",
++            "garsc", "garsci", "lyzka", "lyzki", "lyzek", "lyzeczka", "lyzeczki", "szklanka", "szklanki", "szczypta",
++            "plasterki", "plasterkow", "kawalek", "kawalki", "z", "ze", "do", "i", "lub", "oraz", "na", "w"}
++
++
++def name_phrase(name: str) -> str:
++    """'2 łyżki suszonych kwiatów czarnego bzu' -> 'czarnego bzu' (to szukamy w Wikipedii)."""
++    words = [w for w in re.findall(r"[^\W\d_]+", name) if norm_text(w) not in NOT_NAME]
++    return " ".join(words).strip()
++
++
++async def discover_new_plants(session: Session, llm, batch: int = 50, log_fn=None, wiki=None,
++                              limit: int = 40) -> list[str]:
++    """Ktore nieznane skladniki to rosliny -> nowe wpisy Plant(origin='nowa'). Zwraca ich id.
++    Domyslnie bez LLM (NEW_PLANTS_LLM=false): Wikipedia + Wikidata (takson P225 albo produkt P1582), do `limit`
++    nazw na przebieg; nazwy bez wyniku zapamietywane jako "nie roslina" (bez ponownego pytania)."""
+     say = log_fn or (lambda m: None)
+     names = ingredient_candidates(session)
+     known = {a.name for a in session.exec(select(PlantAlias)).all()}
+@@ -217,6 +238,11 @@ async def discover_new_plants(session: Session, llm, batch: int = 50, log_fn=Non
+     by_lat = {(p.nazwa_lat or "").lower(): p.id for p in session.exec(select(Plant)).all() if p.nazwa_lat}
+     by_name = {norm_text(p.nazwa_pl): p.id for p in session.exec(select(Plant)).all()}
+     created: list[str] = []
++    from app.config import settings
++    if wiki is not None and not (settings.new_plants_llm and llm is not None):
++        return await _discover_by_wiki(session, wiki, todo[:limit], names, by_lat, by_name, say)
++    if llm is None:
++        return []
+     for i in range(0, len(todo), batch):
+         chunk = todo[i:i + batch]
+         res = await llm.complete("SKLADNIKI:\n" + "\n".join(f"- {n}" for n in chunk), system=IDENTIFY_PROMPT,
+@@ -257,5 +283,45 @@ async def discover_new_plants(session: Session, llm, batch: int = 50, log_fn=Non
+     return created
+ 
+ 
++async def _discover_by_wiki(session: Session, wiki, todo: list[str], names: Counter, by_lat: dict, by_name: dict,
++                            say) -> list[str]:
++    created: list[str] = []
++    errors = 0
++    for name in todo:
++        phrase = name_phrase(name)
++        found = None
++        try:
++            for q in dict.fromkeys(x for x in (phrase, name) if x and len(x) >= 3):
++                found = await wiki.taxon_for_phrase(q)
++                if found:
++                    break
++        except Exception as exc:  # noqa: BLE001 - siec: bez zapisu "nie roslina", sprobujemy nastepnym razem
++            errors += 1
++            if errors >= 3:
++                say(f"Wikipedia/Wikidata niedostepne ({str(exc)[:80]}) - reszta skladnikow nastepnym razem")
++                break
++            continue
++        pid = None
++        if found:
++            lat, pl = found["latin"], found["label"]
++            pid = by_lat.get(lat.lower()) or by_name.get(norm_text(pl))
++            if pid is None:
++                pid = slugify(pl)
++                if session.get(Plant, pid) is None:
++                    session.add(Plant(id=pid, nazwa_pl=pl[:1].upper() + pl[1:], nazwa_lat=lat, origin="nowa",
++                                      mentions=names[name], wikidata=found["qid"]))
++                    created.append(pid)
++                by_lat[lat.lower()], by_name[norm_text(pl)] = pid, pid
++            else:
++                row = session.get(Plant, pid)
++                if row and row.origin == "nowa":
++                    row.mentions = (row.mentions or 0) + names[name]
++                    session.add(row)
++        session.merge(PlantAlias(name=norm_text(name), plant_id=pid))
++        session.commit()
++    say(f"Skladniki przez Wikipedie i Wikidata (bez LLM): sprawdzono {len(todo)}, nowe rosliny {len(created)}")
++    return created
++
++
+ def plants_dir_ok(plants_dir: Path) -> bool:
+     return Path(plants_dir).exists() and os.access(plants_dir, os.W_OK)
+diff --git a/app/knowledge/wiki.py b/app/knowledge/wiki.py
+index bf87776..c48a7f4 100755
+--- a/app/knowledge/wiki.py
++++ b/app/knowledge/wiki.py
+@@ -140,6 +140,46 @@ class WikiClient:
+                                  labels_by_lang(ent.get("labels") or {}), aliases_by_lang(ent.get("aliases") or {}))
+         return None
+ 
++    async def taxon_for_phrase(self, phrase: str, lang: str = "pl") -> dict | None:
++        """Nazwa skladnika -> gatunek (bez LLM): wyszukiwarka Wikipedii (odmiana slow: "kwiatow czarnego bzu"),
++        element Wikidata strony, takson (P225) - albo takson, z ktorego produkt pochodzi (P1582, np. olej lniany ->
++        len zwyczajny). Zwraca {"qid", "latin", "label", "title"} albo None (to nie roslina / nic nie znaleziono).
++        Wynik musi dzielic z fraza rdzen slowa (4 litery) - przypadkowe trafienia wyszukiwarki odpadaja."""
++        found = await self._get(f"https://{lang}.wikipedia.org/w/api.php", {
++            "action": "query", "list": "search", "srsearch": phrase, "srlimit": 3, "srnamespace": 0})
++        titles = [x["title"] for x in (found.get("query") or {}).get("search", [])][:3]
++        if not titles:
++            return None
++        props = await self._get(f"https://{lang}.wikipedia.org/w/api.php", {
++            "action": "query", "prop": "pageprops", "ppprop": "wikibase_item", "redirects": 1,
++            "titles": "|".join(titles)})
++        qids = {}
++        for page in ((props.get("query") or {}).get("pages") or {}).values():
++            q = (page.get("pageprops") or {}).get("wikibase_item")
++            if q:
++                qids[page.get("title")] = q
++        roots = {w[:4] for w in _norm_words(phrase) if len(w) >= 4}
++        for title in titles:
++            qid = qids.get(title)
++            if not qid or not (roots & {w[:4] for w in _norm_words(title)}):
++                continue
++            ents = await self._get(WIKIDATA_API, {"action": "wbgetentities", "ids": qid, "props": "claims|labels",
++                                                  "languages": lang})
++            ent = (ents.get("entities") or {}).get(qid) or {}
++            taxon = _claim(ent, "P225")
++            if not taxon:
++                src = _item_claim(ent, "P1582")             # produkt naturalny z taksonu
++                if not src:
++                    continue
++                ents = await self._get(WIKIDATA_API, {"action": "wbgetentities", "ids": src, "props": "claims|labels",
++                                                      "languages": lang})
++                ent = (ents.get("entities") or {}).get(src) or {}
++                taxon, qid = _claim(ent, "P225"), src
++            if taxon and len(taxon.split()) >= 2:
++                label = ((ent.get("labels") or {}).get(lang) or {}).get("value") or title
++                return {"qid": qid, "latin": " ".join(taxon.split()[:2]), "label": label, "title": title}
++        return None
++
+     async def article(self, lang: str, title: str, max_chars: int = 9000) -> WikiArticle | None:
+         data = await self._get(f"https://{lang}.wikipedia.org/w/api.php", {
+             "action": "query", "prop": "extracts|info", "explaintext": 1, "exsectionformat": "wiki",
+@@ -183,6 +223,21 @@ def labels_by_lang(labels: dict) -> dict[str, str]:
+     return out
+ 
+ 
++def _norm_words(text: str) -> list[str]:
++    import unicodedata
++    t = unicodedata.normalize("NFKD", (text or "").lower().replace("ł", "l"))
++    t = "".join(c for c in t if not unicodedata.combining(c))
++    return re.findall(r"\w+", t)
++
++
++def _item_claim(ent: dict, prop: str) -> str | None:
++    try:
++        v = ent["claims"][prop][0]["mainsnak"]["datavalue"]["value"]
++        return v.get("id") if isinstance(v, dict) else None
++    except (KeyError, IndexError, TypeError):
++        return None
++
++
+ def _claim(ent: dict, prop: str) -> str | None:
+     try:
+         v = ent["claims"][prop][0]["mainsnak"]["datavalue"]["value"]
+diff --git a/app/llm/factory.py b/app/llm/factory.py
+index dbbf1bc..a60a08d 100755
+--- a/app/llm/factory.py
++++ b/app/llm/factory.py
+@@ -38,9 +38,16 @@ def build_router() -> ModelRouter | None:
+         demote_after=settings.llm_demote_after,
+         max_wait_s=settings.llm_max_wait_s,
+         cache=_cache(),
++        usage=_usage(),
+     )
+ 
+ 
++def _usage():
++    """Licznik tokenow wg celu + dzienny budzet chmury (LLM_DAILY_BUDGET)."""
++    from app.llm.usage import LLMUsage, parse_budget
++    return LLMUsage(settings.data_dir / "llm_usage.json", parse_budget(settings.llm_daily_budget))
++
++
+ def _cache():
+     """Pamiec odpowiedzi LLM (LLM_CACHE_DAYS=0 wylacza)."""
+     if settings.llm_cache_days <= 0:
+diff --git a/app/llm/router.py b/app/llm/router.py
+index d0288df..8e6d710 100755
+--- a/app/llm/router.py
++++ b/app/llm/router.py
+@@ -85,7 +85,7 @@ class ModelRouter:
+     def __init__(self, providers: list[LLMProvider], state_path: Path | None = None,
+                  priority: list[str] | None = None, blocklist: list[str] | None = None,
+                  max_per_provider: int = 5, max_attempts: int = 0, demote_after: int = 3,
+-                 max_wait_s: float = 0.0, cache=None):
++                 max_wait_s: float = 0.0, cache=None, usage=None):
+         self.providers = {p.name: p for p in providers}
+         self.state_path = state_path
+         self.priority = [x.strip() for x in (priority or []) if x.strip()]
+@@ -103,6 +103,7 @@ class ModelRouter:
+         self.provider_pause: dict[str, float] = {}    # provider -> do kiedy wstrzymany (awaria po stronie API)
+         self._prefer_skip: dict[str, float] = {}      # model preferowany -> do kiedy pomijany (po bledzie)
+         self.cache = cache                             # app/llm/cache.LLMCache albo None
++        self.usage = usage                             # app/llm/usage.LLMUsage (tokeny wg celu, budzet) albo None
+         self._load()
+ 
+     CLOUD_SOON_S = 300.0   # model chmury z przerwa krotsza niz tyle sekund (limit na minute) liczy sie jako dostepny
+@@ -253,30 +254,48 @@ class ModelRouter:
+                 self.recent.append({"ts": time.time(), "model": f"{provider}:{model}", "ok": True, "s": 0.0,
+                                     "cache": True})
+                 return LLMResult(text, provider, model, 0.0, [], cached=True)
++        purpose = "inne"
++        local_only = False
++        if self.usage is not None:
++            from app.llm.usage import purpose_of
++            purpose = purpose_of(system, prompt)
++            local_only = self.usage.over_budget(purpose)   # dzienny budzet chmury tego celu wyczerpany
++            if local_only and cloud_only:
++                raise AllModelsFailedError(f"dzienny budzet chmury dla celu '{purpose}' wyczerpany")
+         job = _beat()                                  # zadanie czeka na model = zyje (wykrywanie zawieszonych)
+         # czekanie w kolejce do modelu (np. jedno miejsce w Ollamie) i dlugie generowanie to nie zawieszenie:
+         # znak zycia co minute, zeby straznik nie przerywal zadan czekajacych na model
+         hb = asyncio.create_task(_heartbeat(job)) if job is not None else None
+         try:
+             res = await self._complete_all(prompt, system, json_mode, avoid, prefer, prefer_timeout, cloud_only,
+-                                           prefer_only)
++                                           prefer_only, local_only)
+         finally:
+             if hb is not None:
+                 hb.cancel()
+             _beat(job)
++        if self.usage is not None:
++            from app.llm.usage import tokens
++            try:
++                self.usage.add(purpose, tokens(prompt, system, res.text), local=res.provider == "ollama")
++            except Exception:  # noqa: BLE001 - licznik nigdy nie psuje zapytania
++                pass
+         if key:
+             self.cache.put(key, res.text, res.provider, res.model)
+         return res
+ 
+     async def _complete_all(self, prompt, system, json_mode, avoid, prefer, prefer_timeout, cloud_only,
+-                            prefer_only) -> LLMResult:
++                            prefer_only, local_only: bool = False) -> LLMResult:
+         for key in prefer or []:
++            if local_only and not key.startswith("ollama:"):
++                continue
+             res = await self._try_preferred(key, prompt, system, json_mode, prefer_timeout)
+             if res is not None:
+                 return res
+         if prefer_only:
+             raise AllModelsFailedError("modele preferowane zawiodly (" + ", ".join(prefer or []) + ")")
+         skip = {e.key for e in self.order if e.fallback} if cloud_only else set()
++        if local_only:                                 # budzet chmury celu wyczerpany: tylko model lokalny
++            skip = {e.key for e in self.order if not e.fallback}
+         if avoid:
+             try:
+                 return await self._complete(prompt, system, json_mode, set(avoid) | skip)
+diff --git a/app/llm/usage.py b/app/llm/usage.py
+new file mode 100644
+index 0000000..13fa12f
+--- /dev/null
++++ b/app/llm/usage.py
+@@ -0,0 +1,126 @@
++"""Licznik tokenow LLM wedlug celu (etap 6) i dzienny budzet chmury.
++
++Cel zapytania rozpoznawany jest po poczatku promptu systemowego (kazde zadanie ma swoj). Tokeny liczone
++w przyblizeniu: znaki / 4 (prompt + odpowiedz). Zapis: data/llm_usage.json, 14 ostatnich dni.
++Budzet (LLM_DAILY_BUDGET, np. "klasyfikacja=150000,zapytania=30000"): gdy cel zuzyl dzis tyle tokenow w chmurze,
++kolejne zapytania tego celu ida tylko do modelu lokalnego (Ollama) - limity Groq/Gemini zostaja dla waznych zadan.
++"""
++import json
++import logging
++import threading
++from datetime import date
++from pathlib import Path
++
++log = logging.getLogger(__name__)
++
++# (fragment promptu systemowego, cel) - pierwszy pasujacy wygrywa
++PURPOSES = [
++    ("WSKAZUJESZ fragmenty", "wiedza"),
++    ("badaczem etnobotaniki", "magia"),
++    ("weryfikatorem faktow", "weryfikacja"),
++    ("Piszesz na nowo JEDEN podrozdzial", "scalanie"),
++    ("Strona rosliny ma rozdzialy", "rozmieszczenie"),
++    ("Dostajesz ponumerowane informacje", "redakcja_wiedzy"),
++    ("Wyszukujesz przepis", "przepisy"),
++    ("redaktorem polskiego serwisu", "przepisy"),
++    ("Klasyfikujesz przepis", "typ_przepisu"),
++    ("Porownaj dwa przepisy", "duplikaty"),
++    ("Czytasz artykul o roslinach", "wzmianki"),
++    ("You classify web pages", "klasyfikacja"),
++    ("web scraper profile", "profil_scrapera"),
++    ("web search queries", "zapytania"),
++    ("nazwy skladnikow", "nowe_rosliny"),
++    ("CEL KWIATOWNIKA", "audyt"),
++]
++LABELS = {"wiedza": "wiedza o roslinach (cytaty)", "magia": "magia roslin (cytaty)", "weryfikacja": "weryfikacja wiedzy",
++          "scalanie": "scalanie z rozdzialami", "rozmieszczenie": "przydzial do rozdzialow",
++          "redakcja_wiedzy": "redakcja wiedzy", "przepisy": "przepisy (fragmenty)", "typ_przepisu": "typ przepisu",
++          "duplikaty": "porownanie przepisow", "wzmianki": "wzmianki o przepisach", "klasyfikacja": "rodzaj strony",
++          "profil_scrapera": "profil scrapera", "zapytania": "zapytania wyszukiwarki", "nowe_rosliny": "nowe rosliny",
++          "audyt": "audyt", "marketing": "marketing", "inne": "inne"}
++KEEP_DAYS = 14
++
++
++def purpose_of(system: str | None, prompt: str = "") -> str:
++    s = system or ""
++    for marker, purpose in PURPOSES:
++        if marker in s:
++            return purpose
++    if "post" in s.lower() and ("facebook" in s.lower() or "instagram" in s.lower() or "marketing" in s.lower()):
++        return "marketing"
++    return "inne"
++
++
++def tokens(*texts: str | None) -> int:
++    return max(1, sum(len(t or "") for t in texts) // 4)
++
++
++def parse_budget(raw: str | None) -> dict[str, int]:
++    out = {}
++    for part in (raw or "").split(","):
++        if "=" in part:
++            k, v = part.split("=", 1)
++            try:
++                out[k.strip()] = int(v.strip().replace("_", ""))
++            except ValueError:
++                continue
++    return out
++
++
++class LLMUsage:
++    def __init__(self, path: Path | None, budget: dict[str, int] | None = None):
++        self.path = Path(path) if path else None
++        self.budget = budget or {}
++        self._lock = threading.Lock()
++        self._data: dict = {}
++        if self.path and self.path.exists():
++            try:
++                self._data = json.loads(self.path.read_text(encoding="utf-8"))
++            except (OSError, ValueError):
++                self._data = {}
++
++    def add(self, purpose: str, n_tokens: int, local: bool, today: date | None = None) -> None:
++        day = (today or date.today()).isoformat()
++        with self._lock:
++            d = self._data.setdefault(day, {}).setdefault(purpose, {"chmura": 0, "lokalnie": 0, "zapytania": 0})
++            d["lokalnie" if local else "chmura"] += n_tokens
++            d["zapytania"] += 1
++            for old in sorted(self._data)[:-KEEP_DAYS]:
++                self._data.pop(old, None)
++            self._save()
++
++    def _save(self) -> None:
++        if not self.path:
++            return
++        try:
++            self.path.parent.mkdir(parents=True, exist_ok=True)
++            tmp = self.path.with_suffix(".tmp")
++            tmp.write_text(json.dumps(self._data, ensure_ascii=False, indent=1), encoding="utf-8")
++            tmp.replace(self.path)
++        except OSError as exc:
++            log.warning("Licznik tokenow: nie zapisano (%s)", exc)
++
++    def cloud_today(self, purpose: str, today: date | None = None) -> int:
++        day = (today or date.today()).isoformat()
++        return int(((self._data.get(day) or {}).get(purpose) or {}).get("chmura", 0))
++
++    def over_budget(self, purpose: str, today: date | None = None) -> bool:
++        limit = self.budget.get(purpose)
++        return bool(limit) and self.cloud_today(purpose, today) >= limit
++
++    def table(self, today: date | None = None) -> list[dict]:
++        """Wiersze dla panelu: dzis i 7 dni, wg celu (najwiecej tokenow na gorze)."""
++        t = today or date.today()
++        days = sorted(self._data)[-7:]
++        rows: dict[str, dict] = {}
++        for day in days:
++            for purpose, v in (self._data.get(day) or {}).items():
++                r = rows.setdefault(purpose, {"cel": purpose, "nazwa": LABELS.get(purpose, purpose), "dzis_chmura": 0,
++                                              "dzis_lokalnie": 0, "dzis_zapytania": 0, "tydzien": 0,
++                                              "budzet": self.budget.get(purpose)})
++                r["tydzien"] += v.get("chmura", 0) + v.get("lokalnie", 0)
++                if day == t.isoformat():
++                    r["dzis_chmura"] += v.get("chmura", 0)
++                    r["dzis_lokalnie"] += v.get("lokalnie", 0)
++                    r["dzis_zapytania"] += v.get("zapytania", 0)
++        return sorted(rows.values(), key=lambda r: -(r["dzis_chmura"] + r["dzis_lokalnie"] + r["tydzien"] / 100))
+diff --git a/app/scrapers/profile.py b/app/scrapers/profile.py
+index ce77756..7513847 100755
+--- a/app/scrapers/profile.py
++++ b/app/scrapers/profile.py
+@@ -267,6 +267,53 @@ def validate_facts(profile: ScraperProfile, fact_samples: list[tuple[str, str, l
+             "reason": "" if ok else f"regex P={rx.get('precision')} R={rx.get('recall')}, tresc na {good}/{len(fact_samples)}"}
+ 
+ 
++PLUGIN_FIELDS = {
++    "wprm": {"title": {"css": ".wprm-recipe-name", "attr": None},
++             "ingredients": {"css": ".wprm-recipe-ingredient", "attr": None},
++             "steps": {"css": ".wprm-recipe-instruction-text", "attr": None},
++             "yield": {"css": ".wprm-recipe-servings", "attr": None},
++             "notes": {"css": ".wprm-recipe-notes", "attr": None}},
++    "tasty": {"title": {"css": ".tasty-recipes-title", "attr": None},
++              "ingredients": {"css": ".tasty-recipes-ingredients li", "attr": None},
++              "steps": {"css": ".tasty-recipes-instructions li", "attr": None},
++              "notes": {"css": ".tasty-recipes-notes", "attr": None}},
++    "mv": {"title": {"css": ".mv-create-title", "attr": None},
++           "ingredients": {"css": ".mv-create-ingredients li", "attr": None},
++           "steps": {"css": ".mv-create-instructions li", "attr": None},
++           "notes": {"css": ".mv-create-notes", "attr": None}},
++}
++CONTENT_CSS = ("article .entry-content", ".entry-content", ".post-content", ".article-content", ".article-body",
++               "article", "main")
++
++
++def rule_field_sets(samples: list[tuple[str, str, list]]) -> list[tuple[str, dict]]:
++    """Gotowe zestawy selektorow do sprawdzenia (bez LLM): wtyczki obecne na probkach + kontener tresci."""
++    htmls = [h for _, h, _ in samples]
++    out = []
++    for name, fields in PLUGIN_FIELDS.items():
++        marker = next(iter(fields.values()))["css"].split()[0].lstrip(".")
++        if any(marker in h for h in htmls):
++            f = dict(fields)
++            content = _content_css(htmls)
++            if content:
++                f["content"] = {"css": content, "attr": None}
++            out.append((name, f))
++    content = _content_css(htmls)
++    if content:
++        out.append((f"tresc:{content}", {"title": {"css": "h1", "attr": None}, "content": {"css": content, "attr": None}}))
++    return out
++
++
++def _content_css(htmls: list[str]) -> str | None:
++    """Pierwszy kontener artykulu, ktory na wszystkich probkach ma dosc tekstu."""
++    soups = [BeautifulSoup(h, "lxml") for h in htmls]
++    for css in CONTENT_CSS:
++        if soups and all((s.select_one(css) and len(s.select_one(css).get_text(" ", strip=True)) >= ARTICLE_MIN_CHARS)
++                         for s in soups):
++            return css
++    return None
++
++
+ async def build_profile(llm, samples: list[tuple[str, str, list]], recipe_urls: list[str], other_urls: list[str],
+                         patterns: dict[str, PatternStat], rounds: int = 3, log_fn=None,
+                         fact_samples: list[tuple[str, str, list]] | None = None,
+@@ -284,8 +331,18 @@ async def build_profile(llm, samples: list[tuple[str, str, list]], recipe_urls:
+         best = (base, rep)
+         if rep["passed"] and jsonld_ok == len(samples):
+             say("Strona ma komplet danych JSON-LD - profil bez LLM")
+-            if llm is None:
+-                return _stamp(base, "wzorce+jsonld", rep)
++            return _stamp(base, "wzorce+jsonld", rep)
++        # etap 6: znane wtyczki przepisow (WP Recipe Maker, Tasty, Mediavine Create) i typowe kontenery
++        # artykulu - selektory bez LLM; LLM dopiero, gdy zaden gotowy zestaw nie przejdzie walidacji
++        for name, fields in rule_field_sets(samples):
++            cand = ScraperProfile(recipe_url_regex=pattern_rx, fields=fields, prefer_jsonld=True,
++                                  built_with=f"reguly:{name}")
++            rep = validate(cand, samples, recipe_urls, other_urls)
++            if rep["passed"]:
++                say(f"Selektory z regul ({name}): pokrycie {rep['coverage']:.0%} - profil bez LLM")
++                return _stamp(cand, cand.built_with, rep)
++            if (rep["passed"], rep["coverage"]) > (best[1]["passed"], best[1]["coverage"]):
++                best = (cand, rep)
+ 
+     if llm is None:
+         rep = best[1] if best else {"passed": False, "errors": ["brak LLM i brak wyuczonych wzorcow"]}
+diff --git a/app/web/templates/llm_models.html b/app/web/templates/llm_models.html
+index 464ac40..87407e1 100755
+--- a/app/web/templates/llm_models.html
++++ b/app/web/templates/llm_models.html
+@@ -32,6 +32,20 @@
+ <p class="muted">Ollama - pamięć karty (sprawdzane po wolnej odpowiedzi):
+   {% for name, v in vram.items() %}<b>{{ name }}</b>: {{ v.procent_vram }}% modelu w VRAM, kontekst {{ v.num_ctx }}{% if v.procent_vram < 90 %} (część liczy na CPU - kontekst zmniejszony){% endif %}{% if not loop.last %} &middot; {% endif %}{% endfor %}</p>
+ {% endif %}
++{% if usage %}
++<h3>Zużycie tokenów wg celu</h3>
++<p class="muted">W przybliżeniu (znaki / 4). Budżet dzienny chmury ustawia <code>LLM_DAILY_BUDGET</code>
++  (np. <code>klasyfikacja=150000,zapytania=30000</code>); po jego przekroczeniu dany cel korzysta tylko z modelu lokalnego.</p>
++<div class="table-wrap"><table>
++  <tr><th>Cel</th><th>Dziś: chmura</th><th>Dziś: lokalnie</th><th>Zapytań dziś</th><th>7 dni</th><th>Budżet chmury</th></tr>
++  {% for u in usage %}
++  <tr><td>{{ u.nazwa }}</td><td>{{ "{:,}".format(u.dzis_chmura).replace(",", " ") }}</td>
++    <td>{{ "{:,}".format(u.dzis_lokalnie).replace(",", " ") }}</td><td>{{ u.dzis_zapytania }}</td>
++    <td>{{ "{:,}".format(u.tydzien).replace(",", " ") }}</td>
++    <td>{% if u.budzet %}{{ "{:,}".format(u.budzet).replace(",", " ") }}{% if u.dzis_chmura >= u.budzet %} <span class="tag failed">wyczerpany</span>{% endif %}{% else %}-{% endif %}</td></tr>
++  {% endfor %}
++</table></div>
++{% endif %}
+ {% if cache %}
+ <p class="muted">Pamięć odpowiedzi LLM (data/llm_cache.db): {{ cache.wpisy }} zapisanych odpowiedzi, od startu {{ cache.trafienia }} zapytań bez wywołania modelu (np. ponowienia po restarcie).</p>
+ {% endif %}
+diff --git a/app/worker/knowledge.py b/app/worker/knowledge.py
+index f19a32d..fd3d237 100755
+--- a/app/worker/knowledge.py
++++ b/app/worker/knowledge.py
+@@ -76,13 +76,16 @@ async def run_plants_sync(job_id: int, runner: JobRunner, llm=None) -> dict:
+         total = s.exec(select(func.count()).select_from(Plant)).one()
+     log(f"Rosliny z Kwiatownika: {total} w rejestrze ({added} nowych wpisow)")
+     created: list[str] = []
+-    if llm is not None:
++    wiki = WikiClient(settings.user_agent)
++    try:
+         with Session(engine) as s:
+-            activity.set(job_id, "LLM rozpoznaje rosliny w skladnikach przepisow")
++            activity.set(job_id, "rozpoznaje rosliny w skladnikach przepisow (Wikipedia + Wikidata)")
+             try:
+-                created = await discover_new_plants(s, llm, log_fn=log)
++                created = await discover_new_plants(s, llm, log_fn=log, wiki=wiki)
+             except AllModelsFailedError as exc:
+                 log(f"Modele maja limit - rozpoznawanie skladnikow przerwane ({str(exc)[:120]})")
++    finally:
++        await wiki.aclose()
+     log(f"Nowe rosliny z przepisow: {len(created)}" + (f" ({', '.join(created[:15])})" if created else ""))
+     with Session(engine) as s:
+         ids = list(s.exec(select(Plant.id)).all())
+diff --git a/tests/test_discovery.py b/tests/test_discovery.py
+index 0b5a772..a775799 100755
+--- a/tests/test_discovery.py
++++ b/tests/test_discovery.py
+@@ -48,7 +48,10 @@ def test_searxng_parsing_and_merge():
+     assert len(res) == 2 and by_url["https://a.example/1"].engines == ["brave", "google"]
+ 
+ 
+-def test_queries_skip_used_and_fallback():
++def test_queries_skip_used_and_fallback(monkeypatch):
++    from app.config import settings
++    monkeypatch.setattr(settings, "discovery_llm_queries", True)            # sciezka LLM (domyslnie szablony)
++
+     class LLM:
+         async def complete(self, prompt, system=None, json_mode=False):
+             assert "Ukrainian" in prompt and "чай з трав рецепт" in prompt   # uzyte przekazane do LLM
+@@ -60,7 +63,24 @@ def test_queries_skip_used_and_fallback():
+     q = asyncio.run(make_queries(UA, 5, {"чай з трав рецепт"}, LLM()))
+     assert q == ["настоянка з калини", "сироп з бузини"]
+     q2 = asyncio.run(make_queries(UA, 2, {"рецепти з трав"}, None))
+-    assert q2 == ["народні рецепти лікарські рослини", "настоянка з трав рецепт"]
++    assert len(q2) == 2 and "рецепти з трав" not in q2
++
++
++def test_template_queries_from_plant_names_without_llm(monkeypatch):
++    from app.config import settings
++    from app.discovery.queries import template_queries
++    monkeypatch.setattr(settings, "discovery_llm_queries", False)
++    rows = {"babka": {"pl": "Babka lancetowata", "lat": "Plantago lanceolata",
++                      "names": {"uk": "подорожник ланцетолистий", "en": "Plantago lanceolata"}},
++            "bez": {"pl": "Bez czarny", "lat": "Sambucus nigra", "names": {"uk": "бузина чорна"}}}
++    q = template_queries(UA, 6, {"бузина чорна настоянка рецепт"}, rows)
++    assert len(q) == 6 and len(set(q)) == 6 and "бузина чорна настоянка рецепт" not in q
++    assert "подорожник ланцетолистий мазь своїми руками" in q and any(x in q for x in UA.fallback_queries)
++
++    class NoLLM:
++        async def complete(self, *a, **k):
++            raise AssertionError("bez LLM")
++    assert asyncio.run(make_queries(UA, 3, set(), NoLLM()))                       # LLM wylaczony - szablony
+ 
+ 
+ class Store:
+diff --git a/tests/test_scan_db.py b/tests/test_scan_db.py
+index b9ce2bd..e28c2b2 100755
+--- a/tests/test_scan_db.py
++++ b/tests/test_scan_db.py
+@@ -595,7 +595,9 @@ def test_phased_scan_probe_profile_harvest(tmp_path, monkeypatch):
+         assert job.status == JobStatus.done, job.log
+         assert "Etap 1/3" in job.log and "Rozpoznanie zakonczone" in job.log
+         assert "Etap 2/3" in job.log and "Etap 3/3 - pobieranie z profilem" in job.log
+-        assert s.get(Source, sid).profile_status == "ready" and LLM.profile_calls >= 1
++        src = s.get(Source, sid)
++        # etap 6: strona z typowym kontenerem tresci dostaje selektory z regul, bez LLM
++        assert src.profile_status == "ready" and (LLM.profile_calls >= 1 or "reguly" in (src.scraper_profile or ""))
+         assert len(s.exec(select(Item).where(Item.kind == ItemKind.recipe)).all()) == 3
+         assert _json.loads(job.stats_json)["profile_ok"] is True
+ 
+diff --git a/tests/test_stage6.py b/tests/test_stage6.py
+new file mode 100644
+index 0000000..98a5075
+--- /dev/null
++++ b/tests/test_stage6.py
+@@ -0,0 +1,123 @@
++"""Etap 6: tokeny LLM wg celu i dzienny budzet chmury; nowe rosliny ze skladnikow przez Wikipedie + Wikidata."""
++import asyncio
++from datetime import date
++
++import httpx
++from sqlmodel import Session, SQLModel, create_engine, select
++
++from app.knowledge.registry import discover_new_plants, name_phrase
++from app.knowledge.wiki import WikiClient
++from app.llm.usage import LLMUsage, parse_budget, purpose_of, tokens
++from app.models import Plant, PlantAlias
++
++
++def test_purpose_budget_and_table(tmp_path):
++    from app.knowledge.extract import SYSTEM_PROMPT as KNOW
++    from app.scrapers.classify import SYSTEM_PROMPT as CLS
++    assert purpose_of(KNOW) == "wiedza" and purpose_of(CLS) == "klasyfikacja" and purpose_of("cos") == "inne"
++    assert parse_budget("klasyfikacja=150000, zapytania=30_000, zle") == {"klasyfikacja": 150000, "zapytania": 30000}
++    u = LLMUsage(tmp_path / "t.json", {"klasyfikacja": 100})
++    d = date(2026, 11, 3)
++    u.add("klasyfikacja", 60, local=False, today=d)
++    assert not u.over_budget("klasyfikacja", d)
++    u.add("klasyfikacja", 50, local=False, today=d)
++    u.add("klasyfikacja", 500, local=True, today=d)                     # lokalnie nie liczy sie do budzetu
++    assert u.over_budget("klasyfikacja", d) and not u.over_budget("wiedza", d)
++    row = LLMUsage(tmp_path / "t.json", {"klasyfikacja": 100}).table(d)[0]
++    assert row["cel"] == "klasyfikacja" and row["dzis_chmura"] == 110 and row["dzis_lokalnie"] == 500 and row["budzet"] == 100
++    assert tokens("abcd" * 10) == 10
++
++
++def test_router_sends_over_budget_purpose_to_local_model(tmp_path):
++    from app.llm.base import LLMResult
++    from app.llm.router import ModelEntry, ModelRouter
++    usage = LLMUsage(None, {"klasyfikacja": 10})
++    usage.add("klasyfikacja", 50, local=False)
++    r = ModelRouter([], usage=usage)
++    calls = []
++
++    async def fake_complete(prompt, system, json_mode, avoid):
++        calls.append(set(avoid))
++        return LLMResult("{}", "ollama", "qwen", 0.1)
++    r._complete = fake_complete
++    r.order = [ModelEntry("groq", "llama", 90), ModelEntry("ollama", "qwen", 10, fallback=True)]
++    from app.scrapers.classify import SYSTEM_PROMPT as CLS
++    asyncio.run(r.complete("x", system=CLS))
++    assert calls[-1] == {"groq:llama"}                                   # chmura pominieta
++    asyncio.run(r.complete("x", system="inny cel"))
++    assert calls[-1] == set()
++    assert usage.table()[0]["dzis_lokalnie"] >= 1
++
++
++WIKI = {
++    "kwiatów czarnego bzu": ["Bez czarny"], "czarnego bzu": ["Bez czarny"], "olej lniany": ["Olej lniany"],
++    "lniany": ["Olej lniany"], "miód": ["Miód"], "Miód": ["Miód"], "miodu": ["Miód"],
++}
++PAGES = {"Bez czarny": "Q22701", "Olej lniany": "Q1144417", "Miód": "Q10987"}
++ENTS = {"Q22701": {"claims": {"P225": [{"mainsnak": {"datavalue": {"value": "Sambucus nigra"}}}]},
++                   "labels": {"pl": {"value": "bez czarny"}}},
++        "Q1144417": {"claims": {"P1582": [{"mainsnak": {"datavalue": {"value": {"id": "Q911332"}}}}]}},
++        "Q911332": {"claims": {"P225": [{"mainsnak": {"datavalue": {"value": "Linum usitatissimum"}}}]},
++                    "labels": {"pl": {"value": "len zwyczajny"}}},
++        "Q10987": {"claims": {}, "labels": {"pl": {"value": "miód"}}}}
++
++
++def handler(req: httpx.Request):
++    p = dict(req.url.params)
++    if p.get("list") == "search":
++        return httpx.Response(200, json={"query": {"search": [{"title": t} for t in WIKI.get(p["srsearch"], [])]}})
++    if p.get("prop") == "pageprops":
++        pages = {str(i): {"title": t, "pageprops": {"wikibase_item": PAGES[t]}}
++                 for i, t in enumerate(p["titles"].split("|")) if t in PAGES}
++        return httpx.Response(200, json={"query": {"pages": pages}})
++    if p.get("action") == "wbgetentities":
++        return httpx.Response(200, json={"entities": {p["ids"]: ENTS.get(p["ids"], {})}})
++    return httpx.Response(404)
++
++
++def test_new_plants_from_ingredients_by_wikipedia_and_wikidata(tmp_path, monkeypatch):
++    import json
++
++    from app.models import Item, ItemKind, ItemStatus
++    assert name_phrase("2 łyżki suszonych kwiatów czarnego bzu") == "czarnego bzu"
++    eng = create_engine(f"sqlite:///{(tmp_path / 'n.db').as_posix()}")
++    SQLModel.metadata.create_all(eng)
++    rec = {"tytul": "Syrop", "skladniki": [{"nazwa": "Kwiaty czarnego bzu"}, {"nazwa": "Olej lniany"},
++                                           {"nazwa": "Miód"}]}
++    with Session(eng) as s:
++        s.add(Item(url="u", kind=ItemKind.recipe, status=ItemStatus.translated, data_json=json.dumps(rec)))
++        s.commit()
++
++    class NoLLM:
++        async def complete(self, *a, **k):
++            raise AssertionError("bez LLM")
++
++    async def run():
++        wiki = WikiClient("T", client=httpx.AsyncClient(transport=httpx.MockTransport(handler)), delay_s=0)
++        with Session(eng) as s:
++            return await discover_new_plants(s, NoLLM(), wiki=wiki)
++    created = asyncio.run(run())
++    assert sorted(created) == ["bez_czarny", "len_zwyczajny"]
++    with Session(eng) as s:
++        assert s.get(Plant, "len_zwyczajny").nazwa_lat == "Linum usitatissimum"
++        aliases = {a.name: a.plant_id for a in s.exec(select(PlantAlias)).all()}
++    assert aliases["miod"] is None and aliases["kwiaty czarnego bzu"] == "bez_czarny"
++    assert asyncio.run(run()) == []                                      # bez ponownego pytania
++
++
++def test_profile_selectors_from_rules_without_llm():
++    from app.scrapers.profile import ScraperProfile, rule_field_sets, validate
++    body = "<p>" + "Napar z ziół na kaszel, tradycyjny przepis babci. " * 10 + "</p>"
++    page = lambda n: (f"<html><body><h1>Syrop {n}</h1><div class='entry-content'>{body}"  # noqa: E731
++                      f"<div class='wprm-recipe'><h2 class='wprm-recipe-name'>Syrop {n}</h2>"
++                      f"<ul><li class='wprm-recipe-ingredient'>2 łyżki kwiatów</li>"
++                      f"<li class='wprm-recipe-ingredient'>woda</li></ul>"
++                      f"<div class='wprm-recipe-instruction-text'>Zalać.</div>"
++                      f"<div class='wprm-recipe-instruction-text'>Odcedzić.</div></div></div></body></html>")
++    samples = [(f"https://x.pl/przepis/syrop-{n}", page(n), []) for n in range(3)]
++    sets = dict(rule_field_sets(samples))
++    assert "wprm" in sets and sets["wprm"]["content"]["css"] == "article .entry-content" or \
++        sets["wprm"]["content"]["css"] == ".entry-content"
++    prof = ScraperProfile(recipe_url_regex=r"^/przepis/", fields=sets["wprm"])
++    rep = validate(prof, samples, [u for u, _, _ in samples], ["https://x.pl/kontakt"])
++    assert rep["passed"] and prof.extract(samples[0][1], [])["ingredients"] == ["2 łyżki kwiatów", "woda"]

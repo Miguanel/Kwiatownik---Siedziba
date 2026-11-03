@@ -104,6 +104,8 @@ async def lifespan(app: FastAPI):
     tasks.append(asyncio.create_task(agents_loop(app.state)))     # planista ciaglosci: Siedziba zawsze nad czyms pracuje
     from app.nn.schedule import nn_schedule_loop
     tasks.append(asyncio.create_task(nn_schedule_loop(app.state)))  # automatyczny trening sieci co jakis czas
+    from app.backup import backup_loop
+    tasks.append(asyncio.create_task(backup_loop()))                # codzienna kopia bazy (VACUUM INTO)
     log.warning("Siedziba Kwiatownika gotowa: http://localhost:8000")
     yield
     for t in tasks:

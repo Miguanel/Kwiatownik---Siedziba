@@ -22,7 +22,11 @@ from app.pipeline.catalog import load_kwiatownik_recipes, load_plants
 from app.pipeline.matching import Candidate, find_match
 from app.pipeline.opracowanie import opracuj
 from app.llm.base import InvalidOutputError
-from app.mt.nllb import MTQualityError, MTUnavailable, get_translator
+from app.mt.nllb import MTQualityError, MTUnavailable, get_translator, nllb_code
+from app.knowledge.quotes import quote_leads
+from app.pipeline.checks import load_foreign_names
+from app.pipeline.extract import ExtractionCheckError, extract_recipes
+from app.scrapers.clean import clean_text, site_boilerplate
 from app.pipeline.fast_translate import can_fast_translate, fast_translate_recipe
 from app.pipeline.translate import NoRecipeError, skip_reason, translate_recipe
 from app.worker import activity, snapshots
@@ -60,6 +64,48 @@ def _taken_ids(kw_ids: set[str]) -> set[str]:
     return kw_ids | {i for i in ours if i}
 
 
+async def _refresh_plant_names(log) -> None:
+    """Nazwy roslin w obcych jezykach z Wikidata (slownik DeepL + kontrola tlumaczenia). Najwyzej 2 minuty."""
+    from app.knowledge.plant_names import refresh_plant_names
+    from app.knowledge.wiki import WikiClient
+    from app.pipeline.checks import forget_plant_rows
+    wiki = WikiClient(settings.user_agent)
+    try:
+        stats = await asyncio.wait_for(refresh_plant_names(engine, wiki, log, settings.plant_names_per_run), 120)
+        if stats.get("found"):
+            forget_plant_rows()
+    except asyncio.TimeoutError:
+        log("Nazwy roslin z Wikidata: przerwano po 2 min - reszta przy nastepnym tlumaczeniu")
+        forget_plant_rows()
+    except Exception as exc:  # noqa: BLE001 - nazwy to dodatek, tlumaczenie idzie dalej
+        log(f"Nazwy roslin z Wikidata: {str(exc)[:120]}")
+    finally:
+        await wiki.aclose()
+
+
+_BOILERPLATE: dict[int, tuple[int, set[str]]] = {}
+
+
+def _site_boilerplate(source_id: int | None, item_id: int) -> set[str]:
+    """Linie powtarzajace sie na wielu stronach tej samej witryny (do 40 ostatnich stron), pamietane na zrodlo."""
+    if not source_id:
+        return set()
+    with Session(engine) as s:
+        rows = s.exec(select(Item.raw_text).where(Item.source_id == source_id, col(Item.raw_text).is_not(None))
+                      .order_by(col(Item.id).desc()).limit(40)).all()
+    cached = _BOILERPLATE.get(source_id)
+    if cached and cached[0] == len(rows):
+        return cached[1]
+    found = site_boilerplate(list(rows))
+    _BOILERPLATE[source_id] = (len(rows), found)
+    return found
+
+
+def _mt_supports(mt, lang: str | None) -> bool:
+    supports = getattr(mt, "supports", None)
+    return supports(lang) if supports else nllb_code(lang) is not None
+
+
 async def translate_one(item_id: int, llm, plants: dict, kw_cands: list[Candidate], kw_ids: set[str], log) -> str:
     with Session(engine) as s:
         item = s.get(Item, item_id)
@@ -69,40 +115,29 @@ async def translate_one(item_id: int, llm, plants: dict, kw_cands: list[Candidat
                 "country": src.country if src else None}
         raw = item.raw_text
         ignore_match = item.match_info == "ignored"
-    rec = None
+        source_id = item.source_id
+    if raw:
+        raw = clean_text(raw, _site_boilerplate(source_id, item_id))   # resztki nawigacji, reklam, spisu tresci
+    rec, model = None, None
     mt = get_translator()
-    if mt is not None and can_fast_translate(recipe, meta["language"]):
-        # szybka sciezka bez LLM: struktura ze strony + NLLB + reguly
-        try:
-            rec, model = await fast_translate_recipe(mt, llm, recipe, meta, plants, _taken_ids(kw_ids))
-        except (MTUnavailable, MTQualityError, InvalidOutputError) as exc:
-            if not settings.mt_fallback_llm or llm is None:
-                with Session(engine) as s:
-                    item = s.get(Item, item_id)
-                    item.status, item.reason = ItemStatus.error, f"tlumaczenie maszynowe: {exc}"[:300]
-                    s.add(item)
-                    s.commit()
-                log(f"[blad MT] #{item_id} {meta['title'][:50]}: {exc}")
-                return "error"
-            log(f"[MT -> LLM] #{item_id} {meta['title'][:50]}: {str(exc)[:120]}")
-    if rec is None and llm is None:
-        log(f"[odlozone] #{item_id} {meta['title'][:50]}: brak danych strukturalnych dla tlumacza NLLB i brak LLM")
-        return "postponed"
-    try:
-        if rec is None:
-            rec, model = await translate_recipe(llm, recipe, raw, meta, plants, _taken_ids(kw_ids))
-    except AllModelsFailedError as exc:
-        # zaden model nie byl dostepny (limity) - to nie wina przepisu: zostaje "do tlumaczenia"
-        log(f"[odlozone] #{item_id} {meta['title'][:50]}: wszystkie modele maja teraz limit ({str(exc)[:160]})")
-        return "postponed"
-    except NoRecipeError as exc:
-        # lista przepisow / artykul ogolny - nie blad, tylko strona bez konkretnego przepisu
+    lang = meta["language"]
+    legacy = llm is not None and (mt is None or settings.translate_with_llm)
+    taken = _taken_ids(kw_ids)
+
+    def mark(status: ItemStatus, reason: str) -> None:
         with Session(engine) as s:
             item = s.get(Item, item_id)
-            item.status, item.reason = ItemStatus.skipped, f"brak konkretnego przepisu: {exc}"[:300]
-            url = item.url
+            item.status, item.reason = status, reason[:300]
             s.add(item)
             s.commit()
+
+    async def no_recipe(exc: NoRecipeError) -> str:
+        # lista przepisow / artykul ogolny - nie blad, tylko strona bez konkretnego przepisu
+        if exc.leads and raw:                          # opis wzmianki = przetlumaczony cytat ze strony, nie slowa LLM
+            exc.leads = await asyncio.to_thread(quote_leads, exc.leads, raw, lang, mt)
+        mark(ItemStatus.skipped, f"brak konkretnego przepisu: {exc}")
+        with Session(engine) as s:
+            url = s.get(Item, item_id).url
         log(f"[pominiety] #{item_id} {meta['title'][:50]}: brak konkretnego przepisu")
         if exc.leads:                                  # wzmianki o przepisach -> lista "Przepisy do odnalezienia"
             from app.pipeline.leads import save_leads
@@ -111,14 +146,79 @@ async def translate_one(item_id: int, llm, plants: dict, kw_cands: list[Candidat
                 log(f"[wzmianka] #{item_id}: {len(new)} przepisow do odnalezienia: "
                     + ", ".join(w["tytul"][:40] for w in exc.leads[:3]))
         return "no_recipe"
-    except (LLMError, ValueError) as exc:
-        with Session(engine) as s:
-            item = s.get(Item, item_id)
-            item.status, item.reason = ItemStatus.error, f"tlumaczenie: {exc}"[:300]
-            s.add(item)
-            s.commit()
-        log(f"[blad] #{item_id} {meta['title'][:50]}: {exc}")
-        return "error"
+
+    if mt is not None and not legacy:
+        if not _mt_supports(mt, lang):
+            mark(ItemStatus.error, f"tlumacz maszynowy nie obsluguje jezyka: {lang or 'nieznany'}")
+            log(f"[blad MT] #{item_id} {meta['title'][:50]}: jezyk {lang or 'nieznany'} bez tlumacza")
+            return "error"
+        names = load_foreign_names(engine)
+        try:
+            if can_fast_translate(recipe, lang):
+                # dane strukturalne ze strony -> tlumacz maszynowy -> kontrola kodem
+                rec, model = await fast_translate_recipe(mt, llm, recipe, meta, plants, taken, names)
+            elif raw and llm is not None:
+                # surowy artykul: LLM tylko wskazuje doslowne fragmenty (kod je sprawdza), tlumaczy tlumacz maszynowy
+                ex, emodel = await extract_recipes(llm, raw, meta, settings.extract_min_verbatim,
+                                                   settings.extract_max_rejected)
+                if ex.rejected:
+                    log(f"[kontrola] #{item_id}: odrzucono {len(ex.rejected)} linii spoza tekstu strony "
+                        f"(np. '{ex.rejected[0][:60]}')")
+                rec, model = await fast_translate_recipe(mt, llm, ex.recipes[0], meta, plants, taken, names)
+                rec["siedziba"]["wyciagnal"] = f"{emodel} (doslowne fragmenty, sprawdzone kodem)"
+                extras = []
+                for n, part in enumerate(ex.recipes[1:], 2):
+                    try:
+                        e, _ = await fast_translate_recipe(
+                            mt, llm, part, dict(meta, item_id=f"{item_id}_{n}"), plants,
+                            taken | {rec["id"]} | {x["id"] for x in extras}, names)
+                    except MTQualityError as exc:
+                        log(f"[kontrola] #{item_id}: pominieto przepis {n} z artykulu - {str(exc)[:120]}")
+                        continue
+                    e["siedziba"]["wyciagnal"] = rec["siedziba"]["wyciagnal"]
+                    extras.append(e)
+                if extras:
+                    rec["_dodatkowe"] = extras
+            elif not raw:
+                mark(ItemStatus.error, "brak tekstu strony do tlumaczenia")
+                return "error"
+            else:
+                log(f"[odlozone] #{item_id} {meta['title'][:50]}: artykul bez danych strukturalnych, "
+                    "a LLM do wskazania fragmentow niedostepny")
+                return "postponed"
+        except MTUnavailable as exc:
+            log(f"[odlozone] #{item_id} {meta['title'][:50]}: tlumacz maszynowy niedostepny ({str(exc)[:160]})")
+            return "postponed"
+        except AllModelsFailedError as exc:
+            log(f"[odlozone] #{item_id} {meta['title'][:50]}: wszystkie modele maja teraz limit ({str(exc)[:160]})")
+            return "postponed"
+        except NoRecipeError as exc:
+            return await no_recipe(exc)
+        except (MTQualityError, ExtractionCheckError) as exc:
+            mark(ItemStatus.error, str(exc) if str(exc).startswith("kontrola") else f"tlumaczenie maszynowe: {exc}")
+            log(f"[kontrola] #{item_id} {meta['title'][:50]}: {str(exc)[:200]}")
+            return "error"
+        except (LLMError, ValueError) as exc:
+            mark(ItemStatus.error, f"wyszukanie przepisu w tekscie: {exc}")
+            log(f"[blad] #{item_id} {meta['title'][:50]}: {exc}")
+            return "error"
+    elif not legacy:
+        log(f"[odlozone] #{item_id} {meta['title'][:50]}: brak tlumacza maszynowego")
+        return "postponed"
+    else:
+        # dawny tryb (MT_ENGINE=llm albo TRANSLATE_WITH_LLM=true): LLM tlumaczy, kod sprawdza liczby
+        try:
+            rec, model = await translate_recipe(llm, recipe, raw, meta, plants, taken)
+        except AllModelsFailedError as exc:
+            # zaden model nie byl dostepny (limity) - to nie wina przepisu: zostaje "do tlumaczenia"
+            log(f"[odlozone] #{item_id} {meta['title'][:50]}: wszystkie modele maja teraz limit ({str(exc)[:160]})")
+            return "postponed"
+        except NoRecipeError as exc:
+            return await no_recipe(exc)
+        except (LLMError, ValueError) as exc:
+            mark(ItemStatus.error, f"tlumaczenie: {exc}")
+            log(f"[blad] #{item_id} {meta['title'][:50]}: {exc}")
+            return "error"
 
     extras = rec.pop("_dodatkowe", [])
     outcome = await finish_item(item_id, rec, model, llm, kw_cands, log, raw=raw, ignore_match=ignore_match)
@@ -300,8 +400,10 @@ async def run_translate(job_id: int, runner: JobRunner, llm, limit: int | None =
     """force=False: z wybranej listy tylko przepisy, ktore dalej czekaja (surowe / nieudane). force=True - reczne
     "Przetlumacz ponownie" konkretnego przepisu. Kazdy skonczony przepis to punkt kontrolny dla ponowienia."""
     mt = get_translator()
-    if llm is None and not (mt and mt.model_present()):
-        raise RuntimeError("Tlumaczenie wymaga LLM (klucze GEMINI/GROQ w .env) albo modelu NLLB (MT_ENGINE=nllb)")
+    legacy = llm is not None and (mt is None or settings.translate_with_llm)
+    if not legacy and not (mt and mt.model_present()):
+        raise RuntimeError("Tlumaczenie wymaga tlumacza maszynowego: DEEPL_API_KEY w .env albo modelu NLLB "
+                           "(docker compose --profile mt run --rm nllb-init)")
     with Session(engine) as s:
         if item_ids:
             ids = list(item_ids)
@@ -317,14 +419,15 @@ async def run_translate(job_id: int, runner: JobRunner, llm, limit: int | None =
     kw_cands = [Candidate("kwiatownik", r.ref, r.title, r.ingredients) for r in kw_recipes]
     kw_ids = {r.rid for r in load_kwiatownik_recipes(settings.kwiatownik_przepisy_dir) if r.rid}
     log(f"Do tlumaczenia: {len(ids)} przepisow; Kwiatownik: {len(kw_cands)} przepisow, {len(plants)} roslin")
-    if mt is None:
-        log("Tlumacz: LLM (MT_ENGINE=llm)")
+    if not legacy and settings.plant_names_per_run > 0:
+        await _refresh_plant_names(log)
+    if legacy:
+        log("Tlumacz: LLM (dawny tryb: MT_ENGINE=llm albo TRANSLATE_WITH_LLM=true)")
     elif mt.available():
-        log(f"Tlumacz: NLLB ({mt.model_dir.name}, {mt.device}) dla przepisow z danymi strukturalnymi; "
-            "surowe artykuly - LLM")
+        log(f"Tlumacz maszynowy: {' -> '.join(getattr(mt, 'names', [mt.model_dir.name]))}; surowe artykuly: LLM "
+            "wskazuje doslowne fragmenty, kod je sprawdza, tlumaczy tlumacz maszynowy")
     else:
-        log(f"Tlumacz NLLB niedostepny ({mt.error or 'brak modelu - docker compose --profile mt run --rm nllb-init'})"
-            " - tlumaczy LLM")
+        log(f"Tlumacz maszynowy niedostepny ({mt.error or 'brak klucza DeepL i modelu NLLB'}) - przepisy czekaja")
     stats = {"translated": 0, "exists": 0, "merged": 0, "error": 0, "postponed": 0, "culinary": 0, "no_recipe": 0}
     postponed_in_row = 0
     for n, iid in enumerate(ids, 1):

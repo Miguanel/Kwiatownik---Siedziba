@@ -68,8 +68,7 @@ barwnik, kosmetyk...), o ktorych tekst MOWI, ale nie podaje pelnego wykonania (b
 np. "w Japonii z lisci dokudami robi sie herbate na trądzik". Kazda wzmianka:
 {"tytul": "nazwa przepisu po polsku", "tytul_oryginalny": "nazwa w jezyku tekstu", "roslina": "po polsku",
  "roslina_lacinska": "... lub null", "typ": "jeden z listy TYPY lub null",
- "co_wiadomo": "1-3 zdania po polsku: co tekst mowi o tym przepisie (zastosowanie, region, tradycja)",
- "znane_skladniki": ["..."], "cytat": "fragment oryginalu (max 250 znakow)"}.
+ "znane_skladniki": ["..."], "cytat": "1-2 pelne zdania oryginalu o tym przepisie, znak w znak (max 300 znakow)"}.
 Bez wymyslania - tylko to, co jest w tekscie. Max 5 wzmianek; brak takich = pusta lista."""
 
 SYSTEM_PROMPT = """Jestes redaktorem polskiego serwisu "Kwiatownik" (ziololecznictwo: leki ziolowe, nalewki,

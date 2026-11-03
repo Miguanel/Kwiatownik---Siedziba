@@ -22,14 +22,30 @@ class Settings(BaseSettings):
     export_require_approval: bool = True     # eksportuj tylko przepisy zatwierdzone w panelu
     export_leads: bool = True                # eksport wzmianek o przepisach (siedziba_wzmianki_<data>.json) - bez odrzuconych
     translate_batch: int = 20                # ile przepisow tlumaczyc w jednym zadaniu
-    # Tlumaczenie maszynowe bez LLM (NLLB-200 w CTranslate2) dla przepisow z danymi strukturalnymi
-    mt_engine: str = "nllb"                  # "nllb" albo "llm" (wszystko przez LLM, jak dawniej)
+    # Tlumaczenie maszynowe BEZ LLM (2026-11-03: LLM nie tlumaczy, najwyzej wyciaga doslowne fragmenty przepisu).
+    # auto = DeepL (gdy jest DEEPL_API_KEY), zapasowo NLLB lokalnie; deepl / nllb = tylko ten; llm = dawny tryb
+    mt_engine: str = "auto"
+    deepl_api_key: str = ""                  # darmowe konto DeepL API Free (500 tys. znakow / miesiac)
+    deepl_api_url: str = ""                  # puste = wg klucza (":fx" -> api-free.deepl.com)
+    deepl_glossary: bool = True              # slownik nazw roslin (Wikidata -> nazwy Kwiatownika) dla DeepL
+    plant_names_per_run: int = 40            # ile roslin bez nazw obcych uzupelnic z Wikidata na poczatku tlumaczenia
+    deepl_knowledge_share: float = 0.6       # wiedza o roslinach moze zuzyc tyle miesiecznego limitu DeepL i Azure (przepisy - calosc)
+    azure_translator_key: str = ""           # Azure AI Translator, poziom F0 (2 mln znakow / miesiac) - drugi po DeepL
+    azure_translator_region: str = ""        # np. "westeurope" (zasob regionalny); puste = zasob globalny
+    azure_translator_url: str = ""           # puste = https://api.cognitive.microsofttranslator.com
+    azure_translator_monthly_chars: int = 2_000_000   # limit miesieczny (Azure nie podaje zuzycia - liczy Siedziba)
+    knowledge_mt_local: bool = False         # wiedza tlumaczona tez lokalnym NLLB, gdy DeepL niedostepny (slabsza jakosc)
+    knowledge_retranslate_per_run: int = 150 # ile informacji (czekajacych / dawnych tekstow LLM) tlumaczyc z cytatow na zadanie
+    knowledge_llm_editing: bool = False      # LLM redaguje/laczy/streszcza wiedze (organize, scalanie) - wylaczone 2026-11-03
     mt_model_dir: Path = BASE_DIR / "models" / "nllb-200-distilled-600M"
     mt_device: str = "cpu"                   # "cpu", "cuda" albo "auto"
     mt_compute_type: str = "int8"            # int8 (CPU, najszybciej) / int8_float16 / float16 (GPU)
     mt_threads: int = 4                      # watki CPU dla tlumacza
     mt_beam_size: int = 2                    # 1 = najszybciej, 4 = odrobine lepiej
-    mt_fallback_llm: bool = True             # gdy tlumaczenie maszynowe zawiedzie - LLM
+    mt_fallback_llm: bool = False            # nieuzywane (dawniej: LLM, gdy tlumacz maszynowy zawiedzie)
+    translate_with_llm: bool = False         # dawne tlumaczenie przez LLM (tylko gdy MT_ENGINE=llm albo True)
+    extract_min_verbatim: float = 0.8        # linia wyciagnieta przez LLM: tyle jej slow musi byc doslownie w tekscie
+    extract_max_rejected: float = 0.25       # wiecej odrzuconych linii przepisu -> przepis do recznego sprawdzenia
 
     # --- Profil zbierania: Kwiatownik = przepisy NIEKULINARNE ---
     skip_culinary: bool = True               # pomijaj zwykle przepisy kulinarne (ciasta, dania, zupy)
@@ -122,6 +138,7 @@ class Settings(BaseSettings):
     magic_include_modern: bool = False    # wspolczesne korespondencje wicca/new age bez dawnych zrodel - odrzucaj
     magic_requery_days: int = 60          # to samo zapytanie o magie najwczesniej po tylu dniach
     backups_dir: Path = BASE_DIR / "data" / "backups"
+    db_backup_keep: int = 7                  # ile dziennych kopii bazy trzymac w data/backups/db (0 = bez kopii)
     # Podglad "przed/po" kazdego zapisu pliku JSON (zakladka "Na zywo"); puste = DATA_DIR/snapshots
     snapshots_dir: Path | None = None
     snapshots_keep: int = 300             # ile ostatnich migawek trzymac (0 = wylaczone)

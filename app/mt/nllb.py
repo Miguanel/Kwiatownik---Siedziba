@@ -79,6 +79,7 @@ def looks_broken(src: str, out: str) -> bool:
 
 class NLLBTranslator:
     """Leniwe ladowanie modelu (przy pierwszym tlumaczeniu), bezpieczne dla watkow, pamiec podreczna zdan."""
+    quality = "niska"            # NLLB-600M: tylko przepisy (z kontrola); wiedza - gdy KNOWLEDGE_MT_LOCAL=true
 
     def __init__(self, model_dir: Path, device: str = "cpu", compute_type: str = "int8", threads: int = 4,
                  beam_size: int = 2, cache_size: int = 5000):
@@ -92,11 +93,18 @@ class NLLBTranslator:
         self.error: str | None = None
 
     # ------------------------------------------------------------ stan
+    @property
+    def label(self) -> str:
+        return f"nllb/{self.model_dir.name}"
+
+    def supports(self, lang: str | None) -> bool:
+        return nllb_code(lang) is not None
+
     def model_present(self) -> bool:
         return (self.model_dir / "model.bin").exists() and (self.model_dir / "sentencepiece.bpe.model").exists()
 
     def status(self) -> dict:
-        return {"model_dir": str(self.model_dir), "present": self.model_present(), "loaded": self._translator is not None,
+        return {"engine": "nllb", "model_dir": str(self.model_dir), "present": self.model_present(), "loaded": self._translator is not None,
                 "device": self.device, "compute_type": self.compute_type, "error": self.error}
 
     def available(self) -> bool:
@@ -173,16 +181,36 @@ class NLLBTranslator:
         return out
 
 
-_INSTANCE: NLLBTranslator | None = None
+_INSTANCE = None
 
 
-def get_translator() -> NLLBTranslator | None:
-    """Wspolny tlumacz wg ustawien (None, gdy MT_ENGINE nie jest 'nllb')."""
+def get_translator():
+    """Wspolny tlumacz maszynowy wg ustawien (None, gdy MT_ENGINE=llm):
+    auto  - DeepL (gdy jest DEEPL_API_KEY) -> Azure (gdy jest AZURE_TRANSLATOR_KEY) -> NLLB lokalnie,
+    deepl / azure / nllb - tylko ten jeden."""
     global _INSTANCE
     from app.config import settings
-    if (settings.mt_engine or "").lower() != "nllb":
+    engine = (settings.mt_engine or "").lower()
+    if engine == "llm":
         return None
     if _INSTANCE is None:
-        _INSTANCE = NLLBTranslator(Path(settings.mt_model_dir), settings.mt_device, settings.mt_compute_type,
-                                   settings.mt_threads, settings.mt_beam_size)
+        from app.mt.azure import AzureTranslator
+        from app.mt.chain import ChainTranslator
+        from app.mt.deepl import DeepLTranslator
+        from app.mt.usage import UsageBook
+        from app.pipeline.checks import glossary_entries, plant_rows
+        usage = UsageBook(Path(settings.data_dir) / "mt_usage.json")
+        glossary = (lambda src: glossary_entries(plant_rows(), src)) if settings.deepl_glossary else None
+        engines = []
+        if engine in ("auto", "deepl") and settings.deepl_api_key:
+            engines.append(DeepLTranslator(settings.deepl_api_key, settings.deepl_api_url or None, glossary=glossary,
+                                           knowledge_share=settings.deepl_knowledge_share))
+        if engine in ("auto", "azure") and settings.azure_translator_key:
+            engines.append(AzureTranslator(settings.azure_translator_key, settings.azure_translator_region,
+                                           settings.azure_translator_url, settings.azure_translator_monthly_chars,
+                                           settings.deepl_knowledge_share, usage, glossary))
+        if engine in ("auto", "nllb") or not engines:
+            engines.append(NLLBTranslator(Path(settings.mt_model_dir), settings.mt_device, settings.mt_compute_type,
+                                          settings.mt_threads, settings.mt_beam_size))
+        _INSTANCE = ChainTranslator(engines, knowledge_local=settings.knowledge_mt_local, usage=usage)
     return _INSTANCE

@@ -40,7 +40,7 @@ async def run_leads_extract(job_id: int, runner: JobRunner, llm, limit: int = 20
             title, text, url, lang = it.title or "", it.raw_text or "", it.url, it.language
         activity.set(job_id, "szukam wzmianek o przepisach", title[:80])
         try:
-            found, model = await leadmod.extract_leads(llm, title, text)
+            found, model = await leadmod.extract_leads(llm, title, text, lang)
         except AllModelsFailedError as exc:
             job_log(job_id, f"Modele niedostepne - przerywam ({str(exc)[:120]})")
             break

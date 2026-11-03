@@ -80,8 +80,13 @@ def test_facts_need_real_quotes_and_supported_numbers():
          "cytat": "W medycynie ludowej krwawnikiem tamowano krwawienia z ran."},  # nieznana sekcja -> ciekawostki
     ]})
     facts, rejected = parse_facts(raw, WIKI_TEXT)
-    assert [f.section for f in facts] == ["barwienie", "historia", "ciekawostki"]
-    assert facts[0].part == "kwiaty" and len(rejected) == 2
+    # 2026-11-03: "tekst" modelu sie nie liczy - informacja to doslowny fragment zrodla (pelne zdanie); liczby
+    # sprawdza potem kontrola tlumaczenia cytatu
+    assert [f.section for f in facts] == ["barwienie", "historia", "opis", "ciekawostki"]
+    assert facts[0].part == "kwiaty" and len(rejected) == 1 and all(f.text == "" for f in facts)
+    assert facts[0].quote == "Kwiaty służyły do barwienia wełny na żółto."
+    assert facts[2].quote == "Łodyga do 80 cm wysokości, liście pierzastosieczne."
+    assert facts[3].quote == "W medycynie ludowej krwawnikiem tamowano krwawienia z ran."
     assert quote_in_text("tamowano krwawienia z ran", WIKI_TEXT) and not quote_in_text("krótkie", WIKI_TEXT)
     assert numbers_supported("W 1820 roku opisano 3 odmiany", "opisano w 1820 r. 3 odmiany")
     assert not numbers_supported("dawka 5 g", "dawka 2 g")

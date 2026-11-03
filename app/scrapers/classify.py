@@ -7,6 +7,7 @@ Warstwy (od najtanszej):
 Kwiatownik zbiera przepisy NIEKULINARNE (ziololecznictwo, nalewki, barwienie wlosow i tkanin, kosmetyki):
 czysto kulinarne przepisy (ciasta, dania, zupy) sa odrzucane jako "other" (SKIP_CULINARY=true).
 """
+import asyncio
 import json
 import logging
 import re
@@ -270,7 +271,7 @@ async def classify(page: PageData, keywords: list[str], llm=None, skip_culinary:
         return Classification("other", 0.8, "heuristic", title, "brak tresci lub tematu")
 
     # strona niejednoznaczna dla regul: siec neuronowa (gdy pewna i wlaczona) albo LLM
-    nn = _nn_gate(page, title)
+    nn = await asyncio.to_thread(_nn_gate, page, title)      # ONNX liczy w watku - petla zdarzen wolna
     if nn is not None and nn.use:
         from app.nn.tasks import label_name
         _remember(page, title, nn.label, nn.method, 0.0)     # tekst do ewentualnej poprawki w panelu (nie do treningu)

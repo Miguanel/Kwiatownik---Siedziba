@@ -141,6 +141,7 @@ def test_translate_check_and_export(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "kwiatownik_plants_dir", plants)
     monkeypatch.setattr(settings, "export_require_approval", False)
     monkeypatch.setattr(settings, "enrich_recipes", False)
+    monkeypatch.setattr(settings, "translate_with_llm", True)                 # dawny tryb: LLM tlumaczy
 
     eng = create_engine(f"sqlite:///{(tmp_path / 'e.db').as_posix()}")
     SQLModel.metadata.create_all(eng)
@@ -376,6 +377,7 @@ def test_translate_skips_culinary_and_enriches(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "skip_culinary", True)
     monkeypatch.setattr(settings, "enrich_recipes", True)
     monkeypatch.setattr(settings, "enrich_systems", "wu_xing,piec_filarow")    # piec_filarow juz nie istnieje
+    monkeypatch.setattr(settings, "translate_with_llm", True)                 # dawny tryb: LLM tlumaczy
     eng = create_engine(f"sqlite:///{(tmp_path / 'c.db').as_posix()}")
     SQLModel.metadata.create_all(eng)
     monkeypatch.setattr(exp, "engine", eng)
@@ -494,6 +496,7 @@ def test_recheck_filters_and_article_split(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "kwiatownik_plants_dir", plants)
     monkeypatch.setattr(settings, "skip_culinary", True)
     monkeypatch.setattr(settings, "enrich_recipes", False)
+    monkeypatch.setattr(settings, "translate_with_llm", True)                 # dawny tryb: LLM tlumaczy
     eng = create_engine(f"sqlite:///{(tmp_path / 'r.db').as_posix()}")
     SQLModel.metadata.create_all(eng)
     monkeypatch.setattr(exp, "engine", eng)

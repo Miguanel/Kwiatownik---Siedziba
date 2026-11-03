@@ -51,14 +51,27 @@ async def mt_test_partial(request: Request, text: str = Form(...), lang: str = F
     from app.mt.nllb import MTUnavailable, get_translator
     mt = get_translator()
     if mt is None:
-        return HTMLResponse('<p class="box">MT_ENGINE=llm - tlumacz NLLB wylaczony.</p>')
+        return HTMLResponse('<p class="box">MT_ENGINE=llm - tlumacz maszynowy wylaczony.</p>')
     t0 = time.perf_counter()
     try:
         out = (await asyncio.to_thread(mt.translate, [text[:2000]], lang, "pl"))[0]
     except MTUnavailable as exc:
         return HTMLResponse(f'<p class="box">Niedostepny: {escape(str(exc))}</p>')
-    return HTMLResponse(f'<p class="box"><b>{escape(out)}</b><br><span class="muted">NLLB {escape(mt.device)}, '
-                        f'{time.perf_counter() - t0:.2f} s (pierwsze uzycie wczytuje model)</span></p>')
+    from app.pipeline.checks import check_translation
+    rep = check_translation([("tekst", text[:2000], out)], lang)
+    verdict = ("kontrola: ok" if not rep.problems else
+               "kontrola: " + "; ".join(f"{p.level} - {p.what}" for p in rep.problems[:4]))
+    engine = getattr(mt, "last_name", None) or f"NLLB {mt.device}"
+    for e in getattr(mt, "engines", []):
+        if getattr(e, "name", "") == "deepl" and engine.startswith("deepl"):
+            try:
+                u = await asyncio.to_thread(e.usage)
+                engine += f" - limit: {u.get('character_count', 0):,} z {u.get('character_limit', 0):,} znakow".replace(",", " ")
+            except MTUnavailable as exc:
+                engine += f" - limit nieznany ({exc})"
+    return HTMLResponse(f'<p class="box"><b>{escape(out)}</b><br><span class="muted">{escape(engine)}, '
+                        f'{time.perf_counter() - t0:.2f} s (NLLB: pierwsze uzycie wczytuje model)<br>'
+                        f'{escape(verdict)}</span></p>')
 
 
 @router.get("/llm/models")

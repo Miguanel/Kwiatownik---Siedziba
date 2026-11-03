@@ -66,12 +66,19 @@ tekst mowi, ale ktorych pelnego wykonania NIE podaje. Zwroc TYLKO JSON: {"wzmian
 """
 
 
-async def extract_leads(llm, title: str, text: str) -> tuple[list[dict], str]:
+async def extract_leads(llm, title: str, text: str, lang: str | None = None) -> tuple[list[dict], str]:
+    """Wzmianki o przepisach. Opis wzmianki ("co_wiadomo") to przetlumaczony cytat ze zrodla, nie slowa LLM."""
+    import asyncio
+
+    from app.knowledge.quotes import quote_leads
+    from app.mt.nllb import get_translator
     from app.pipeline.translate import LEAD_FORMAT, TYPES, clean_leads
     prompt = f"TYPY: {', '.join(TYPES)}\nTYTUL: {title}\n\nTEKST:\n{text[:9000]}"
     res = await llm.complete(prompt, system=EXTRACT_PROMPT + LEAD_FORMAT, json_mode=True)
     data = json.loads(res.text.strip().removeprefix("```json").removesuffix("```"))
-    return clean_leads(data.get("wzmianki") if isinstance(data, dict) else data), f"{res.provider}/{res.model}"
+    leads = clean_leads(data.get("wzmianki") if isinstance(data, dict) else data)
+    leads = await asyncio.to_thread(quote_leads, leads, text[:9000], lang, get_translator())
+    return leads, f"{res.provider}/{res.model}"
 
 
 def facts_to_check(limit: int) -> list[int]:
@@ -174,19 +181,20 @@ async def search_lead(lead_id: int, llm, fetcher, backends, logf) -> dict:
 
 
 def _save_found(lead: RecipeLead, url: str, c, page, structured: dict | None) -> int:
+    from app.scrapers.clean import clean_text
     """Odnaleziony przepis -> pozycja w Zebranych (albo istniejaca, jesli juz byla)."""
     with Session(engine) as s:
         old = s.exec(select(Item).where(Item.url == url)).first()
         if old:
             if old.kind != ItemKind.recipe and old.status in (ItemStatus.skipped, ItemStatus.raw, ItemStatus.error):
                 old.kind, old.status = ItemKind.recipe, ItemStatus.raw
-                old.raw_text = old.raw_text or page.text
+                old.raw_text = old.raw_text or clean_text(page.text)
                 old.reason = f"odnaleziony dla wzmianki #{lead.id}"
                 s.add(old)
                 s.commit()
             return old.id
         it = Item(url=url, kind=ItemKind.recipe, status=ItemStatus.raw, title=(c.title or page.title or url)[:300],
-                  raw_text=page.text, structured_json=json.dumps(structured, ensure_ascii=False) if structured else None,
+                  raw_text=clean_text(page.text), structured_json=json.dumps(structured, ensure_ascii=False) if structured else None,
                   confidence=c.confidence, method=f"wzmianka:{c.method}", language=page.lang or lead.language,
                   reason=f"odnaleziony dla wzmianki #{lead.id}: {lead.title}"[:300])
         s.add(it)

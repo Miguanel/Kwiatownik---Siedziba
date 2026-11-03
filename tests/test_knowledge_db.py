@@ -106,6 +106,7 @@ def test_new_plants_discovered_from_recipe_ingredients(tmp_path, monkeypatch):
 def test_organize_job_rewrites_only_knowledge_block(tmp_path, monkeypatch):
     from app.config import settings
     from tests.test_organize import FACTS, GOOD
+    monkeypatch.setattr(settings, "knowledge_llm_editing", True)       # test sciezki redaktora LLM
     plants = tmp_path / "plants"
     plants.mkdir()
     original = {"id": "babka", "nazwa_pl": "Babka lancetowata", "opis": "Ręczny opis.", "wiedza": {"fakty": FACTS}}

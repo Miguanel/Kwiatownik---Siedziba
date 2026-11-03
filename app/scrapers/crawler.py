@@ -24,6 +24,7 @@ from app.scrapers.classify import (CULINARY_REASON, DEFAULT_KEYWORDS, Classifica
                                    heuristic_scores, jsonld_recipe, quantity_hits)
 from app.scrapers.discovery import feed_urls, sitemap_urls
 from app.scrapers.fetcher import Fetcher, normalize_url, site_key
+from app.scrapers.clean import clean_text
 from app.scrapers.page import PageData, parse_page
 from app.scrapers.patterns import PatternBook, PatternStat, should_skip, url_pattern, url_priority
 from app.scrapers.profile import ScraperProfile
@@ -396,7 +397,7 @@ class SmartCrawler:
         self.book.record(pattern, kind in ("recipe", "fact"), parent)
         self.stats[kind] += 1
         self.store.save_result(PageResult(url=url, title=(title or url)[:300], kind=kind, confidence=conf,
-                                          method=method, reason=reason, text=text or page.text, structured=structured,
+                                          method=method, reason=reason, text=clean_text(text or page.text), structured=structured,
                                           language=page.lang, pattern=pattern, refresh=url in self._refreshing))
         self.store.log(f"[{kind} {conf:.2f} {method}] {(title or '')[:80]} - {url}")
 
