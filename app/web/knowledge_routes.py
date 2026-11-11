@@ -1,5 +1,6 @@
 """Widok "Rosliny": wiedza o roslinach zbierana przez Siedzibe (Wikipedia + inne kraje) ze zrodlami."""
 import json
+from datetime import datetime
 from pathlib import Path
 
 from fastapi import APIRouter, Form, Request
@@ -121,6 +122,18 @@ def plant_page(pid: str, request: Request, status: str = "", msg: str | None = N
     for f in facts:
         by_section.setdefault(f.section, []).append(f)
     titles = json.loads(plant.wiki_titles_json) if plant.wiki_titles_json else {}
+    wiki = None
+    if titles:                                   # rotacja Wikipedii: co przeczytane, co nastepne
+        try:
+            from app.worker.knowledge import wiki_plan, wiki_read_at
+            read_at = wiki_read_at(pid)
+            plan = wiki_plan(pid, titles)
+            wiki = {"read": sorted(read_at, key=lambda x: read_at[x] or datetime.min, reverse=True),
+                    "next": plan.new + [x for x in plan.left if x not in plan.new],
+                    "refresh": plan.refresh, "always": plan.always, "available": plan.available,
+                    "count": plan.read}
+        except Exception:  # noqa: BLE001 - podglad, nie moze wywrocic strony
+            wiki = None
     has_file = (Path(settings.kwiatownik_plants_dir) / f"{pid}.json").exists()
     layout = None
     data = None
@@ -144,7 +157,7 @@ def plant_page(pid: str, request: Request, status: str = "", msg: str | None = N
         "plant": plant, "by_section": by_section, "counts": counts, "status": status, "titles": titles,
         "section_titles": SECTION_TITLES_PL, "has_file": has_file, "statuses": STATUSES, "layout": layout,
         "photos": _plant_photos(plant), "chapters": schema.chapters(cov), "cov": cov, "merged": merged,
-        "status_labels": STATUS_LABELS, "queries": queries, "msg": msg, "placed": placed})
+        "status_labels": STATUS_LABELS, "queries": queries, "msg": msg, "placed": placed, "wiki": wiki})
 
 
 def _placed_view(data: dict | None) -> dict | None:

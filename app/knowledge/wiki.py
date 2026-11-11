@@ -206,6 +206,61 @@ LABEL_LANGS = ("pl|en|de|ru|uk|fr|cs|it|es|ja|zh|zh-hans|zh-cn|ko|sk|lt|lv|hu|ro
                "et|el|tr|be")
 
 
+# Rotacja Wikipedii (2026-11-11): kazde badanie rosliny czyta KNOWLEDGE_WIKI_LANGS wersji jezykowych, ktorych
+# jeszcze nie czytano dla tej rosliny - najpierw w kolejnosci KNOWLEDGE_LANGUAGES, potem ponizej (duze Wikipedie,
+# bogate w wiedze o roslinach i zielarstwie), potem reszta alfabetycznie. Tylko jezyki, ktore tlumacz umie przelozyc.
+WIKI_LANG_ORDER = ("en", "de", "fr", "ru", "uk", "it", "es", "nl", "cs", "sv", "pt", "fi", "hu", "ro", "bg", "sk",
+                   "lt", "lv", "et", "sl", "hr", "sr", "be", "el", "tr", "da", "nb", "no", "ca", "ko", "ka", "hy",
+                   "ar", "he", "fa", "hi", "mk", "bs")
+# Wikipedie z artykulami robionymi masowo przez boty (same dane z baz taksonomicznych) albo uproszczone - pomijane
+WIKI_SKIP = frozenset({"simple", "ceb", "war", "sco", "vo", "nah", "ast"})
+WIKI_URL = re.compile(r"^https?://([a-z][a-z-]*)\.(?:m\.)?wikipedia\.org/", re.I)
+
+
+def wiki_lang_of(url: str | None) -> str | None:
+    """https://de.wikipedia.org/wiki/... -> "de" (None dla innych stron)."""
+    m = WIKI_URL.match(url or "")
+    return m.group(1).lower() if m else None
+
+
+@dataclass
+class WikiPlan:
+    langs: list[str]                       # do przeczytania teraz (nowe + odswiezane + zawsze czytane)
+    new: list[str]                         # jeszcze nie czytane dla tej rosliny
+    refresh: list[str]                     # czytane wczesniej, odswiezane (gdy nowych zabraklo)
+    always: list[str]                      # czytane przy kazdym badaniu (KNOWLEDGE_ASIA_LANGS)
+    read: int                              # ile wersji jezykowych juz przeczytano
+    available: int                         # ile jest wersji, ktore umiemy przetlumaczyc
+    left: list[str] = field(default_factory=list)   # nastepne w kolejce (po tym badaniu)
+
+
+def plan_wiki_langs(titles: dict[str, str], read_at: dict, per_run: int, priority: list[str] | tuple = (),
+                    always: list[str] | tuple = (), supports=None, refresh_before=None) -> WikiPlan:
+    """Ktore Wikipedie czytac w tym badaniu rosliny.
+    titles: jezyk -> tytul artykulu (Wikidata); read_at: jezyk -> kiedy ostatnio czytany dla tej rosliny;
+    supports(lang): czy tlumacz zna jezyk; refresh_before: czytane przed ta data mozna odswiezyc (None = kazde).
+    Najpierw nieprzeczytane wersje (priorytet, potem WIKI_LANG_ORDER, potem alfabet); gdy nowych zabraknie -
+    najdawniej czytane. Jezyki "always" (chinska/japonska) dochodza poza limitem, jak dotad."""
+    def ok(lang: str) -> bool:
+        return lang in titles and lang not in WIKI_SKIP and (lang == "pl" or supports is None or supports(lang))
+
+    order = {lang: i for i, lang in enumerate(list(priority) + [x for x in WIKI_LANG_ORDER if x not in priority])}
+    pool = sorted((x for x in titles if ok(x)), key=lambda x: (order.get(x, len(order)), x))
+    keep = [x for x in always if ok(x)]
+    rotating = [x for x in pool if x not in keep]
+    unread = [x for x in rotating if x not in read_at]
+    new = unread[:max(0, per_run)]
+    refresh: list[str] = []
+    if len(new) < per_run:
+        old = [x for x in rotating if x in read_at and (refresh_before is None or read_at[x] is None
+                                                         or read_at[x] < refresh_before)]
+        old.sort(key=lambda x: (read_at[x] is not None, read_at[x] or 0, order.get(x, len(order))))
+        refresh = old[:per_run - len(new)]
+    langs = new + refresh + [x for x in keep if x not in new and x not in refresh]
+    return WikiPlan(langs, new, refresh, keep, sum(1 for x in pool if x in read_at), len(pool),
+                    unread[len(new):len(new) + max(per_run, 1) * 2])
+
+
 def aliases_by_lang(aliases: dict) -> dict[str, list[str]]:
     """Aliasy Wikidata -> {jezyk: [nazwy]} (bez chinskich odmian - te ida w etykietach)."""
     out: dict[str, list[str]] = {}

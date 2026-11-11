@@ -1,0 +1,18 @@
+{
+ "wersja": 1,
+ "rozdzialy": [],
+ "podrozdzialy": [
+  {
+   "id": "surowce/kwiaty_miodunku",
+   "tytul": "Kwiaty miodunku",
+   "ikona": "ra-leaf",
+   "sekcje": {},
+   "slowa": [],
+   "opis": "zalozony przez agenta rozmieszczania - sprawdz i zatwierdz",
+   "zrodlo": "agent",
+   "zatwierdzony": false,
+   "utworzono": "2026-11-04"
+  }
+ ],
+ "wylaczone": []
+}

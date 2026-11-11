@@ -8,6 +8,7 @@ from sqlmodel import Session, SQLModel, create_engine, select
 
 import app.worker.jobs as jobs_mod
 import app.worker.knowledge as kn
+from app.config import settings
 from app.knowledge import novelty
 from app.knowledge.registry import sync_kwiatownik
 from app.knowledge.wiki import WikiClient
@@ -96,6 +97,7 @@ def _research(eng, **kw):
 
 def test_research_twice_reads_the_article_only_once(tmp_path, monkeypatch):
     eng = _setup(tmp_path, monkeypatch)
+    monkeypatch.setattr(settings, "knowledge_wiki_refresh_days", 0)     # wszystkie Wikipedie przeczytane -> odswiezaj
     LLM.calls = []
     first, _ = _research(eng)
     extract_calls = sum(1 for c in LLM.calls if "redaktorem" in c)
@@ -143,3 +145,18 @@ def test_gap_without_answers_closes_and_useless_encyclopedia_is_skipped(tmp_path
         s.commit()
     assert kn.closed_gaps("krwawnik_pospolity") == {"zastosowanie.kosmetyczne"}
     assert kn.useless_encyclopedias() == {"mpdb"}
+
+
+def test_second_research_moves_on_to_unread_wikipedias(tmp_path, monkeypatch):
+    """Rotacja Wikipedii: drugie badanie nie czyta znow tych samych wersji jezykowych (sa tylko pl i en - obie
+    przeczytane, a odswiezanie dopiero po KNOWLEDGE_WIKI_REFRESH_DAYS)."""
+    eng = _setup(tmp_path, monkeypatch)
+    monkeypatch.setattr(settings, "knowledge_wiki_langs", 1)
+    monkeypatch.setattr(settings, "knowledge_wiki_refresh_days", 30)
+    _, log1 = _research(eng)
+    assert "nowe: pl" in log1
+    _, log2 = _research(eng)
+    assert "nowe: en" in log2
+    _, log3 = _research(eng)
+    assert "nowe: -" in log3 and "przeczytane 2 z 2" in log3   # en: 404 w tescie - tez odnotowana, nie wraca
+    assert set(kn.wiki_read_at("krwawnik_pospolity")) == {"pl", "en"}

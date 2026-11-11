@@ -97,7 +97,10 @@ class Settings(BaseSettings):
 
     # --- Wiedza o roslinach (Wikipedia + strony z innych krajow -> blok "wiedza" w plikach roslin) ---
     knowledge_languages: str = "pl,en,de,uk,ru,fr,cs,lt,sk,hu,ro,bg,it,es"  # kolejnosc = priorytet
-    knowledge_wiki_langs: int = 5         # z ilu wersji jezykowych Wikipedii czytac artykul
+    knowledge_wiki_langs: int = 5         # ile kolejnych, jeszcze nieczytanych dla rosliny Wikipedii (innych krajow)
+                                          # czytac w jednym badaniu - rotacja: app/knowledge/wiki.py plan_wiki_langs
+    knowledge_wiki_refresh_days: int = 30  # gdy wszystkie Wikipedie rosliny przeczytane: odswiezaj najdawniej
+                                          # czytane, nie czesciej niz co tyle dni (0 = przy kazdym badaniu)
     knowledge_web_pages: int = 3          # ile innych stron (wyszukiwarka, rozne kraje) na rosline
     knowledge_auto_apply: bool = True     # po weryfikacji od razu zapisuj do plikow roslin Kwiatownika
     knowledge_photos: bool = True         # przy zbieraniu wiedzy pobieraj tez adresy zdjec z Wikipedii/Commons

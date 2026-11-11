@@ -1,0 +1,264 @@
+{
+ "2026-11-03": {
+  "przepisy": {
+   "chmura": 65956,
+   "lokalnie": 92357,
+   "zapytania": 63
+  },
+  "wiedza": {
+   "chmura": 46989,
+   "lokalnie": 116841,
+   "zapytania": 49
+  },
+  "weryfikacja": {
+   "chmura": 8689,
+   "lokalnie": 19545,
+   "zapytania": 18
+  },
+  "rozmieszczenie": {
+   "chmura": 28706,
+   "lokalnie": 0,
+   "zapytania": 13
+  },
+  "duplikaty": {
+   "chmura": 1192,
+   "lokalnie": 185,
+   "zapytania": 9
+  },
+  "typ_przepisu": {
+   "chmura": 920,
+   "lokalnie": 814,
+   "zapytania": 4
+  }
+ },
+ "2026-11-04": {
+  "wiedza": {
+   "chmura": 153008,
+   "lokalnie": 270778,
+   "zapytania": 151
+  },
+  "przepisy": {
+   "chmura": 132467,
+   "lokalnie": 174485,
+   "zapytania": 136
+  },
+  "duplikaty": {
+   "chmura": 2759,
+   "lokalnie": 3441,
+   "zapytania": 43
+  },
+  "weryfikacja": {
+   "chmura": 5071,
+   "lokalnie": 16880,
+   "zapytania": 18
+  },
+  "rozmieszczenie": {
+   "chmura": 13707,
+   "lokalnie": 0,
+   "zapytania": 8
+  },
+  "typ_przepisu": {
+   "chmura": 1987,
+   "lokalnie": 1759,
+   "zapytania": 9
+  },
+  "klasyfikacja": {
+   "chmura": 35518,
+   "lokalnie": 0,
+   "zapytania": 33
+  },
+  "inne": {
+   "chmura": 2519,
+   "lokalnie": 0,
+   "zapytania": 1
+  }
+ },
+ "2026-11-05": {
+  "wiedza": {
+   "chmura": 69724,
+   "lokalnie": 87162,
+   "zapytania": 58
+  },
+  "weryfikacja": {
+   "chmura": 4644,
+   "lokalnie": 6805,
+   "zapytania": 7
+  },
+  "rozmieszczenie": {
+   "chmura": 8666,
+   "lokalnie": 0,
+   "zapytania": 5
+  },
+  "przepisy": {
+   "chmura": 97819,
+   "lokalnie": 113972,
+   "zapytania": 151
+  },
+  "duplikaty": {
+   "chmura": 2347,
+   "lokalnie": 1251,
+   "zapytania": 21
+  },
+  "typ_przepisu": {
+   "chmura": 2966,
+   "lokalnie": 1112,
+   "zapytania": 10
+  },
+  "klasyfikacja": {
+   "chmura": 155019,
+   "lokalnie": 0,
+   "zapytania": 153
+  },
+  "profil_scrapera": {
+   "chmura": 17942,
+   "lokalnie": 27315,
+   "zapytania": 9
+  },
+  "inne": {
+   "chmura": 3448,
+   "lokalnie": 0,
+   "zapytania": 1
+  }
+ },
+ "2026-11-06": {
+  "weryfikacja": {
+   "chmura": 12327,
+   "lokalnie": 30555,
+   "zapytania": 31
+  },
+  "rozmieszczenie": {
+   "chmura": 12470,
+   "lokalnie": 0,
+   "zapytania": 8
+  },
+  "wiedza": {
+   "chmura": 137697,
+   "lokalnie": 169453,
+   "zapytania": 129
+  },
+  "przepisy": {
+   "chmura": 149692,
+   "lokalnie": 229518,
+   "zapytania": 200
+  },
+  "typ_przepisu": {
+   "chmura": 3984,
+   "lokalnie": 707,
+   "zapytania": 11
+  },
+  "klasyfikacja": {
+   "chmura": 110712,
+   "lokalnie": 0,
+   "zapytania": 105
+  },
+  "profil_scrapera": {
+   "chmura": 31667,
+   "lokalnie": 10764,
+   "zapytania": 8
+  },
+  "duplikaty": {
+   "chmura": 411,
+   "lokalnie": 0,
+   "zapytania": 3
+  },
+  "inne": {
+   "chmura": 3241,
+   "lokalnie": 0,
+   "zapytania": 1
+  },
+  "wzmianki": {
+   "chmura": 5392,
+   "lokalnie": 15696,
+   "zapytania": 12
+  }
+ },
+ "2026-11-07": {
+  "przepisy": {
+   "chmura": 198880,
+   "lokalnie": 285561,
+   "zapytania": 201
+  },
+  "wzmianki": {
+   "chmura": 24131,
+   "lokalnie": 64793,
+   "zapytania": 61
+  },
+  "typ_przepisu": {
+   "chmura": 7765,
+   "lokalnie": 6664,
+   "zapytania": 31
+  },
+  "weryfikacja": {
+   "chmura": 3092,
+   "lokalnie": 1761,
+   "zapytania": 3
+  },
+  "rozmieszczenie": {
+   "chmura": 9542,
+   "lokalnie": 0,
+   "zapytania": 5
+  },
+  "duplikaty": {
+   "chmura": 125,
+   "lokalnie": 610,
+   "zapytania": 5
+  },
+  "klasyfikacja": {
+   "chmura": 177052,
+   "lokalnie": 0,
+   "zapytania": 181
+  },
+  "profil_scrapera": {
+   "chmura": 24164,
+   "lokalnie": 64070,
+   "zapytania": 21
+  },
+  "magia": {
+   "chmura": 0,
+   "lokalnie": 3557,
+   "zapytania": 1
+  },
+  "inne": {
+   "chmura": 0,
+   "lokalnie": 3376,
+   "zapytania": 1
+  }
+ },
+ "2026-11-08": {
+  "klasyfikacja": {
+   "chmura": 178761,
+   "lokalnie": 0,
+   "zapytania": 195
+  },
+  "przepisy": {
+   "chmura": 125849,
+   "lokalnie": 135887,
+   "zapytania": 123
+  },
+  "typ_przepisu": {
+   "chmura": 10149,
+   "lokalnie": 3427,
+   "zapytania": 30
+  },
+  "profil_scrapera": {
+   "chmura": 29741,
+   "lokalnie": 83449,
+   "zapytania": 27
+  },
+  "wzmianki": {
+   "chmura": 29172,
+   "lokalnie": 89701,
+   "zapytania": 85
+  },
+  "duplikaty": {
+   "chmura": 5440,
+   "lokalnie": 2015,
+   "zapytania": 46
+  },
+  "weryfikacja": {
+   "chmura": 0,
+   "lokalnie": 1844,
+   "zapytania": 1
+  }
+ }
+}

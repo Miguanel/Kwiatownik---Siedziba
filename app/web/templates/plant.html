@@ -5,7 +5,14 @@
 <p class="muted">
   <span class="tag">{{ plant.origin }}</span>
   {% if plant.wikidata %} &middot; <a href="https://www.wikidata.org/wiki/{{ plant.wikidata }}" target="_blank" rel="noopener">Wikidata {{ plant.wikidata }}</a>{% endif %}
+  {% if wiki %}
+  &middot; <span title="Kazde badanie czyta kolejne, jeszcze nieczytane Wikipedie innych krajow (tylko jezyki, ktore umie tlumacz)">Wikipedie: przeczytane {{ wiki.count }} z {{ wiki.available }}</span>
+  {%- for lang in wiki.read %}{% if lang in titles %} <a href="https://{{ lang }}.wikipedia.org/wiki/{{ titles[lang] | replace(' ', '_') }}" target="_blank" rel="noopener" title="przeczytana">{{ lang }}&#10003;</a>{% endif %}{% endfor %}
+  {%- if wiki.next %} &middot; nastepne:{% for lang in wiki.next[:8] %} <a href="https://{{ lang }}.wikipedia.org/wiki/{{ titles[lang] | replace(' ', '_') }}" target="_blank" rel="noopener">{{ lang }}</a>{% endfor %}
+  {%- elif wiki.refresh %} &middot; wszystkie przeczytane, odswiezane: {{ wiki.refresh | join(', ') }}{% endif %}
+  {% else %}
   {% for lang, t in titles.items() %}{% if loop.index <= 12 %} &middot; <a href="https://{{ lang }}.wikipedia.org/wiki/{{ t | replace(' ', '_') }}" target="_blank" rel="noopener">{{ lang }}</a>{% endif %}{% endfor %}
+  {% endif %}
   &middot; {% if has_file %}plik w Kwiatowniku: {{ plant.id }}.json{% else %}brak pliku w Kwiatowniku{% endif %}
   {% if plant.note %}<br><span class="tag failed">{{ plant.note }}</span>{% endif %}
 </p>

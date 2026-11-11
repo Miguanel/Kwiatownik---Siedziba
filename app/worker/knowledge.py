@@ -26,11 +26,11 @@ from app.knowledge import gaps as gapmod
 from app.knowledge import gate, merge, novelty, organize, photos, placement, plantfile, schema
 from app.knowledge.extract import extract_facts
 from app.knowledge.quotes import finish_facts, supported_label, translate_quotes
-from app.mt.nllb import get_translator
+from app.mt.nllb import get_translator, nllb_code
 from app.knowledge.registry import discover_new_plants, sync_kwiatownik
 from app.knowledge.sections import fingerprint, norm_text, similar
 from app.knowledge.verify import BATCH, verify_facts
-from app.knowledge.wiki import WikiClient
+from app.knowledge.wiki import WikiClient, WikiPlan, plan_wiki_langs, wiki_lang_of
 from app.llm.router import AllModelsFailedError
 from app.models import Item, ItemKind, Job, JobStatus, Plant, PlantAlias, PlantFact, PlantQuery, SourceRead
 from app.worker import activity, snapshots
@@ -283,6 +283,50 @@ def fact_pages_for(plant: Plant, limit: int = 3) -> list:
             scored.append((hits, it.id, it))
     scored.sort(key=lambda x: (-x[0], x[1]))
     return [it for _, _, it in scored[:limit]]
+
+
+def _naive_utc(d: datetime | None) -> datetime | None:
+    if d is None:
+        return None
+    return d.astimezone(timezone.utc).replace(tzinfo=None) if d.tzinfo else d
+
+
+def wiki_read_at(plant_id: str) -> dict[str, datetime | None]:
+    """Wersje jezykowe Wikipedii juz czytane dla tej rosliny (z tabeli SourceRead): jezyk -> ostatni odczyt."""
+    with Session(engine) as s:
+        rows = s.exec(select(SourceRead.url, SourceRead.last_at).where(SourceRead.plant_id == plant_id,
+                                                                       col(SourceRead.url).contains("wikipedia.org"))).all()
+    out: dict[str, datetime | None] = {}
+    for url, at in rows:
+        lang = wiki_lang_of(url)
+        if lang:
+            at = _naive_utc(at)
+            prev = out.get(lang)
+            out[lang] = at if prev is None or (at and at > prev) else prev
+    return out
+
+
+def _mt_supports(lang: str) -> bool:
+    """Czy tlumacz maszynowy (DeepL / NLLB) umie przelozyc ten jezyk na polski - inaczej informacje czekalyby
+    na tlumacza bez konca."""
+    mt = get_translator()
+    try:
+        if mt is not None and mt.supports(lang):
+            return True
+    except Exception:  # noqa: BLE001
+        pass
+    return nllb_code(lang) is not None
+
+
+def wiki_plan(plant_id: str, titles: dict[str, str]) -> WikiPlan:
+    """Rotacja Wikipedii: KNOWLEDGE_WIKI_LANGS nieczytanych jeszcze wersji jezykowych na badanie; gdy wszystkie
+    przeczytane - odswiezenie najdawniej czytanych (po KNOWLEDGE_WIKI_REFRESH_DAYS dniach)."""
+    days = settings.knowledge_wiki_refresh_days
+    before = (datetime.now(timezone.utc) - timedelta(days=days)).replace(tzinfo=None) if days > 0 else None
+    priority = [x.strip() for x in settings.knowledge_languages.split(",") if x.strip()]
+    always = [x.strip() for x in settings.knowledge_asia_langs.split(",") if x.strip()]
+    return plan_wiki_langs(titles, wiki_read_at(plant_id), settings.knowledge_wiki_langs, priority, always,
+                           _mt_supports, before)
 
 
 def _seen_paragraphs(plant_id: str, url: str) -> set[str]:
@@ -584,19 +628,31 @@ async def research_plant(plant_id: str, llm, wiki: WikiClient, log, job_id: int 
             s.commit()
         if settings.knowledge_photos:
             await collect_photos(plant_id, wp, wiki, log, file_data)
-        langs = [x.strip() for x in settings.knowledge_languages.split(",") if x.strip() in wp.titles]
-        langs = langs[:settings.knowledge_wiki_langs]
-        langs += [x.strip() for x in settings.knowledge_asia_langs.split(",")       # chinska / japonska Wikipedia
-                  if x.strip() in wp.titles and x.strip() not in langs]
-        for lang in langs:
+        # rotacja (2026-11-11): kolejne, jeszcze nieczytane Wikipedie innych krajow; powtorki informacji odrzuca
+        # _store_facts (ten sam cytat / podobne zdanie po polsku) i lista "known" przekazywana do ekstrakcji
+        plan = wiki_plan(plant_id, wp.titles)
+        got_new = 0
+        for lang in plan.langs:
+            page_url = f"https://{lang}.wikipedia.org/wiki/{wp.titles[lang].replace(' ', '_')}"
             try:
                 art = await wiki.article(lang, wp.titles[lang])
             except Exception as exc:                   # jedna wersja jezykowa niedostepna - reszta dalej
                 log(f"  Wikipedia ({lang}): {str(exc)[:100]}")
+                resp = getattr(exc, "response", None)
+                if resp is not None and 400 <= resp.status_code < 500:   # brak strony (404 itp.) - nie wroci,
+                    _remember_read(plant_id, page_url, [], 0)            # rotacja idzie dalej; blad sieci - ponowi
+                    got_new += lang in plan.new
                 continue
             if art:
                 sources.append((art.url, f"Wikipedia ({lang}): {art.title}", lang, art.text, None, None))
-        log(f"  Wikipedia: {wp.qid}, artykuly: {', '.join(src[2] for src in sources) or 'brak'}")
+            else:                                      # pusty artykul - zapamietany jako przeczytany, rotacja idzie dalej
+                _remember_read(plant_id, page_url, [], 0)
+            got_new += lang in plan.new
+        log(f"  Wikipedia: {wp.qid}, artykuly: {', '.join(src[2] for src in sources) or 'brak'}"
+            f" (nowe: {', '.join(plan.new) or '-'}"
+            + (f"; odswiezane: {', '.join(plan.refresh)}" if plan.refresh else "")
+            + f"; przeczytane {plan.read + got_new} z {plan.available} wersji, ktore umiemy przetlumaczyc"
+            + (f"; nastepne: {', '.join(plan.left[:6])}" if plan.left else "") + ")")
     else:
         log("  Wikipedia: nie znaleziono gatunku w Wikidata")
     with Session(engine) as s:
@@ -618,7 +674,7 @@ async def research_plant(plant_id: str, llm, wiki: WikiClient, log, job_id: int 
                                 settings.knowledge_min_new_chars)
         if nv.why_skip:                                  # etap 2: nic nowego - bez wywolania LLM
             stats["skipped"] = stats.get("skipped", 0) + 1
-            if nv.done:
+            if nv.done or wiki_lang_of(url):             # Wikipedia zawsze odnotowana (rotacja wersji jezykowych)
                 _remember_read(plant_id, url, nv.done, 0)
             log(f"  {name}: pominiete bez LLM ({nv.why_skip})")
             continue
@@ -1196,8 +1252,9 @@ async def run_plant_research(job_id: int, runner: JobRunner, llm, plant_ids: lis
     wiki = wiki or WikiClient(settings.user_agent)
     total = {"plants": 0, "sources": 0, "facts": 0, "verified": 0, "rejected": 0, "applied": 0, "waiting": 0,
              "invalid": 0}
-    log(f"Rosliny do opracowania: {len(ids)}; jezyki Wikipedii: {settings.knowledge_languages} "
-        f"(max {settings.knowledge_wiki_langs}), inne strony: {settings.knowledge_web_pages}")
+    log(f"Rosliny do opracowania: {len(ids)}; Wikipedie: {settings.knowledge_wiki_langs} kolejnych, jeszcze "
+        f"nieczytanych wersji jezykowych na rosline (najpierw {settings.knowledge_languages}, potem inne kraje), "
+        f"inne strony: {settings.knowledge_web_pages}")
     try:
         await translate_pending_facts(log, plant_ids=ids or None)
     except Exception as exc:  # noqa: BLE001 - tlumaczenie cytatow nie zatrzymuje badan
